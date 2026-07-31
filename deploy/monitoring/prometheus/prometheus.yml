@@ -1,0 +1,59 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: cmdb-v1
+    cluster: docker-compose
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: [alertmanager:9093]
+
+  - job_name: node-exporter
+    static_configs:
+      - targets: [node-exporter:9100]
+        labels:
+          service: cmdb-host
+
+  - job_name: cmdb-node-exporter
+    http_sd_configs:
+      - url: http://host.docker.internal:8080/api/v1/monitor/service-discovery/node-exporter
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance
+
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: [postgres-exporter:9187]
+        labels:
+          service: postgresql
+
+  - job_name: redis-exporter
+    static_configs:
+      - targets: [redis-exporter:9121]
+        labels:
+          service: redis
+
+  # The gateway /metrics endpoint is implemented in the next application stage.
+  - job_name: cmdb-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: [host.docker.internal:8080]
+        labels:
+          service: gateway-bff

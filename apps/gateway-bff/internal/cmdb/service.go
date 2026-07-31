@@ -1,0 +1,484 @@
+package cmdb
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"time"
+)
+
+var ErrNotFound = errors.New("asset not found")
+var ErrValidation = errors.New("validation failed")
+var ErrConflict = errors.New("asset already exists")
+
+type Service struct {
+	mu      sync.RWMutex
+	assets  []Asset
+	models  []Model
+	history map[string][]HistoryEntry
+	db      *sql.DB
+}
+
+func NewService() *Service {
+	assets := []Asset{
+		asset("srv-prod-001", "prod-api-01", "physical-server", "物理服务器", "online", "10.20.1.11", "生产", "核心系统组", "张伟", "上海一号机房 / A03-12", "Agent", []string{"核心", "Linux", "API"}),
+		asset("srv-prod-002", "prod-api-02", "physical-server", "物理服务器", "online", "10.20.1.12", "生产", "核心系统组", "张伟", "上海一号机房 / A03-13", "Agent", []string{"核心", "Linux", "API"}),
+		asset("srv-test-001", "test-runner-01", "physical-server", "物理服务器", "offline", "10.30.2.8", "测试", "研发效能组", "李娜", "上海二号机房 / B01-04", "Agent", []string{"测试", "Runner"}),
+		asset("vm-prod-041", "order-service-vm", "virtual-machine", "虚拟机", "online", "10.21.4.41", "生产", "电商业务组", "王强", "VMware / cluster-a", "vCenter", []string{"订单", "Java"}),
+		asset("vm-prod-052", "payment-gateway-vm", "virtual-machine", "虚拟机", "warning", "10.21.5.52", "生产", "核心系统组", "周敏", "VMware / cluster-a", "vCenter", []string{"支付", "核心"}),
+		asset("cloud-ecs-018", "analytics-worker", "cloud-host", "云主机", "online", "172.18.3.18", "生产", "数据平台组", "陈明", "阿里云 / 华东2 / 可用区B", "Cloud API", []string{"数据", "弹性"}),
+		asset("k8s-node-01", "prod-k8s-worker-01", "k8s-node", "K8s 节点", "online", "10.22.1.21", "生产", "容器平台组", "赵峰", "prod-k8s / worker", "Kubernetes API", []string{"K8s", "Worker"}),
+		asset("k8s-node-02", "prod-k8s-worker-02", "k8s-node", "K8s 节点", "warning", "10.22.1.22", "生产", "容器平台组", "赵峰", "prod-k8s / worker", "Kubernetes API", []string{"K8s", "Worker"}),
+		asset("net-sw-001", "core-switch-01", "network-device", "网络设备", "online", "10.10.0.2", "生产", "基础设施组", "孙磊", "上海一号机房 / 核心区", "SNMP", []string{"核心交换", "Cisco"}),
+		asset("db-prod-001", "order-mysql-primary", "database", "数据库", "warning", "10.23.2.31", "生产", "电商业务组", "吴涛", "DB Cluster / order-mysql", "Agent", []string{"MySQL", "主库", "订单"}),
+		asset("redis-prod-01", "session-redis", "middleware", "中间件", "online", "10.23.3.41", "生产", "核心系统组", "吴涛", "Redis Cluster / session", "Agent", []string{"Redis", "会话"}),
+		asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
+	}
+	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry)}
+	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
+		db, persistedAssets, persistedHistory, err := openPostgres(databaseURL, assets)
+		if err != nil {
+			panic(fmt.Sprintf("initialize PostgreSQL CMDB repository: %v", err))
+		}
+		service.db = db
+		persistedModels, modelErr := loadModels(context.Background(), db)
+		if modelErr != nil {
+			panic(fmt.Sprintf("load CMDB models: %v", modelErr))
+		}
+		if len(persistedModels) == 0 {
+			for _, model := range models {
+				if err := upsertModel(context.Background(), db, model); err != nil {
+					panic(fmt.Sprintf("seed CMDB model: %v", err))
+				}
+			}
+			persistedModels = models
+		}
+		service.models = persistedModels
+		service.assets = persistedAssets
+		service.history = persistedHistory
+		for index := range service.models {
+			service.models[index].Count = 0
+			for _, item := range service.assets {
+				if item.Type == service.models[index].Code {
+					service.models[index].Count++
+				}
+			}
+		}
+	}
+	return service
+}
+
+func asset(id, name, typ, typeName, status, ip, env, group, owner, location, source string, tags []string) Asset {
+	return Asset{ID: id, Name: name, Type: typ, TypeName: typeName, Status: status, IP: ip, Environment: env, ProjectGroup: group, Owner: owner, Location: location, Source: source, LastSeenAt: "2026-07-15 13:28:00", Tags: tags, Attributes: []Attribute{{"os", "操作系统", "Rocky Linux 9.4"}, {"cpu", "CPU", "16 Core"}, {"memory", "内存", "64 GB"}, {"importance", "重要级别", map[bool]string{true: "核心", false: "一般"}[env == "生产"]}}, Relations: []Relation{{"belongs-to", "app-order", "订单服务"}, {"located-in", "idc-sh-01", "上海一号机房"}}}
+}
+
+func (s *Service) Models() []Model {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Model(nil), s.models...)
+}
+func (s *Service) CreateModel(in ModelInput) (Model, error) {
+	if err := validateModel(in); err != nil {
+		return Model{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.models {
+		if m.Code == in.Code {
+			return Model{}, ErrConflict
+		}
+	}
+	m := Model{Code: in.Code, Name: in.Name, Category: in.Category, Icon: in.Icon, Description: in.Description, Enabled: true, Fields: in.Fields}
+	if m.Icon == "" {
+		m.Icon = "Box"
+	}
+	if s.db != nil {
+		if err := upsertModel(context.Background(), s.db, m); err != nil {
+			return Model{}, err
+		}
+	}
+	s.models = append(s.models, m)
+	return m, nil
+}
+func (s *Service) UpdateModel(code string, in ModelInput) (Model, error) {
+	if in.Code == "" {
+		in.Code = code
+	}
+	if in.Code != code {
+		return Model{}, ErrValidation
+	}
+	if err := validateModel(in); err != nil {
+		return Model{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.models {
+		if s.models[i].Code == code {
+			count, enabled := s.models[i].Count, s.models[i].Enabled
+			s.models[i] = Model{Code: code, Name: in.Name, Category: in.Category, Icon: in.Icon, Description: in.Description, Enabled: enabled, Fields: in.Fields, Count: count}
+			if s.models[i].Icon == "" {
+				s.models[i].Icon = "Box"
+			}
+			if s.db != nil {
+				if err := upsertModel(context.Background(), s.db, s.models[i]); err != nil {
+					return Model{}, err
+				}
+			}
+			return s.models[i], nil
+		}
+	}
+	return Model{}, ErrNotFound
+}
+func (s *Service) ToggleModel(code string) (Model, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.models {
+		if s.models[i].Code == code {
+			s.models[i].Enabled = !s.models[i].Enabled
+			if s.db != nil {
+				if err := upsertModel(context.Background(), s.db, s.models[i]); err != nil {
+					return Model{}, err
+				}
+			}
+			return s.models[i], nil
+		}
+	}
+	return Model{}, ErrNotFound
+}
+func validateModel(in ModelInput) error {
+	if strings.TrimSpace(in.Code) == "" || strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Category) == "" {
+		return ErrValidation
+	}
+	seen := map[string]bool{}
+	for _, f := range in.Fields {
+		if f.Name == "" || f.Label == "" || (f.Type != "text" && f.Type != "number" && f.Type != "boolean" && f.Type != "date" && f.Type != "select") || seen[f.Name] {
+			return ErrValidation
+		}
+		seen[f.Name] = true
+	}
+	return nil
+}
+func (s *Service) Summary() Summary {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := Summary{Total: len(s.assets), Models: len(s.models)}
+	groups := map[string]struct{}{}
+	for _, a := range s.assets {
+		groups[a.ProjectGroup] = struct{}{}
+		switch a.Status {
+		case "online":
+			result.Online++
+		case "warning":
+			result.Warning++
+		case "offline":
+			result.Offline++
+		}
+	}
+	result.ProjectGroups = len(groups)
+	return result
+}
+func (s *Service) ListAssets(q AssetQuery) AssetPage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.PageSize < 1 || q.PageSize > 100 {
+		q.PageSize = 20
+	}
+	filtered := make([]Asset, 0)
+	for _, a := range s.assets {
+		search := strings.ToLower(q.Search)
+		if search != "" && !strings.Contains(strings.ToLower(a.Name+" "+a.ID+" "+a.IP), search) {
+			continue
+		}
+		if q.Type != "" && a.Type != q.Type {
+			continue
+		}
+		if q.Status != "" && a.Status != q.Status {
+			continue
+		}
+		if q.ProjectGroup != "" && a.ProjectGroup != q.ProjectGroup {
+			continue
+		}
+		filtered = append(filtered, cloneAsset(a))
+	}
+	total := len(filtered)
+	start := (q.Page - 1) * q.PageSize
+	if start > total {
+		start = total
+	}
+	end := start + q.PageSize
+	if end > total {
+		end = total
+	}
+	pages := (total + q.PageSize - 1) / q.PageSize
+	return AssetPage{Data: filtered[start:end], Meta: PageMeta{Total: total, Page: q.Page, PageSize: q.PageSize, TotalPages: pages}}
+}
+
+// PrometheusTargetGroups returns online Linux Agent assets in Prometheus HTTP-SD format.
+// A node_exporter is expected to listen on the supplied port on every managed host.
+func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
+	if strings.TrimSpace(port) == "" {
+		port = "9100"
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groups := make([]PrometheusTargetGroup, 0)
+	for _, a := range s.assets {
+		if a.Status != "online" || a.Source != "linux-agent" || strings.TrimSpace(a.IP) == "" {
+			continue
+		}
+		groups = append(groups, PrometheusTargetGroup{
+			Targets: []string{a.IP + ":" + port},
+			Labels: map[string]string{
+				"asset_id":      a.ID,
+				"asset_name":    a.Name,
+				"environment":   a.Environment,
+				"project_group": a.ProjectGroup,
+				"service":       "cmdb-host",
+			},
+		})
+	}
+	return groups
+}
+
+func (s *Service) MonitoringAssets() []Asset {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assets := make([]Asset, 0)
+	for _, asset := range s.assets {
+		if asset.Source == "linux-agent" {
+			assets = append(assets, cloneAsset(asset))
+		}
+	}
+	return assets
+}
+func (s *Service) GetAsset(id string) (Asset, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.assets {
+		if a.ID == id {
+			return cloneAsset(a), nil
+		}
+	}
+	return Asset{}, ErrNotFound
+}
+func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
+	if in.ID == "" || in.Hostname == "" {
+		return Asset{}, ErrValidation
+	}
+	attrs := []Attribute{{Name: "os", Label: "操作系统", Value: in.OS}, {Name: "kernel", Label: "内核", Value: in.Kernel}, {Name: "architecture", Label: "架构", Value: in.Architecture}, {Name: "cpu", Label: "CPU核心", Value: fmt.Sprint(in.CPUCount)}, {Name: "memory_bytes", Label: "内存字节", Value: fmt.Sprint(in.MemoryBytes)}, {Name: "disk_bytes", Label: "磁盘字节", Value: fmt.Sprint(in.DiskBytes)}, {Name: "boot_time", Label: "启动时间", Value: in.BootTime}, {Name: "agent_version", Label: "Agent版本", Value: in.AgentVersion}}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().Format("2006-01-02 15:04:05")
+	for i := range s.assets {
+		if s.assets[i].ID == in.ID {
+			s.assets[i].Name = in.Hostname
+			s.assets[i].IP = in.IP
+			s.assets[i].Status = "online"
+			s.assets[i].Source = "linux-agent"
+			s.assets[i].LastSeenAt = now
+			s.assets[i].Attributes = attrs
+			if s.db != nil {
+				payload, _ := json.Marshal(attrs)
+				_, err := s.db.Exec(`UPDATE cmdb_assets SET name=$2,ip=$3,status='online',source='linux-agent',last_seen_at=now(),attributes=$4,updated_at=now() WHERE id=$1`, in.ID, in.Hostname, in.IP, payload)
+				if err != nil {
+					return Asset{}, err
+				}
+			}
+			return cloneAsset(s.assets[i]), nil
+		}
+	}
+	asset := Asset{ID: in.ID, Name: in.Hostname, Type: "physical-server", TypeName: "物理服务器", Status: "online", IP: in.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: "linux-agent", LastSeenAt: now, Tags: []string{"Linux", "Agent"}, Attributes: attrs, Relations: []Relation{}}
+	if s.db != nil {
+		if err := insertAsset(context.Background(), s.db, asset); err != nil {
+			return Asset{}, err
+		}
+	}
+	s.assets = append(s.assets, asset)
+	for i := range s.models {
+		if s.models[i].Code == asset.Type {
+			s.models[i].Count++
+		}
+	}
+	return cloneAsset(asset), nil
+}
+func (s *Service) MarkAgentAssetOffline(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.assets {
+		if s.assets[i].ID == id && s.assets[i].Source == "linux-agent" {
+			s.assets[i].Status = "offline"
+			if s.db != nil {
+				_, err := s.db.Exec(`UPDATE cmdb_assets SET status='offline',updated_at=now() WHERE id=$1`, id)
+				return err
+			}
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, error) {
+	if err := validateCreate(input); err != nil {
+		return Asset{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.assets {
+		if item.ID == input.ID {
+			return Asset{}, ErrConflict
+		}
+	}
+	typeName := ""
+	modelIndex := -1
+	for index := range s.models {
+		if s.models[index].Code == input.Type && s.models[index].Enabled {
+			typeName = s.models[index].Name
+			modelIndex = index
+			break
+		}
+	}
+	if typeName == "" {
+		return Asset{}, fmt.Errorf("%w: unknown type", ErrValidation)
+	}
+	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: []Attribute{}, Relations: []Relation{}}
+	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: input.ID, Action: "created", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05")}
+	if s.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return Asset{}, err
+		}
+		if err = insertAsset(ctx, tx, created); err == nil {
+			err = insertHistory(ctx, tx, entry)
+		}
+		if err == nil {
+			err = insertAssetEvents(ctx, tx, created, entry)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return Asset{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return Asset{}, err
+		}
+	}
+	s.models[modelIndex].Count++
+	s.assets = append(s.assets, created)
+	s.history[input.ID] = append(s.history[input.ID], entry)
+	return cloneAsset(created), nil
+}
+func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string) (Asset, error) {
+	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Owner) == "" {
+		return Asset{}, ErrValidation
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.assets {
+		if s.assets[index].ID != id {
+			continue
+		}
+		before := s.assets[index]
+		target := &s.assets[index]
+		target.Name = input.Name
+		target.Status = input.Status
+		target.IP = input.IP
+		target.Environment = input.Environment
+		target.ProjectGroup = input.ProjectGroup
+		target.Owner = input.Owner
+		target.Location = input.Location
+		target.Tags = append([]string(nil), input.Tags...)
+		changes := diffAsset(before, *target)
+		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "updated", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: changes}
+		if s.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				s.assets[index] = before
+				return Asset{}, err
+			}
+			tags, _ := json.Marshal(target.Tags)
+			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET name=$2,status=$3,ip=$4,environment=$5,
+				project_group=$6,owner=$7,location=$8,tags=$9,updated_at=now() WHERE id=$1`,
+				id, target.Name, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags)
+			if err == nil {
+				err = insertHistory(ctx, tx, entry)
+			}
+			if err == nil {
+				err = insertAssetEvents(ctx, tx, *target, entry)
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				s.assets[index] = before
+				return Asset{}, err
+			}
+			if err = tx.Commit(); err != nil {
+				s.assets[index] = before
+				return Asset{}, err
+			}
+		}
+		s.history[id] = append(s.history[id], entry)
+		return cloneAsset(*target), nil
+	}
+	return Asset{}, ErrNotFound
+}
+func (s *Service) History(id string) ([]HistoryEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	found := false
+	for _, a := range s.assets {
+		if a.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	entries := s.history[id]
+	return append([]HistoryEntry(nil), entries...), nil
+}
+func (s *Service) ImportAssets(rows []CreateAssetInput, operator string) ImportResult {
+	result := ImportResult{Total: len(rows), Errors: []ImportError{}}
+	for index, row := range rows {
+		_, err := s.CreateAsset(row, operator)
+		if err != nil {
+			result.Errors = append(result.Errors, ImportError{Row: index + 2, ID: row.ID, Message: err.Error()})
+			continue
+		}
+		result.Created++
+	}
+	return result
+}
+func validateCreate(input CreateAssetInput) error {
+	if strings.TrimSpace(input.ID) == "" || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Type) == "" || strings.TrimSpace(input.Status) == "" || strings.TrimSpace(input.ProjectGroup) == "" || strings.TrimSpace(input.Owner) == "" {
+		return ErrValidation
+	}
+	return nil
+}
+func diffAsset(a, b Asset) []Change {
+	pairs := [][3]string{{"name", a.Name, b.Name}, {"status", a.Status, b.Status}, {"ip", a.IP, b.IP}, {"projectGroup", a.ProjectGroup, b.ProjectGroup}, {"owner", a.Owner, b.Owner}, {"location", a.Location, b.Location}, {"tags", strings.Join(a.Tags, "|"), strings.Join(b.Tags, "|")}}
+	result := []Change{}
+	for _, p := range pairs {
+		if p[1] != p[2] {
+			result = append(result, Change{Field: p[0], Before: p[1], After: p[2]})
+		}
+	}
+	return result
+}
+func cloneAsset(a Asset) Asset {
+	a.Tags = append([]string(nil), a.Tags...)
+	a.Attributes = append([]Attribute(nil), a.Attributes...)
+	a.Relations = append([]Relation(nil), a.Relations...)
+	return a
+}

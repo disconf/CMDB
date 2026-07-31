@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{confidenceTone,riskLabel}from'./aiopsModel';describe('aiops model',()=>{it('maps confidence',()=>expect(confidenceTone(92)).toBe('high'));it('labels risk',()=>expect(riskLabel('medium')).toBe('中风险'))})

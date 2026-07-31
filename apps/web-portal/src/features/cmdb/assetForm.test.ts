@@ -1,0 +1,3 @@
+import {describe,expect,it} from 'vitest'
+import {parseAssetCsv,validateAssetForm} from './assetForm'
+describe('assetForm',()=>{it('requires identity and ownership fields',()=>{expect(validateAssetForm({id:'',name:'',type:'',status:'online',ip:'',environment:'',projectGroup:'',owner:'',location:'',source:'manual',tags:[]})).toContain('资产编号不能为空')});it('parses csv header and tag columns',()=>{const rows=parseAssetCsv('id,name,type,status,ip,environment,projectGroup,owner,location,tags\nvm-1,test,virtual-machine,online,10.1.1.1,测试,研发组,张三,VMware,测试|Linux');expect(rows).toHaveLength(1);expect(rows[0].tags).toEqual(['测试','Linux'])})})

@@ -1,0 +1,9 @@
+---
+- name: Safe host health check
+  hosts: all
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Report managed host
+      ansible.builtin.debug:
+        msg: "Host {{ inventory_hostname }} is reachable; OS={{ ansible_distribution }} {{ ansible_distribution_version }}"

@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{statusLabel,progressTone}from'./jobsModel';describe('jobs model',()=>{it('labels statuses',()=>expect(statusLabel('running')).toBe('执行中'));it('maps progress tones',()=>expect(progressTone('failed')).toBe('danger'))})

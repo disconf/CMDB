@@ -1,0 +1,25 @@
+[Unit]
+Description=CMDB Linux inventory agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cmdb-agent
+Group=cmdb-agent
+EnvironmentFile=/etc/cmdb-agent/agent.env
+ExecStart=/usr/local/bin/cmdb-agent
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

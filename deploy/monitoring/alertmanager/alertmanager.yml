@@ -1,0 +1,29 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: cmdb-webhook
+  group_by: [alertname, cluster, service]
+  group_wait: 15s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - receiver: cmdb-webhook
+      matchers:
+        - severity=~"critical|warning"
+
+receivers:
+  - name: cmdb-webhook
+    webhook_configs:
+      - url: http://host.docker.internal:8080/api/v1/monitor/alerts/webhook
+        send_resolved: true
+        max_alerts: 0
+        http_config:
+          follow_redirects: true
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: [alertname, instance]

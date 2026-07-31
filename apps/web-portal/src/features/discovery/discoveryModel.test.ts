@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{agentStatusLabel,taskProgress}from'./discoveryModel';describe('discoveryModel',()=>{it('maps status',()=>expect(agentStatusLabel('online')).toBe('在线'));it('calculates task progress',()=>expect(taskProgress({discovered:8,imported:6})).toBe(75))})

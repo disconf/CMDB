@@ -1,0 +1,68 @@
+---
+- name: Install CMDB node exporter container
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    exporter_name: cmdb-node-exporter
+    exporter_image: prom/node-exporter:v1.11.1
+  tasks:
+    - name: Verify Docker is available
+      ansible.builtin.command:
+        argv: [docker, info]
+      changed_when: false
+
+    - name: Inspect existing exporter
+      ansible.builtin.command:
+        argv: [docker, inspect, "{{ exporter_name }}"]
+      register: exporter_inspect
+      changed_when: false
+      failed_when: false
+
+    - name: Start existing exporter
+      ansible.builtin.command:
+        argv: [docker, start, "{{ exporter_name }}"]
+      when: exporter_inspect.rc == 0
+      register: exporter_start
+      changed_when: "'already running' not in (exporter_start.stdout | default(''))"
+
+    - name: Run node exporter
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - "{{ exporter_name }}"
+          - --restart
+          - unless-stopped
+          - --network
+          - host
+          - --pid
+          - host
+          - --read-only
+          - --security-opt
+          - no-new-privileges:true
+          - --cap-drop
+          - ALL
+          - -v
+          - /proc:/host/proc:ro
+          - -v
+          - /sys:/host/sys:ro
+          - -v
+          - /:/host/root:ro,rslave
+          - "{{ exporter_image }}"
+          - --path.procfs=/host/proc
+          - --path.sysfs=/host/sys
+          - --path.rootfs=/host/root
+      when: exporter_inspect.rc != 0
+
+    - name: Verify exporter endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9100/metrics
+        status_code: 200
+        return_content: false
+      register: exporter_health
+      retries: 5
+      delay: 2
+      until: exporter_health.status == 200

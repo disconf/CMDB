@@ -1,0 +1,28 @@
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Go
+*.exe
+*.test
+coverage.out
+
+# Local verification artifacts
+.playwright-cli/
+output/
+output/playwright/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+deploy/secrets/*.env
+!deploy/secrets/*.env.example

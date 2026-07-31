@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{categoryLabel,resultTone}from'./toolboxModel';describe('toolbox model',()=>{it('labels category',()=>expect(categoryLabel('network')).toBe('网络诊断'));it('maps result tone',()=>expect(resultTone('failed')).toBe('danger'))})

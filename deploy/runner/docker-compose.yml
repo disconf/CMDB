@@ -1,0 +1,38 @@
+name: cmdb-runner
+services:
+  ansible-runner:
+    build:
+      context: ../../apps/ansible-runner-service
+    image: cmdb/ansible-runner-service:${CMDB_VERSION:-latest}
+    container_name: cmdb-ansible-runner
+    env_file: [../runner.env]
+    environment:
+      SSH_PRIVATE_KEY_PATH: /run/secrets/ssh_private_key
+      KNOWN_HOSTS_PATH: /run/secrets/known_hosts
+    secrets:
+      - source: ssh_private_key
+        target: ssh_private_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: known_hosts
+        target: known_hosts
+        uid: "10001"
+        gid: "10001"
+        mode: 0444
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:${RUNNER_PORT:-8090}:8090"]
+    read_only: true
+    tmpfs: ["/tmp/cmdb-runner:uid=10001,gid=10001,mode=0700"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/health',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+secrets:
+  ssh_private_key:
+    file: ${SSH_PRIVATE_KEY_FILE}
+  known_hosts:
+    file: ${KNOWN_HOSTS_FILE}

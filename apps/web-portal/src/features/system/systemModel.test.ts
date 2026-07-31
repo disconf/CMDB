@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{auditTone,userStatusLabel}from'./systemModel';describe('system model',()=>{it('labels users',()=>expect(userStatusLabel('active')).toBe('正常'));it('maps audit result',()=>expect(auditTone('failed')).toBe('danger'))})

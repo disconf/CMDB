@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{releaseStatusLabel,stageProgress}from'./releasesModel';describe('releases model',()=>{it('labels status',()=>expect(releaseStatusLabel('running')).toBe('发布中'));it('calculates stages',()=>expect(stageProgress([{status:'success'},{status:'running'}])).toBe(50))})

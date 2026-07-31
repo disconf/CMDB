@@ -1,0 +1,127 @@
+name: ${COMPOSE_PROJECT_NAME:-cmdb-monitoring}
+
+services:
+  prometheus:
+    build:
+      context: ./prometheus
+    image: cmdb/prometheus:3.13.1
+    container_name: cmdb-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-20GB}
+      - --web.enable-lifecycle
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "wget -q --spider http://localhost:9090/-/healthy || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [monitoring]
+    security_opt: [no-new-privileges:true]
+
+  alertmanager:
+    build:
+      context: ./alertmanager
+    image: cmdb/alertmanager:0.32.1
+    container_name: cmdb-alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=http://${SERVER_HOST:-192.168.85.134}:9093
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:9093:9093"
+    volumes:
+      - alertmanager-data:/alertmanager
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "wget -q --spider http://localhost:9093/-/healthy || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [monitoring]
+    security_opt: [no-new-privileges:true]
+
+  node-exporter:
+    image: prom/node-exporter:v1.11.1
+    container_name: cmdb-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($|/)
+    pid: host
+    expose: ["9100"]
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [monitoring]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.19.1
+    container_name: cmdb-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: ${POSTGRES_EXPORTER_DSN:?POSTGRES_EXPORTER_DSN is required}
+    expose: ["9187"]
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [monitoring]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.84.0
+    container_name: cmdb-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://host.docker.internal:6379
+      REDIS_PASSWORD: ${REDIS_EXPORTER_PASSWORD:?REDIS_EXPORTER_PASSWORD is required}
+    expose: ["9121"]
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [monitoring]
+
+networks:
+  monitoring:
+    name: cmdb-monitoring
+
+volumes:
+  prometheus-data:
+    name: cmdb-prometheus-data
+  alertmanager-data:
+    name: cmdb-alertmanager-data

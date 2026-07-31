@@ -1,0 +1,20 @@
+.coverage-panel{margin:0 0 18px;padding:17px;border:1px solid #173b55;background:linear-gradient(145deg,#0b293f,#071b2c)}
+.coverage-panel>header{display:flex;justify-content:space-between;align-items:center}
+.coverage-panel>header span{color:#21d4ee;font-size:10px;letter-spacing:2px}
+.coverage-panel>header h2{margin:4px 0 12px;font-size:16px}
+.coverage-panel>header>strong{font-size:30px;color:#35d9ff}
+.coverage-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.coverage-stats article{padding:10px;background:rgba(6,21,34,.65);border:1px solid #173b55}
+.coverage-stats span,.coverage-hosts small{display:block;color:#718ba0;font-size:10px}
+.coverage-stats b{display:block;margin-top:4px;font-size:18px}
+.coverage-stats article[data-tone=danger] b{color:#fa6078}
+.coverage-stats article[data-tone=warning] b{color:#f2b841}
+.coverage-bar{height:5px;margin:13px 0;background:#102f45;overflow:hidden}
+.coverage-bar i{display:block;height:100%;background:linear-gradient(90deg,#1689b3,#2de0d0);box-shadow:0 0 10px #21d4ee}
+.coverage-notice{padding:8px;color:#f2b841;background:rgba(242,184,65,.07);font-size:11px}
+.coverage-filters{display:flex;align-items:center;gap:8px;margin-top:10px}.coverage-filters select{border:1px solid #22445f;background:#071b2c;color:#bcd7e9;padding:7px 9px}.coverage-filters span{margin-left:auto;color:#718ba0;font-size:10px}
+.coverage-hosts article{display:grid;grid-template-columns:1fr 100px 150px 80px 34px 48px 34px;gap:10px;align-items:center;padding:9px 6px;border-bottom:1px solid #15364e}
+.coverage-hosts small{margin-top:3px}.coverage-hosts span{color:#718ba0;font-size:11px}
+.coverage-hosts b{font-size:11px;color:#f2b841}.coverage-hosts b[data-status=down]{color:#fa6078}
+.coverage-hosts button{padding:5px!important;justify-content:center}.coverage-hosts button svg{width:14px}.coverage-hosts .coverage-asset{display:block!important;padding:0!important;border:0!important;background:transparent!important;text-align:left}.coverage-hosts .coverage-asset strong,.coverage-hosts .coverage-asset small{display:block}.coverage-empty{padding:18px;text-align:center;color:#718ba0}.coverage-guide-backdrop{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(1,8,14,.72);backdrop-filter:blur(4px)}.coverage-guide{width:min(620px,calc(100vw - 32px));padding:20px;border:1px solid #27627f;background:#071b2c;box-shadow:0 20px 70px #000}.coverage-guide>header{display:flex;justify-content:space-between}.coverage-guide>header span{color:#21d4ee;font-size:10px;letter-spacing:2px}.coverage-guide h3{margin:5px 0}.coverage-guide p{color:#8ba4b5;line-height:1.6}.coverage-guide pre{overflow:auto;padding:15px;border:1px solid #183d54;background:#03101a;color:#65e4d1;line-height:1.7}.coverage-guide code{color:#35d9ff}
+@media(max-width:900px){.coverage-stats{grid-template-columns:repeat(2,1fr)}.coverage-hosts article{grid-template-columns:1fr 80px 34px 34px}.coverage-hosts article>span{display:none}}

@@ -1,0 +1,102 @@
+groups:
+  - name: cmdb-platform
+    rules:
+      - alert: CMDBTargetDown
+        expr: up{job=~"cmdb-gateway|alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "CMDB target is unavailable"
+          description: "{{ $labels.job }} target {{ $labels.instance }} has been unavailable for more than two minutes."
+
+      - alert: PrometheusRuleEvaluationFailures
+        expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          category: monitoring
+        annotations:
+          summary: "Prometheus rule evaluation is failing"
+          description: "Prometheus reported rule evaluation failures during the last five minutes."
+
+      - alert: HostCPUHigh
+        expr: 100 - avg by(instance, cmdb_asset_id, asset_name, environment, project_group) (rate(node_cpu_seconds_total{job="cmdb-node-exporter",mode="idle"}[5m])) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: capacity
+        annotations:
+          summary: "Host CPU usage is high"
+          description: "CPU usage on {{ $labels.instance }} has exceeded 85% for ten minutes."
+
+      - alert: HostMemoryHigh
+        expr: (1 - node_memory_MemAvailable_bytes{job="cmdb-node-exporter"} / node_memory_MemTotal_bytes{job="cmdb-node-exporter"}) * 100 > 90
+        for: 10m
+        labels:
+          severity: critical
+          category: capacity
+        annotations:
+          summary: "Host memory usage is critical"
+          description: "Memory usage on {{ $labels.instance }} has exceeded 90% for ten minutes."
+
+      - alert: HostDiskSpaceLow
+        expr: (1 - node_filesystem_avail_bytes{job="cmdb-node-exporter",mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{job="cmdb-node-exporter",mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 > 85
+        for: 15m
+        labels:
+          severity: warning
+          category: capacity
+        annotations:
+          summary: "Host filesystem space is low"
+          description: "Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} is more than 85% full."
+
+      - alert: CMDBHostDown
+        expr: up{job="cmdb-node-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "CMDB managed host is unavailable"
+          description: "Asset {{ $labels.cmdb_asset_id }} ({{ $labels.instance }}) has not been scraped for more than two minutes."
+
+      - alert: PostgreSQLExporterDown
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: database
+        annotations:
+          summary: "PostgreSQL monitoring is unavailable"
+          description: "PostgreSQL exporter cannot connect to the database."
+
+      - alert: PostgreSQLConnectionsHigh
+        expr: sum(pg_stat_database_numbackends) / max(pg_settings_max_connections) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "PostgreSQL connection usage is high"
+          description: "PostgreSQL connection usage has exceeded 80% for ten minutes."
+
+      - alert: RedisExporterDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: cache
+        annotations:
+          summary: "Redis monitoring is unavailable"
+          description: "Redis exporter cannot connect to Redis."
+
+      - alert: RedisRejectedConnections
+        expr: increase(redis_rejected_connections_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          category: cache
+        annotations:
+          summary: "Redis is rejecting connections"
+          description: "Redis rejected one or more connections during the last five minutes."

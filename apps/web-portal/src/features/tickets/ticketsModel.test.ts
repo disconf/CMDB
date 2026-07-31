@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{priorityLabel,statusLabel}from'./ticketsModel';describe('ticket model',()=>{it('labels priority',()=>expect(priorityLabel('high')).toBe('高'));it('labels status',()=>expect(statusLabel('pending')).toBe('待审批'))})

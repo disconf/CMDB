@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Namespace
+metadata: {name: cmdb}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: gateway, namespace: cmdb}
+spec:
+  # Keep one replica until sessions move from process memory to Redis.
+  replicas: 1
+  selector: {matchLabels: {app: gateway}}
+  template:
+    metadata: {labels: {app: gateway}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: gateway
+        image: cmdb/gateway:1.4.0
+        ports: [{containerPort: 8080}]
+        env: [{name: HTTP_ADDR, value: ":8080"}]
+        readinessProbe: {httpGet: {path: /api/v1/ready, port: 8080}, initialDelaySeconds: 2, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /api/v1/health, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+        resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gateway, namespace: cmdb}
+spec: {selector: {app: gateway}, ports: [{port: 8080, targetPort: 8080}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web, namespace: cmdb}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: web
+        image: cmdb/web:1.4.0
+        ports: [{containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 2}
+        livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 5}
+        resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {cpu: 300m, memory: 128Mi}}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: web, namespace: cmdb}
+spec: {selector: {app: web}, ports: [{port: 80, targetPort: 8080}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: cmdb, namespace: cmdb}
+spec:
+  rules:
+  - host: cmdb.example.internal
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend: {service: {name: web, port: {number: 80}}}
