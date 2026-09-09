@@ -18,17 +18,19 @@ const editorMode=ref<'create'|'edit'|''>('')
 const showImport=ref(false)
 const showModels=ref(false)
 const importResult=ref<ImportResult>()
+const showAnalytics=ref(false)
+async function openAnalytics(){await store.loadAnalytics();showAnalytics.value=true}
 function apply(){filters.page=1;void store.search({...filters})}
 function chooseType(type:string){filters.type=filters.type===type?'':type;apply()}
 function page(delta:number){const next=filters.page+delta;if(next>0&&next<=store.meta.totalPages){filters.page=next;void store.search({...filters})}}
 async function save(input:AssetInput){if(editorMode.value==='create')await store.create(input,{...filters});else if(store.selected)await store.update(store.selected.id,input,{...filters});editorMode.value=''}
-async function importRows(rows:AssetInput[]){importResult.value=await store.importRows(rows,{...filters})}
+async function importRows(rows:AssetInput[],upsert:boolean){importResult.value=await store.importRows(rows,upsert,{...filters})}
 onMounted(async()=>{await store.initialize({...filters});const asset=typeof route.query.asset==='string'?route.query.asset:'';if(asset)await store.select(asset)})
 </script>
 
 <template>
   <section class="cmdb-page">
-    <header class="cmdb-heading"><div><span>CONFIGURATION MANAGEMENT DATABASE</span><h1>CMDB 资产中心</h1><p>统一管理资产模型、生命周期、归属关系与数据来源</p></div><div><button @click="showModels=true"><Boxes/>模型管理</button><button @click="showImport=true"><Download/>批量导入</button><button class="primary" @click="editorMode='create'"><Plus/>新增资产</button></div></header>
+    <header class="cmdb-heading"><div><span>CONFIGURATION MANAGEMENT DATABASE</span><h1>CMDB 资产中心</h1><p>统一管理资产模型、生命周期、归属关系与数据来源</p></div><div><button @click="openAnalytics">数据报表</button><button @click="showModels=true"><Boxes/>模型管理</button><button @click="showImport=true"><Download/>批量导入</button><button class="primary" @click="editorMode='create'"><Plus/>新增资产</button></div></header>
     <div v-if="store.summary" class="cmdb-summary">
       <article><Database/><div><span>资产总数</span><strong>{{store.summary.total}}</strong></div></article><article><i class="online"></i><div><span>在线资产</span><strong>{{store.summary.online}}</strong></div></article><article><i class="warning"></i><div><span>异常资产</span><strong>{{store.summary.warning}}</strong></div></article><article><i class="offline"></i><div><span>离线资产</span><strong>{{store.summary.offline}}</strong></div></article><article><Boxes/><div><span>CI 模型</span><strong>{{store.summary.models}}</strong></div></article><article><Tag/><div><span>项目组</span><strong>{{store.summary.projectGroups}}</strong></div></article>
     </div>
@@ -45,7 +47,8 @@ onMounted(async()=>{await store.initialize({...filters});const asset=typeof rout
     <CollectedAttributes v-if="store.selected" :attributes="store.selected.attributes"/>
     <HostMonitoring v-if="store.selected" :asset-id="store.selected.id"/>
     <AssetEditor v-if="editorMode" :asset="editorMode==='edit'?store.selected:undefined" :models="store.models" @close="editorMode=''" @save="save"/>
-    <AssetImport v-if="showImport" :result="importResult" @close="showImport=false" @import="importRows"/>
-    <ModelManager v-if="showModels" :models="store.models" @close="showModels=false" @changed="store.initialize({...filters})"/>
+    <AssetImport v-if="showImport" :result="importResult" :models="store.models" @close="showImport=false" @import="importRows"/>
+    <div v-if="showAnalytics" class="modal-backdrop"><section class="analytics-panel"><header><div><span>REPORTS</span><h2>CMDB 数据报表</h2></div><button @click="showAnalytics=false">✕</button></header><div class="analytics-body"><article><h3>资产状态</h3><dl><dt>总资产</dt><dd>{{store.analytics?.status.total}}</dd><dt>在线</dt><dd>{{store.analytics?.status.online}}</dd><dt>异常</dt><dd>{{store.analytics?.status.warning}}</dd><dt>离线</dt><dd>{{store.analytics?.status.offline}}</dd></dl></article><article><h3>按类型</h3><ul><li v-for="t in store.analytics?.byType" :key="t.code">{{t.name}}（{{t.count}}）</li></ul></article><article><h3>按项目组</h3><ul><li v-for="g in store.analytics?.byGroup" :key="g.group">{{g.group}}（{{g.count}}）</li></ul></article><article><h3>按来源</h3><ul><li v-for="s in store.analytics?.bySource" :key="s.source">{{s.source}}（{{s.count}}）</li></ul></article><article class="wide"><h3>字段完整度</h3><ul><li v-for="f in store.analytics?.completeness" :key="f.field">{{f.label}}：缺失 {{f.missing}} / {{f.total}}（{{Math.round((f.rate)*100)}}%）</li></ul></article></div></section></div>
+<ModelManager v-if="showModels" :models="store.models" @close="showModels=false" @changed="store.initialize({...filters})"/>
   </section>
 </template>

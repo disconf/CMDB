@@ -11,11 +11,12 @@ type Model struct {
 	Fields      []ModelField `json:"fields"`
 }
 type ModelField struct {
-	Name         string `json:"name"`
-	Label        string `json:"label"`
-	Type         string `json:"type"`
-	Required     bool   `json:"required"`
-	DefaultValue string `json:"defaultValue"`
+	Name         string   `json:"name"`
+	Label        string   `json:"label"`
+	Type         string   `json:"type"`
+	Required     bool     `json:"required"`
+	DefaultValue string   `json:"defaultValue"`
+	Options      []string `json:"options"`
 }
 type ModelInput struct {
 	Code        string       `json:"code"`
@@ -109,6 +110,7 @@ type CreateAssetInput struct {
 	Source       string      `json:"source"`
 	Tags         []string    `json:"tags"`
 	Attributes   []Attribute `json:"attributes"`
+	Relations    []Relation  `json:"relations"`
 }
 type UpdateAssetInput struct {
 	Name         string      `json:"name"`
@@ -120,6 +122,7 @@ type UpdateAssetInput struct {
 	Location     string      `json:"location"`
 	Tags         []string    `json:"tags"`
 	Attributes   []Attribute `json:"attributes"`
+	Relations    []Relation  `json:"relations"`
 }
 type Change struct {
 	Field  string `json:"field"`
@@ -142,5 +145,34 @@ type ImportError struct {
 type ImportResult struct {
 	Total   int           `json:"total"`
 	Created int           `json:"created"`
+	Updated int           `json:"updated"`
 	Errors  []ImportError `json:"errors"`
+}
+
+type Analytics struct {
+	Status       Summary        `json:"status"`
+	ByType       []TypeCount    `json:"byType"`
+	ByGroup      []GroupCount   `json:"byGroup"`
+	BySource     []SourceCount  `json:"bySource"`
+	Completeness []Completeness `json:"completeness"`
+}
+type TypeCount struct {
+	Code  string `json:"code"`
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+type GroupCount struct {
+	Group string `json:"group"`
+	Count int    `json:"count"`
+}
+type SourceCount struct {
+	Source string `json:"source"`
+	Count  int    `json:"count"`
+}
+type Completeness struct {
+	Field   string  `json:"field"`
+	Label   string  `json:"label"`
+	Missing int     `json:"missing"`
+	Total   int     `json:"total"`
+	Rate    float64 `json:"rate"`
 }

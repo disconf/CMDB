@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { Plus, Trash2, X } from 'lucide-vue-next'
-import type { Asset, AssetInput, Attribute, CiModel } from '@/features/cmdb/types'
+import type { Asset, AssetInput, Attribute, CiModel, Relation } from '@/features/cmdb/types'
 import { validateAssetForm } from '@/features/cmdb/assetForm'
 
 const props = defineProps<{ asset?: Asset; models: CiModel[] }>()
@@ -24,6 +24,12 @@ const form = reactive<{ id: string; name: string; type: string; status: string; 
 })
 const tagsText = ref(form.tags.join('|'))
 const attrs = ref<Attribute[]>((props.asset?.attributes ?? []).map((a) => ({ name: a.name, label: a.label, value: a.value })))
+const relations = ref<Relation[]>((props.asset?.relations ?? []).map((r) => ({ type: r.type, targetId: r.targetId, targetName: r.targetName })))
+function fieldMeta(name: string) { return modelFields().find((f) => f.name === name) }
+function isSelectField(name: string) { const f = fieldMeta(name); return !!f && f.type === 'select' && !!f.options?.length }
+function selectOptions(name: string) { return fieldMeta(name)?.options ?? [] }
+function addRelation() { relations.value.push({ type: 'belongs-to', targetId: '', targetName: '' }) }
+function removeRelation(index: number) { relations.value.splice(index, 1) }
 
 function modelFields() {
   const model = props.models.find((m) => m.code === form.type)
@@ -46,7 +52,8 @@ function submit() {
   errors.value = validateAssetForm(form)
   if (errors.value.length) return
   const attributes = attrs.value.map((a) => ({ name: a.name.trim(), label: a.label.trim(), value: a.value.trim() })).filter((a) => a.name || a.value)
-  emit('save', { ...form, tags: [...form.tags], attributes: attributes.length ? attributes : undefined })
+  const cleanRelations = relations.value.map((r) => ({ type: r.type.trim(), targetId: r.targetId.trim(), targetName: r.targetName.trim() })).filter((r) => r.targetId || r.targetName)
+  emit('save', { ...form, tags: [...form.tags], attributes: attributes.length ? attributes : undefined, relations: cleanRelations.length ? cleanRelations : undefined })
 }
 </script>
 <template>
@@ -79,10 +86,21 @@ function submit() {
         <div v-for="(item, index) in attrs" :key="index" class="attr-row">
           <input v-model="item.label" placeholder="显示名（如 机柜号）">
           <input v-model="item.name" placeholder="字段名（如 rack_no）">
-          <input v-model="item.value" placeholder="值">
+          <select v-if="isSelectField(item.name)" v-model="item.value"><option v-for="o in selectOptions(item.name)" :key="o" :value="o">{{ o }}</option></select>
+          <input v-else v-model="item.value" placeholder="值">
           <button type="button" class="attr-remove" @click="removeAttr(index)"><Trash2 /></button>
         </div>
         <div v-if="!attrs.length" class="attr-empty">暂无扩展字段</div>
+      </section>
+      <section class="attr-editor rel-editor">
+        <header><h3>资产关系（可选）</h3><button type="button" @click="addRelation"><Plus /> 添加关系</button></header>
+        <div v-for="(rel, index) in relations" :key="index" class="rel-row">
+          <select v-model="rel.type"><option value="belongs-to">属于(belongs-to)</option><option value="depends-on">依赖(depends-on)</option><option value="located-in">位于(located-in)</option><option value="runs-on">运行于(runs-on)</option></select>
+          <input v-model="rel.targetId" placeholder="目标资产ID">
+          <input v-model="rel.targetName" placeholder="目标资产名称">
+          <button type="button" class="attr-remove" @click="removeRelation(index)"><Trash2 /></button>
+        </div>
+        <p v-if="!relations.length" class="attr-empty">暂未配置关系（如：该服务运行于哪台主机、位于哪个机房）</p>
       </section>
       <div v-if="errors.length" class="form-errors"><span v-for="error in errors" :key="error">{{ error }}</span></div>
       <footer>
@@ -102,4 +120,6 @@ function submit() {
 .attr-row input { width: 100%; box-sizing: border-box; }
 .attr-remove { background: none; border: none; cursor: pointer; color: var(--danger, #f56c6c); }
 .attr-empty { font-size: 12px; opacity: .5; }
+.rel-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
+.rel-row input, .rel-row select { width: 100%; box-sizing: border-box; }
 </style>

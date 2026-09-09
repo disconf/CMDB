@@ -2,6 +2,7 @@ package cmdb
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -130,7 +131,7 @@ func TestUpdateAssetChangesFieldsAndRecordsDiff(t *testing.T) {
 
 func TestImportAssetsReturnsRowErrorsWithoutDiscardingValidRows(t *testing.T) {
 	service := NewService()
-	result := service.ImportAssets([]CreateAssetInput{{ID: "cloud-new-01", Name: "new-cloud", Type: "cloud-host", Status: "online", IP: "172.19.1.2", Environment: "测试", ProjectGroup: "数据平台组", Owner: "陈明", Location: "华东", Source: "csv"}, {ID: "bad"}}, "admin")
+	result := service.ImportAssets([]CreateAssetInput{{ID: "cloud-new-01", Name: "new-cloud", Type: "cloud-host", Status: "online", IP: "172.19.1.2", Environment: "测试", ProjectGroup: "数据平台组", Owner: "陈明", Location: "华东", Source: "csv"}, {ID: "bad"}}, false, "admin")
 	if result.Created != 1 || len(result.Errors) != 1 {
 		t.Fatalf("unexpected import result %+v", result)
 	}
@@ -220,5 +221,36 @@ func TestAgentLifecycleRecordsEvents(t *testing.T) {
 	}
 	if asset, _ := s.GetAsset("host-lifecycle-01"); asset.Status != "online" {
 		t.Fatalf("expected online after re-register, got %s", asset.Status)
+	}
+}
+
+func TestImportUpsertUpdatesByIP(t *testing.T) {
+	service := NewService()
+	service.CreateAsset(CreateAssetInput{ID: "dup-a", Name: "dup-a", Type: "virtual-machine", Status: "online", IP: "10.66.1.2", Environment: "测试", ProjectGroup: "研发效能组", Owner: "李娜", Source: "manual"}, "t")
+	res := service.ImportAssets([]CreateAssetInput{{ID: "dup-b", Name: "dup-b", Type: "virtual-machine", Status: "online", IP: "10.66.1.2", Environment: "测试", ProjectGroup: "研发效能组", Owner: "王五", Source: "csv"}}, true, "csv-import")
+	if res.Updated != 1 || res.Created != 0 {
+		t.Fatalf("expected upsert update, got %+v", res)
+	}
+	asset, _ := service.GetAsset("dup-a")
+	if asset.Owner != "王五" {
+		t.Fatalf("expected owner updated on existing id, got %s", asset.Owner)
+	}
+	if _, err := service.GetAsset("dup-b"); err == nil {
+		t.Fatalf("dup-b should not be created")
+	}
+}
+
+func TestAnalyticsAndTemplate(t *testing.T) {
+	service := NewService()
+	analytics := service.Analytics()
+	if analytics.Status.Total == 0 || len(analytics.ByType) == 0 || len(analytics.ByGroup) == 0 || len(analytics.BySource) == 0 {
+		t.Fatalf("analytics empty: %+v", analytics)
+	}
+	header, err := service.ModelTemplateCSV("physical-server")
+	if err != nil {
+		t.Fatalf("template: %v", err)
+	}
+	if !strings.Contains(header, "bmc_ip") || !strings.Contains(header, "rack_no") {
+		t.Fatalf("template missing model fields: %s", header)
 	}
 }

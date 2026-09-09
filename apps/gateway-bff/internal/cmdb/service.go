@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -621,7 +622,7 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 		return Asset{}, fmt.Errorf("%w: unknown type", ErrValidation)
 	}
 	attrs := normalizeAttributes(input.Attributes, modelFieldsFor(s.models, input.Type))
-	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: attrs, Relations: []Relation{}}
+	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: attrs, Relations: append([]Relation(nil), input.Relations...)}
 	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: input.ID, Action: "created", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05")}
 	if s.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -672,6 +673,9 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 		if input.Attributes != nil {
 			target.Attributes = normalizeAttributes(input.Attributes, modelFieldsFor(s.models, target.Type))
 		}
+		if input.Relations != nil {
+			target.Relations = append([]Relation(nil), input.Relations...)
+		}
 		changes := diffAsset(before, *target)
 		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "updated", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: changes}
 		if s.db != nil {
@@ -684,9 +688,10 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 			}
 			tags, _ := json.Marshal(target.Tags)
 			attrsJSON, _ := json.Marshal(target.Attributes)
+			relsJSON, _ := json.Marshal(target.Relations)
 			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET name=$2,status=$3,ip=$4,environment=$5,
-				project_group=$6,owner=$7,location=$8,tags=$9,attributes=$10,updated_at=now() WHERE id=$1`,
-				id, target.Name, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags, attrsJSON)
+				project_group=$6,owner=$7,location=$8,tags=$9,attributes=$10,relations=$11,updated_at=now() WHERE id=$1`,
+				id, target.Name, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags, attrsJSON, relsJSON)
 			if err == nil {
 				err = insertHistory(ctx, tx, entry)
 			}
@@ -724,18 +729,157 @@ func (s *Service) History(id string) ([]HistoryEntry, error) {
 	entries := s.history[id]
 	return append([]HistoryEntry(nil), entries...), nil
 }
-func (s *Service) ImportAssets(rows []CreateAssetInput, operator string) ImportResult {
+func hostAssetType(assetType string) bool {
+	return assetType == "physical-server" || assetType == "virtual-machine" || assetType == "k8s-node"
+}
+
+func (s *Service) importRow(row CreateAssetInput, operator string) (string, error) {
+	targetID := ""
+	s.mu.RLock()
+	for _, a := range s.assets {
+		if a.ID == row.ID {
+			targetID = a.ID
+			break
+		}
+		if row.IP != "" && a.IP == row.IP && hostAssetType(a.Type) && a.ID != row.ID {
+			targetID = a.ID
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if targetID != "" {
+		if _, err := s.UpdateAsset(targetID, UpdateAssetInput{Name: row.Name, Status: row.Status, IP: row.IP, Environment: row.Environment, ProjectGroup: row.ProjectGroup, Owner: row.Owner, Location: row.Location, Tags: row.Tags, Attributes: row.Attributes, Relations: row.Relations}, operator+"-csv-upsert"); err != nil {
+			return "", err
+		}
+		return "updated", nil
+	}
+	if _, err := s.CreateAsset(row, operator); err != nil {
+		return "", err
+	}
+	return "created", nil
+}
+
+func (s *Service) ImportAssets(rows []CreateAssetInput, upsert bool, operator string) ImportResult {
 	result := ImportResult{Total: len(rows), Errors: []ImportError{}}
 	for index, row := range rows {
-		_, err := s.CreateAsset(row, operator)
+		if !upsert {
+			if _, err := s.CreateAsset(row, operator); err != nil {
+				result.Errors = append(result.Errors, ImportError{Row: index + 2, ID: row.ID, Message: err.Error()})
+				continue
+			}
+			result.Created++
+			continue
+		}
+		status, err := s.importRow(row, operator)
 		if err != nil {
 			result.Errors = append(result.Errors, ImportError{Row: index + 2, ID: row.ID, Message: err.Error()})
 			continue
 		}
-		result.Created++
+		if status == "updated" {
+			result.Updated++
+		} else {
+			result.Created++
+		}
 	}
 	return result
 }
+
+// Analytics returns inventory reports (status/type/group/source/completeness).
+func (s *Service) Analytics() Analytics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := Analytics{Status: Summary{Total: len(s.assets), Models: len(s.models)}}
+	typeCounts := map[string]int{}
+	groupCounts := map[string]int{}
+	sourceCounts := map[string]int{}
+	for _, a := range s.assets {
+		typeCounts[a.Type]++
+		groupCounts[a.ProjectGroup]++
+		sourceCounts[a.Source]++
+		if a.Status == "online" {
+			out.Status.Online++
+		} else if a.Status == "warning" {
+			out.Status.Warning++
+		} else {
+			out.Status.Offline++
+		}
+	}
+	for _, m := range s.models {
+		out.ByType = append(out.ByType, TypeCount{Code: m.Code, Name: m.Name, Count: typeCounts[m.Code]})
+	}
+	for _, g := range sortedKeys(groupCounts) {
+		out.ByGroup = append(out.ByGroup, GroupCount{Group: g, Count: groupCounts[g]})
+	}
+	for _, src := range sortedKeys(sourceCounts) {
+		out.BySource = append(out.BySource, SourceCount{Source: src, Count: sourceCounts[src]})
+	}
+	total := len(s.assets)
+	if total > 0 {
+		for _, spec := range [][2]string{{"owner", "负责人"}, {"location", "位置"}, {"ip", "IP地址"}, {"projectGroup", "项目组"}} {
+			missing := 0
+			for _, a := range s.assets {
+				value := strings.TrimSpace(assetString(a, spec[0]))
+				if value == "" || value == "待分配" || value == "自动发现" {
+					missing++
+				}
+			}
+			out.Completeness = append(out.Completeness, Completeness{Field: spec[0], Label: spec[1], Missing: missing, Total: total, Rate: float64(total-missing) / float64(total)})
+		}
+	}
+	return out
+}
+
+func assetString(a Asset, field string) string {
+	switch field {
+	case "owner":
+		return a.Owner
+	case "location":
+		return a.Location
+	case "ip":
+		return a.IP
+	case "projectGroup":
+		return a.ProjectGroup
+	}
+	return ""
+}
+
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ModelTemplateCSV returns a CSV header line for a CI model (fixed columns + model fields).
+func (s *Service) ModelTemplateCSV(code string) (string, error) {
+	fields := []string{"id", "name", "type", "status", "ip", "environment", "projectGroup", "owner", "location", "source", "tags"}
+	model := Model{}
+	found := false
+	for _, m := range s.models {
+		if m.Code == code {
+			model = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", ErrNotFound
+	}
+	seen := map[string]bool{}
+	for _, name := range fields {
+		seen[name] = true
+	}
+	for _, f := range model.Fields {
+		if !seen[f.Name] {
+			fields = append(fields, f.Name)
+			seen[f.Name] = true
+		}
+	}
+	return strings.Join(fields, ","), nil
+}
+
 func validateCreate(input CreateAssetInput) error {
 	if strings.TrimSpace(input.ID) == "" || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Type) == "" || strings.TrimSpace(input.Status) == "" || strings.TrimSpace(input.ProjectGroup) == "" || strings.TrimSpace(input.Owner) == "" {
 		return ErrValidation

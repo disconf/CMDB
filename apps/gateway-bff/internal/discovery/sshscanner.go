@@ -66,6 +66,72 @@ func parseSSHInventory(ip string, output string) *NodeExporterHost {
 	return host
 }
 
+func runSSHRaw(ip string, port int, username, password, command string, timeout time.Duration) (string, error) {
+	if username == "" || password == "" {
+		return "", errors.New("credentials not configured")
+	}
+	config := &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.Password(password)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: timeout}
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", ip, port), config)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	session, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	output, err := session.CombinedOutput(command)
+	return string(output), err
+}
+
+type AgentInstallInput struct {
+	Hosts     []string `json:"hosts"`
+	Port      int      `json:"port"`
+	AssetType string   `json:"assetType"`
+}
+type AgentInstallResult struct {
+	Host string `json:"host"`
+	OK   bool   `json:"ok"`
+	Info string `json:"info"`
+}
+
+// AgentBatchInstall installs the cmdb-agent on hosts via SSH. The agent binary is
+// fetched by each host from CMDB_AGENT_BUNDLE_URL (must be configured & reachable).
+func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult, error) {
+	username := os.Getenv("CMDB_SSH_USERNAME")
+	password := os.Getenv("CMDB_SSH_PASSWORD")
+	bundleURL := os.Getenv("CMDB_AGENT_BUNDLE_URL")
+	if bundleURL == "" {
+		return nil, errors.New("CMDB_AGENT_BUNDLE_URL not configured (host the cmdb-agent binary, e.g. on MinIO/Harbor)")
+	}
+	port := in.Port
+	if port == 0 {
+		port = 22
+	}
+	assetType := in.AssetType
+	if assetType == "" {
+		assetType = "virtual-machine"
+	}
+	token := os.Getenv("AGENT_SHARED_TOKEN")
+	results := []AgentInstallResult{}
+	for _, ip := range in.Hosts {
+		envContent := "CMDB_GATEWAY_URL=http://127.0.0.1:30080\nCMDB_AGENT_TOKEN=" + token + "\nCMDB_AGENT_TYPE=" + assetType + "\nCMDB_REPORT_INTERVAL=60s"
+		script := "set -e; mkdir -p /opt/cmdb-agent; curl -fsSL --connect-timeout 5 '" + bundleURL + "' -o /opt/cmdb-agent/cmdb-agent; chmod 755 /opt/cmdb-agent/cmdb-agent; printf '%b' '" + envContent + "' > /opt/cmdb-agent/cmdb-agent.env; chmod 600 /opt/cmdb-agent/cmdb-agent.env; cat > /etc/systemd/system/cmdb-agent.service <<'U'\n[Unit]\nDescription=CMDB Agent\nAfter=network-online.target\n[Service]\nEnvironmentFile=/opt/cmdb-agent/cmdb-agent.env\nExecStart=/opt/cmdb-agent/cmdb-agent\nRestart=always\n[Install]\nWantedBy=multi-user.target\nU\nsystemctl daemon-reload; systemctl enable cmdb-agent >/dev/null 2>&1 || true; systemctl restart cmdb-agent; sleep 2; echo ACTIVE=$(systemctl is-active cmdb-agent)"
+		out, err := runSSHRaw(ip, port, username, password, script, 30*time.Second)
+		info := ""
+		ok := false
+		if err != nil {
+			info = err.Error()
+		} else {
+			info = out
+			ok = true
+		}
+		results = append(results, AgentInstallResult{Host: ip, OK: ok, Info: info})
+	}
+	return results, nil
+}
+
 func runSSHInventory(ip string, port int, username, password string, timeout time.Duration) *NodeExporterHost {
 	if username == "" || password == "" {
 		return nil

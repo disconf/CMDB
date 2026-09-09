@@ -128,6 +128,24 @@ func NewServer() *Server {
 		authService.Logout(bearerToken(r))
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/analytics", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.Analytics())
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/models/{code}/template", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		header, err := cmdbService.ModelTemplateCSV(r.PathValue("code"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		_, _ = w.Write([]byte(header))
+	})
 	mux.HandleFunc("GET /api/v1/cmdb/models", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
@@ -275,7 +293,25 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, user.Username))
+		upsert := r.URL.Query().Get("mode") == "upsert"
+		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, upsert, user.Username))
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-install", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		var in discovery.AgentInstallInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		res, err := discoveryService.AgentBatchInstall(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "INSTALL_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-ssh", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
