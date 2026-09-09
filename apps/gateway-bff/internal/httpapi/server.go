@@ -320,6 +320,23 @@ func NewServer() *Server {
 		w.Header().Set("Content-Disposition", "attachment; filename=cmdb-agent")
 		_, _ = w.Write(data)
 	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-uninstall", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		var in discovery.AgentInstallInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		res, err := discoveryService.AgentBatchUninstall(in.Hosts, in.Port)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UNINSTALL_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/agent-install", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})

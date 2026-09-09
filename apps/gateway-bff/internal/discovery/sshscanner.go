@@ -140,6 +140,30 @@ func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult,
 	return results, nil
 }
 
+// AgentBatchUninstall stops and removes cmdb-agent from hosts via SSH.
+func (s *Service) AgentBatchUninstall(hosts []string, port int) ([]AgentInstallResult, error) {
+	username := os.Getenv("CMDB_SSH_USERNAME")
+	password := os.Getenv("CMDB_SSH_PASSWORD")
+	if port == 0 {
+		port = 22
+	}
+	script := "systemctl stop cmdb-agent 2>/dev/null; systemctl disable cmdb-agent 2>/dev/null; rm -f /etc/systemd/system/cmdb-agent.service /opt/cmdb-agent/cmdb-agent /opt/cmdb-agent/cmdb-agent.env; rmdir /opt/cmdb-agent 2>/dev/null || true; systemctl daemon-reload; echo UNINSTALLED"
+	results := []AgentInstallResult{}
+	for _, ip := range hosts {
+		out, err := runSSHRaw(ip, port, username, password, script, 20*time.Second)
+		info := ""
+		ok := false
+		if err != nil {
+			info = err.Error()
+		} else {
+			info = out
+			ok = true
+		}
+		results = append(results, AgentInstallResult{Host: ip, OK: ok, Info: info})
+	}
+	return results, nil
+}
+
 func runSSHInventory(ip string, port int, username, password string, timeout time.Duration) *NodeExporterHost {
 	if username == "" || password == "" {
 		return nil
