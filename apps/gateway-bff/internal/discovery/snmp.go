@@ -15,9 +15,10 @@ import (
 )
 
 type SNMPScanInput struct {
-	CIDRs     []string `json:"cidrs"`
-	Community string   `json:"community"`
-	Port      int      `json:"port"`
+	CIDRs       []string `json:"cidrs"`
+	Community   string   `json:"community"`
+	Port        int      `json:"port"`
+	DefaultType string   `json:"defaultType"` // network-device / physical-server / ""(自动)
 }
 
 type SNMPScanResult struct {
@@ -29,6 +30,67 @@ type SNMPScanResult struct {
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
+const (
+	oidSysDescr     = ".1.3.6.1.2.1.1.1.0"
+	oidSysObjectID  = ".1.3.6.1.2.1.1.2.0"
+	oidSysName      = ".1.3.6.1.2.1.1.5.0"
+	oidIfNumber     = ".1.3.6.1.2.1.2.1.0"
+	oidEntityBase   = ".1.3.6.1.2.1.47.1.1.1.1"
+	oidEntPhysDescr = ".1.3.6.1.2.1.47.1.1.1.1.2"
+	oidEntPhysName  = ".1.3.6.1.2.1.47.1.1.1.1.5"
+	oidEntPhysSwRev = ".1.3.6.1.2.1.47.1.1.1.1.8"
+	oidEntPhysSn    = ".1.3.6.1.2.1.47.1.1.1.1.11"
+	oidEntPhysModel = ".1.3.6.1.2.1.47.1.1.1.1.13"
+)
+
+var oobKeywords = []string{"ilo", "idrac", "ibmc", "bmc", "ipmi", "integrated lights-out", "drac", "redfish", "impic"}
+var vendorRules = []struct {
+	name   string
+	match  []string
+	oidTag string
+}{
+	{"Huawei", []string{"vrp", "huawei"}, ".1.3.6.1.4.1.2011"},
+	{"H3C", []string{"comware", "h3c"}, ".1.3.6.1.4.1.25506"},
+	{"Cisco", []string{"cisco ios", "ios-xe", "nx-os", "catalyst"}, ".1.3.6.1.4.1.9"},
+	{"Ruijie", []string{"rgos", "ruijie"}, ".1.3.6.1.4.1.4881"},
+	{"HPE", []string{"proliant", "hpe"}, ".1.3.6.1.4.1.232"},
+	{"Dell", []string{"idrac", "dell"}, ".1.3.6.1.4.1.674"},
+}
+
+func classifySNMP(sysDescr, sysObjectID string) (vendor string, oob bool) {
+	low := strings.ToLower(sysDescr + " " + sysObjectID)
+	for _, kw := range oobKeywords {
+		if strings.Contains(low, kw) {
+			oob = true
+		}
+	}
+	for _, r := range vendorRules {
+		for _, m := range r.match {
+			if strings.Contains(low, m) {
+				vendor = r.name
+				return vendor, oob
+			}
+		}
+		if r.oidTag != "" && strings.Contains(sysObjectID, strings.TrimPrefix(r.oidTag, ".")) {
+			vendor = r.name
+			return vendor, oob
+		}
+	}
+	return "", oob
+}
+
+func stringify(v gosnmp.SnmpPDU) string {
+	switch v.Type {
+	case gosnmp.OctetString, gosnmp.IPAddress, gosnmp.Opaque:
+		if b, ok := v.Value.([]byte); ok {
+			return strings.TrimSpace(string(b))
+		}
+	case gosnmp.Integer, gosnmp.Counter32, gosnmp.Counter64, gosnmp.Gauge32, gosnmp.TimeTicks, gosnmp.Uinteger32:
+		return fmt.Sprint(gosnmp.ToBigInt(v.Value))
+	}
+	return ""
+}
+
 func probeSNMP(ip string, port int, community string, timeout time.Duration) *NodeExporterHost {
 	if community == "" {
 		return nil
@@ -38,48 +100,96 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 		return nil
 	}
 	defer g.Conn.Close()
-	oids := []string{".1.3.6.1.2.1.1.1.0", ".1.3.6.1.2.1.1.5.0", ".1.3.6.1.2.1.2.1.0"}
-	resp, err := g.Get(oids)
+	resp, err := g.Get([]string{oidSysDescr, oidSysObjectID, oidSysName, oidIfNumber})
 	if err != nil || resp == nil {
 		return nil
 	}
-	var sysDescr, sysName string
-	var ifNumber string
+	vals := map[string]string{}
 	for _, v := range resp.Variables {
-		if v.Type == gosnmp.OctetString || v.Type == gosnmp.IPAddress {
-			value := string(v.Value.([]byte))
-			switch v.Name {
-			case oids[0]:
-				sysDescr = strings.TrimSpace(value)
-			case oids[1]:
-				sysName = strings.TrimSpace(value)
-			}
-		} else if v.Type == gosnmp.Integer {
-			value := fmt.Sprint(gosnmp.ToBigInt(v.Value).Int64())
-			if v.Name == oids[2] {
-				ifNumber = value
-			}
-		}
+		vals[v.Name] = stringify(v)
 	}
+	sysDescr := vals[oidSysDescr]
+	sysObjectID := vals[oidSysObjectID]
+	sysName := vals[oidSysName]
+	ifNumber := vals[oidIfNumber]
 	if sysDescr == "" && sysName == "" {
 		return nil
 	}
-	host := &NodeExporterHost{IP: ip, Name: sysName, OS: sysDescr, Virtual: false}
+	host := &NodeExporterHost{IP: ip, Name: sysName, OS: sysDescr}
 	if host.Name == "" {
 		host.Name = ip
+	}
+	model, serial, hwDescr := "", "", ""
+	vendor, oob := classifySNMP(sysDescr, sysObjectID)
+	// entity walk for model/serial (best effort, capped)
+	count := 0
+	_ = g.BulkWalk(oidEntityBase, func(pdu gosnmp.SnmpPDU) error {
+		count++
+		if count > 400 {
+			return errors.New("limit")
+		}
+		value := stringify(pdu)
+		if value == "" {
+			return nil
+		}
+		switch {
+		case strings.HasSuffix(pdu.Name, ".11") && serial == "":
+			serial = value
+		case strings.HasSuffix(pdu.Name, ".13") && model == "":
+			model = value
+		case strings.HasSuffix(pdu.Name, ".2") && hwDescr == "":
+			hwDescr = value
+		}
+		return nil
+	})
+	if hwDescr != "" && vendor == "" {
+		vendor = vendorFromDescr(hwDescr)
 	}
 	host.Attributes = []cmdb.Attribute{
 		{Name: "sys_descr", Label: "系统描述", Value: sysDescr},
 		{Name: "sys_name", Label: "设备名", Value: sysName},
+		{Name: "sys_object_id", Label: "sysObjectID", Value: sysObjectID},
 		{Name: "management_ip", Label: "管理IP", Value: ip},
+	}
+	if vendor != "" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "vendor", Label: "厂商", Value: vendor})
+	}
+	if model != "" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "model", Label: "型号", Value: model})
+	}
+	if serial != "" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "serial", Label: "序列号", Value: serial})
+	}
+	if hwDescr != "" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "entity_desc", Label: "实体描述", Value: hwDescr})
 	}
 	if ifNumber != "" {
 		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "if_number", Label: "接口数", Value: ifNumber})
 	}
+	if oob {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "bmc_ip", Label: "带外管理IP(BMC)", Value: ip})
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "oob", Label: "带外管理口", Value: "true"})
+	}
+	host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "snmp_discovered", Label: "SNMP发现", Value: "true"})
+	host.Virtual = false
+	host.OS = sysDescr
+	_ = vendorFromDescr // silence unused in odd builds
 	return host
 }
 
-// ScanSNMP scans CIDRs over SNMP v2c and adopts network devices into CMDB.
+func vendorFromDescr(descr string) string {
+	low := strings.ToLower(descr)
+	for _, r := range vendorRules {
+		for _, m := range r.match {
+			if strings.Contains(low, m) {
+				return r.name
+			}
+		}
+	}
+	return ""
+}
+
+// ScanSNMP scans CIDRs over SNMP v2c and adopts devices/servers into CMDB.
 func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResult, error) {
 	result := SNMPScanResult{}
 	if len(in.CIDRs) == 0 {
@@ -120,7 +230,7 @@ func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResul
 				return
 			default:
 			}
-			if host := probeSNMP(address, port, community, 1200*time.Millisecond); host != nil {
+			if host := probeSNMP(address, port, community, 1500*time.Millisecond); host != nil {
 				mu.Lock()
 				found = append(found, host)
 				mu.Unlock()
@@ -131,11 +241,20 @@ func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResul
 	result.Found = len(found)
 	items := []DiscoveredItem{}
 	for _, host := range found {
+		_, oob := classifySNMP(host.OS, "")
+		assetType := strings.TrimSpace(in.DefaultType)
+		if assetType == "" {
+			if oob {
+				assetType = "physical-server"
+			} else {
+				assetType = "network-device"
+			}
+		}
 		items = append(items, DiscoveredItem{
 			ID:         "snmp-" + strings.ReplaceAll(host.IP, ".", "-"),
 			Name:       host.Name,
 			IP:         host.IP,
-			Type:       "network-device",
+			Type:       assetType,
 			Confidence: 88,
 			Attributes: host.Attributes,
 		})
