@@ -26,3 +26,8 @@ __pycache__/
 Thumbs.db
 deploy/secrets/*.env
 !deploy/secrets/*.env.example
+
+# Local k8s tooling & kubeconfig (never commit)
+.tools/
+.kube/
+

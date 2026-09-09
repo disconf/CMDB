@@ -19,6 +19,7 @@ const version = "0.1.0"
 
 type report struct {
 	AgentID      string `json:"agentId"`
+	Type         string `json:"type"`
 	Hostname     string `json:"hostname"`
 	IP           string `json:"ip"`
 	OS           string `json:"os"`
@@ -56,7 +57,7 @@ func collect() report {
 	if id == "" {
 		id = "host-" + strings.ToLower(strings.ReplaceAll(hostname, "_", "-"))
 	}
-	return report{AgentID: id, Hostname: hostname, IP: primaryIP(), OS: osRelease(), Kernel: readFirst("/proc/sys/kernel/osrelease"), Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memory(), DiskBytes: disk(), BootTime: boot(), Version: version}
+	return report{AgentID: id, Type: strings.TrimSpace(os.Getenv("CMDB_AGENT_TYPE")), Hostname: hostname, IP: primaryIP(), OS: osRelease(), Kernel: readFirst("/proc/sys/kernel/osrelease"), Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memory(), DiskBytes: disk(), BootTime: boot(), Version: version}
 }
 func send(client *http.Client, url, token string, value report) error {
 	body, _ := json.Marshal(value)

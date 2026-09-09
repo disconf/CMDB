@@ -66,6 +66,7 @@ type DiscoveredItem struct {
 }
 type AgentReport struct {
 	AgentID      string `json:"agentId"`
+	Type         string `json:"type"`
 	Hostname     string `json:"hostname"`
 	IP           string `json:"ip"`
 	OS           string `json:"os"`
@@ -118,7 +119,7 @@ func (s *Service) Report(token string, in AgentReport) (cmdb.Asset, error) {
 	if s.cmdb == nil || in.AgentID == "" || in.Hostname == "" {
 		return cmdb.Asset{}, errors.New("validation")
 	}
-	asset, err := s.cmdb.UpsertAgentAsset(cmdb.AgentAssetInput{ID: in.AgentID, Hostname: in.Hostname, IP: in.IP, OS: in.OS, Kernel: in.Kernel, Architecture: in.Architecture, CPUCount: in.CPUCount, MemoryBytes: in.MemoryBytes, DiskBytes: in.DiskBytes, BootTime: in.BootTime, AgentVersion: in.Version})
+	asset, err := s.cmdb.UpsertAgentAsset(cmdb.AgentAssetInput{ID: in.AgentID, Type: in.Type, Hostname: in.Hostname, IP: in.IP, OS: in.OS, Kernel: in.Kernel, Architecture: in.Architecture, CPUCount: in.CPUCount, MemoryBytes: in.MemoryBytes, DiskBytes: in.DiskBytes, BootTime: in.BootTime, AgentVersion: in.Version})
 	if err != nil {
 		return cmdb.Asset{}, err
 	}

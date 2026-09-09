@@ -40,6 +40,7 @@ func NewService() *Service {
 		asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
 	}
 	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	models = applyModelFieldPresets(models)
 	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry)}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
 		db, persistedAssets, persistedHistory, err := openPostgres(databaseURL, assets)
@@ -59,6 +60,13 @@ func NewService() *Service {
 			}
 			persistedModels = models
 		}
+		if err := ensureModelFieldPresets(context.Background(), service.db, persistedModels); err != nil {
+			panic(fmt.Sprintf("seed CMDB model fields: %v", err))
+		}
+		persistedModels, modelErr = loadModels(context.Background(), service.db)
+		if modelErr != nil {
+			panic(fmt.Sprintf("reload CMDB models: %v", modelErr))
+		}
 		service.models = persistedModels
 		service.assets = persistedAssets
 		service.history = persistedHistory
@@ -72,6 +80,119 @@ func NewService() *Service {
 		}
 	}
 	return service
+}
+
+var modelFieldPresets = map[string][]ModelField{
+	"physical-server": {
+		{Name: "serial", Label: "???", Type: "text"},
+		{Name: "vendor", Label: "??", Type: "text"},
+		{Name: "model", Label: "??", Type: "text"},
+		{Name: "bmc_ip", Label: "????IP(BMC)", Type: "text"},
+		{Name: "idc_name", Label: "????", Type: "text"},
+		{Name: "module_name", Label: "??/??", Type: "text"},
+		{Name: "rack_no", Label: "???", Type: "text"},
+		{Name: "u_position", Label: "U?", Type: "text"},
+		{Name: "os_name", Label: "????", Type: "text"},
+		{Name: "kernel", Label: "????", Type: "text"},
+		{Name: "cpu", Label: "CPU", Type: "text"},
+		{Name: "memory", Label: "??", Type: "text"},
+		{Name: "disk", Label: "??", Type: "text"},
+		{Name: "mac_addresses", Label: "MAC??", Type: "text"},
+	},
+	"network-device": {
+		{Name: "serial", Label: "???", Type: "text"},
+		{Name: "vendor", Label: "??", Type: "text"},
+		{Name: "model", Label: "??", Type: "text"},
+		{Name: "software_version", Label: "????", Type: "text"},
+		{Name: "firmware", Label: "????", Type: "text"},
+		{Name: "management_ip", Label: "??IP", Type: "text"},
+		{Name: "snmp_community_ref", Label: "SNMP Community??", Type: "text"},
+	},
+}
+
+func applyModelFieldPresets(models []Model) []Model {
+	for index := range models {
+		if fields, ok := modelFieldPresets[models[index].Code]; ok && len(models[index].Fields) == 0 {
+			models[index].Fields = fields
+		}
+	}
+	return models
+}
+
+func ensureModelFieldPresets(ctx context.Context, db *sql.DB, models []Model) error {
+	for index := range models {
+		if len(models[index].Fields) == 0 {
+			if fields, ok := modelFieldPresets[models[index].Code]; ok {
+				models[index].Fields = fields
+				if err := upsertModel(ctx, db, models[index]); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeAttributes(input []Attribute, fields []ModelField) []Attribute {
+	labelBy := make(map[string]string, len(fields))
+	for _, f := range fields {
+		labelBy[f.Name] = f.Label
+	}
+	out := make([]Attribute, 0, len(input))
+	seen := make(map[string]bool, len(input))
+	for _, a := range input {
+		name := strings.TrimSpace(a.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if strings.TrimSpace(a.Label) == "" {
+			a.Label = labelBy[name]
+		}
+		if a.Label == "" {
+			a.Label = name
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func modelFieldsFor(models []Model, code string) []ModelField {
+	for _, m := range models {
+		if m.Code == code {
+			return m.Fields
+		}
+	}
+	return nil
+}
+
+func attributeDiff(before, after []Attribute) []Change {
+	bm := make(map[string]string)
+	am := make(map[string]string)
+	labels := make(map[string]string)
+	for _, a := range before {
+		bm[a.Name] = a.Value
+		labels[a.Name] = a.Label
+	}
+	for _, a := range after {
+		am[a.Name] = a.Value
+		if a.Label != "" {
+			labels[a.Name] = a.Label
+		}
+	}
+	var changes []Change
+	for name, bv := range bm {
+		av, ok := am[name]
+		if !ok || av != bv {
+			changes = append(changes, Change{Field: labels[name], Before: bv, After: av})
+		}
+	}
+	for name, av := range am {
+		if _, ok := bm[name]; !ok {
+			changes = append(changes, Change{Field: labels[name], Before: "", After: av})
+		}
+	}
+	return changes
 }
 
 func asset(id, name, typ, typeName, status, ip, env, group, owner, location, source string, tags []string) Asset {
@@ -275,6 +396,17 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 		return Asset{}, ErrValidation
 	}
 	attrs := []Attribute{{Name: "os", Label: "操作系统", Value: in.OS}, {Name: "kernel", Label: "内核", Value: in.Kernel}, {Name: "architecture", Label: "架构", Value: in.Architecture}, {Name: "cpu", Label: "CPU核心", Value: fmt.Sprint(in.CPUCount)}, {Name: "memory_bytes", Label: "内存字节", Value: fmt.Sprint(in.MemoryBytes)}, {Name: "disk_bytes", Label: "磁盘字节", Value: fmt.Sprint(in.DiskBytes)}, {Name: "boot_time", Label: "启动时间", Value: in.BootTime}, {Name: "agent_version", Label: "Agent版本", Value: in.AgentVersion}}
+	assetType := strings.TrimSpace(in.Type)
+	if assetType == "" {
+		assetType = "physical-server"
+	}
+	typeName := assetType
+	for _, m := range s.models {
+		if m.Code == assetType && m.Enabled {
+			typeName = m.Name
+			break
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().Format("2006-01-02 15:04:05")
@@ -296,7 +428,7 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 			return cloneAsset(s.assets[i]), nil
 		}
 	}
-	asset := Asset{ID: in.ID, Name: in.Hostname, Type: "physical-server", TypeName: "物理服务器", Status: "online", IP: in.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: "linux-agent", LastSeenAt: now, Tags: []string{"Linux", "Agent"}, Attributes: attrs, Relations: []Relation{}}
+	asset := Asset{ID: in.ID, Name: in.Hostname, Type: assetType, TypeName: typeName, Status: "online", IP: in.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: "linux-agent", LastSeenAt: now, Tags: []string{"Linux", "Agent"}, Attributes: attrs, Relations: []Relation{}}
 	if s.db != nil {
 		if err := insertAsset(context.Background(), s.db, asset); err != nil {
 			return Asset{}, err
@@ -349,7 +481,8 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 	if typeName == "" {
 		return Asset{}, fmt.Errorf("%w: unknown type", ErrValidation)
 	}
-	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: []Attribute{}, Relations: []Relation{}}
+	attrs := normalizeAttributes(input.Attributes, modelFieldsFor(s.models, input.Type))
+	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: attrs, Relations: []Relation{}}
 	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: input.ID, Action: "created", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05")}
 	if s.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -397,6 +530,9 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 		target.Owner = input.Owner
 		target.Location = input.Location
 		target.Tags = append([]string(nil), input.Tags...)
+		if input.Attributes != nil {
+			target.Attributes = normalizeAttributes(input.Attributes, modelFieldsFor(s.models, target.Type))
+		}
 		changes := diffAsset(before, *target)
 		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "updated", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: changes}
 		if s.db != nil {
@@ -408,9 +544,10 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 				return Asset{}, err
 			}
 			tags, _ := json.Marshal(target.Tags)
+			attrsJSON, _ := json.Marshal(target.Attributes)
 			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET name=$2,status=$3,ip=$4,environment=$5,
-				project_group=$6,owner=$7,location=$8,tags=$9,updated_at=now() WHERE id=$1`,
-				id, target.Name, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags)
+				project_group=$6,owner=$7,location=$8,tags=$9,attributes=$10,updated_at=now() WHERE id=$1`,
+				id, target.Name, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags, attrsJSON)
 			if err == nil {
 				err = insertHistory(ctx, tx, entry)
 			}
@@ -468,12 +605,13 @@ func validateCreate(input CreateAssetInput) error {
 }
 func diffAsset(a, b Asset) []Change {
 	pairs := [][3]string{{"name", a.Name, b.Name}, {"status", a.Status, b.Status}, {"ip", a.IP, b.IP}, {"projectGroup", a.ProjectGroup, b.ProjectGroup}, {"owner", a.Owner, b.Owner}, {"location", a.Location, b.Location}, {"tags", strings.Join(a.Tags, "|"), strings.Join(b.Tags, "|")}}
-	result := []Change{}
+	var result []Change
 	for _, p := range pairs {
 		if p[1] != p[2] {
 			result = append(result, Change{Field: p[0], Before: p[1], After: p[2]})
 		}
 	}
+	result = append(result, attributeDiff(a.Attributes, b.Attributes)...)
 	return result
 }
 func cloneAsset(a Asset) Asset {

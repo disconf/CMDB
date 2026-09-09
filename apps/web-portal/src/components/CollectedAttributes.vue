@@ -1,2 +1,2 @@
 <script setup lang="ts">import type{Attribute}from'@/features/cmdb/types';defineProps<{attributes:Attribute[]}>()</script>
-<template><Teleport to=".asset-drawer"><section v-if="attributes.length"><h3>Agent采集属性</h3><div class="collected-attributes"><article v-for="item in attributes" :key="item.name"><span>{{item.label}}</span><strong>{{item.value}}</strong></article></div></section></Teleport></template>
+<template><Teleport to=".asset-drawer"><section v-if="attributes.length"><h3>扩展属性（自定义字段）</h3><div class="collected-attributes"><article v-for="item in attributes" :key="item.name"><span>{{item.label}}</span><strong>{{item.value}}</strong></article></div></section></Teleport></template>

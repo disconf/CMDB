@@ -27,6 +27,7 @@ type ModelInput struct {
 }
 type AgentAssetInput struct {
 	ID           string
+	Type         string
 	Hostname     string
 	IP           string
 	OS           string
@@ -96,27 +97,29 @@ type Summary struct {
 	ProjectGroups int `json:"projectGroups"`
 }
 type CreateAssetInput struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Type         string   `json:"type"`
-	Status       string   `json:"status"`
-	IP           string   `json:"ip"`
-	Environment  string   `json:"environment"`
-	ProjectGroup string   `json:"projectGroup"`
-	Owner        string   `json:"owner"`
-	Location     string   `json:"location"`
-	Source       string   `json:"source"`
-	Tags         []string `json:"tags"`
+	ID           string      `json:"id"`
+	Name         string      `json:"name"`
+	Type         string      `json:"type"`
+	Status       string      `json:"status"`
+	IP           string      `json:"ip"`
+	Environment  string      `json:"environment"`
+	ProjectGroup string      `json:"projectGroup"`
+	Owner        string      `json:"owner"`
+	Location     string      `json:"location"`
+	Source       string      `json:"source"`
+	Tags         []string    `json:"tags"`
+	Attributes   []Attribute `json:"attributes"`
 }
 type UpdateAssetInput struct {
-	Name         string   `json:"name"`
-	Status       string   `json:"status"`
-	IP           string   `json:"ip"`
-	Environment  string   `json:"environment"`
-	ProjectGroup string   `json:"projectGroup"`
-	Owner        string   `json:"owner"`
-	Location     string   `json:"location"`
-	Tags         []string `json:"tags"`
+	Name         string      `json:"name"`
+	Status       string      `json:"status"`
+	IP           string      `json:"ip"`
+	Environment  string      `json:"environment"`
+	ProjectGroup string      `json:"projectGroup"`
+	Owner        string      `json:"owner"`
+	Location     string      `json:"location"`
+	Tags         []string    `json:"tags"`
+	Attributes   []Attribute `json:"attributes"`
 }
 type Change struct {
 	Field  string `json:"field"`

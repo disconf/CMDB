@@ -135,3 +135,60 @@ func TestImportAssetsReturnsRowErrorsWithoutDiscardingValidRows(t *testing.T) {
 		t.Fatalf("unexpected import result %+v", result)
 	}
 }
+
+func TestCreateUpdateAssetWithCustomAttributes(t *testing.T) {
+	s := NewService()
+	created, err := s.CreateAsset(CreateAssetInput{
+		ID: "p1-srv-001", Name: "p1-srv-001", Type: "physical-server", Status: "online", IP: "10.99.1.1",
+		Environment: "??", ProjectGroup: "?????", Owner: "??", Location: "?????? / A03-12", Source: "manual",
+		Attributes: []Attribute{{Name: "bmc_ip", Value: "10.99.1.9"}, {Name: "rack_no", Value: "A03"}},
+	}, "tester")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(created.Attributes) != 2 {
+		t.Fatalf("expected 2 attributes, got %d", len(created.Attributes))
+	}
+	labelBy := map[string]string{}
+	for _, a := range created.Attributes {
+		labelBy[a.Name] = a.Label
+	}
+	if labelBy["bmc_ip"] != "????IP(BMC)" {
+		t.Fatalf("bmc_ip label not resolved from preset: %q", labelBy["bmc_ip"])
+	}
+	if labelBy["rack_no"] != "???" {
+		t.Fatalf("rack_no label not resolved from preset: %q", labelBy["rack_no"])
+	}
+	updated, err := s.UpdateAsset("p1-srv-001", UpdateAssetInput{
+		Name: "p1-srv-001", Status: "online", IP: "10.99.1.1", Environment: "??",
+		ProjectGroup: "?????", Owner: "??", Location: "?????? / A03-12",
+		Attributes: []Attribute{{Name: "bmc_ip", Value: "10.99.1.10"}, {Name: "rack_no", Value: "A03"}},
+	}, "tester")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	found := ""
+	for _, a := range updated.Attributes {
+		if a.Name == "bmc_ip" {
+			found = a.Value
+		}
+	}
+	if found != "10.99.1.10" {
+		t.Fatalf("bmc_ip not updated: %q", found)
+	}
+	history, err := s.History("p1-srv-001")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	changed := false
+	for _, h := range history {
+		for _, c := range h.Changes {
+			if c.Field == "????IP(BMC)" && c.Before == "10.99.1.9" && c.After == "10.99.1.10" {
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		t.Fatalf("expected attribute change in history, history=%+v", history)
+	}
+}
