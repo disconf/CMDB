@@ -35,3 +35,12 @@ type CreateRack struct {
 	UTotal   int    `json:"uTotal"`
 	Voltage  string `json:"voltage"`
 }
+
+type UpdateRack struct {
+	Name    string `json:"name"`
+	UTotal  int    `json:"uTotal"`
+	Voltage string `json:"voltage"`
+}
+type UpdateModule struct {
+	Name string `json:"name"`
+}

@@ -141,6 +141,50 @@ func (s *Service) rackOccupied(rackID string) (bool, error) {
 	return len(list) > 0, nil
 }
 
+func (s *Service) UpdateRack(id string, in UpdateRack) (Rack, error) {
+	if s.db == nil {
+		return Rack{}, ErrNoDB
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		return Rack{}, errors.New("idc: name required")
+	}
+	u := in.UTotal
+	if u <= 0 {
+		u = 42
+	}
+	v := in.Voltage
+	if v == "" {
+		v = "220V"
+	}
+	res, err := s.db.Exec(`UPDATE idc_racks SET name=$2,u_total=$3,voltage=$4 WHERE id=$1`, id, in.Name, u, v)
+	if err != nil {
+		return Rack{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Rack{}, ErrNotFound
+	}
+	return Rack{ID: id, Name: in.Name, UTotal: u, Voltage: v}, nil
+}
+
+func (s *Service) UpdateModule(id string, in UpdateModule) (Module, error) {
+	if s.db == nil {
+		return Module{}, ErrNoDB
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		return Module{}, errors.New("idc: name required")
+	}
+	res, err := s.db.Exec(`UPDATE idc_modules SET name=$2 WHERE id=$1`, id, in.Name)
+	if err != nil {
+		return Module{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Module{}, ErrNotFound
+	}
+	return Module{ID: id, Name: in.Name}, nil
+}
+
 func (s *Service) DeleteRack(id string) error {
 	if s.db == nil {
 		return ErrNoDB

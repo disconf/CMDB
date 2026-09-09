@@ -371,6 +371,38 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, result)
 	})
+	mux.HandleFunc("PATCH /api/v1/idc/racks/{rackId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in idc.UpdateRack
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		rack, err := idcService.UpdateRack(r.PathValue("rackId"), in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UPDATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, rack)
+	})
+	mux.HandleFunc("PATCH /api/v1/idc/modules/{moduleId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in idc.UpdateModule
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		mod, err := idcService.UpdateModule(r.PathValue("moduleId"), in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UPDATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, mod)
+	})
 	mux.HandleFunc("DELETE /api/v1/idc/racks/{rackId}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return
