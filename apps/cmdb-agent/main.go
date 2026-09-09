@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 type report struct {
 	AgentID      string `json:"agentId"`

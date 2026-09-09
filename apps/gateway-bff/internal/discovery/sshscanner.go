@@ -164,6 +164,14 @@ func (s *Service) AgentBatchUninstall(hosts []string, port int) ([]AgentInstallR
 	return results, nil
 }
 
+func AgentBundleVersion() string {
+	v := os.Getenv("CMDB_AGENT_VERSION")
+	if v == "" {
+		return "0.1.1"
+	}
+	return v
+}
+
 func runSSHInventory(ip string, port int, username, password string, timeout time.Duration) *NodeExporterHost {
 	if username == "" || password == "" {
 		return nil

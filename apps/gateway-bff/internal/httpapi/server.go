@@ -302,6 +302,9 @@ func NewServer() *Server {
 		upsert := r.URL.Query().Get("mode") == "upsert"
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, upsert, user.Username))
 	})
+	mux.HandleFunc("GET /api/v1/agent/install/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"version": discovery.AgentBundleVersion()})
+	})
 	mux.HandleFunc("GET /api/v1/agent/install/linux-amd64", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
