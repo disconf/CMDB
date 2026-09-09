@@ -1002,7 +1002,18 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, discoveryService.Agents())
+		writeJSON(w, http.StatusOK, discoveryService.AgentList(r.URL.Query().Get("q"), r.URL.Query().Get("status")))
+	})
+	mux.HandleFunc("GET /api/v1/discovery/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		agent, ok := discoveryService.AgentDetail(r.PathValue("id"))
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		writeJSON(w, http.StatusOK, agent)
 	})
 	mux.HandleFunc("GET /api/v1/discovery/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {

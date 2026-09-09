@@ -215,9 +215,38 @@ func (s *Service) Heartbeat(id, version string) error {
 	return ErrNotFound
 }
 func (s *Service) Agents() []Agent {
+	return s.AgentList("", "")
+}
+
+func (s *Service) AgentList(query, status string) []Agent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Agent(nil), s.agents...)
+	out := []Agent{}
+	for _, a := range s.agents {
+		if status != "" && a.Status != status {
+			continue
+		}
+		if query != "" {
+			needle := strings.ToLower(query)
+			hay := strings.ToLower(a.Name + " " + a.Hostname + " " + a.IP + " " + a.OS)
+			if !strings.Contains(hay, needle) {
+				continue
+			}
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func (s *Service) AgentDetail(id string) (Agent, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.agents {
+		if a.ID == id {
+			return a, true
+		}
+	}
+	return Agent{}, false
 }
 func (s *Service) Tasks() []Task {
 	s.mu.RLock()
