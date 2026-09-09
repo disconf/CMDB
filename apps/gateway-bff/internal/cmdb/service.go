@@ -486,6 +486,31 @@ func (s *Service) GetAsset(id string) (Asset, error) {
 	}
 	return Asset{}, ErrNotFound
 }
+func (s *Service) recordStatusEvent(asset Asset, action, operator string) error {
+	now := time.Now().Format("2006-01-02 15:04:05")
+	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: asset.ID, Action: action, Operator: operator, OccurredAt: now}
+	if s.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if err = insertHistory(ctx, tx, entry); err == nil {
+			err = insertAssetEvents(ctx, tx, asset, entry)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+	}
+	s.history[asset.ID] = append(s.history[asset.ID], entry)
+	return nil
+}
+
 func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 	if in.ID == "" || in.Hostname == "" {
 		return Asset{}, ErrValidation
@@ -507,6 +532,7 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	for i := range s.assets {
 		if s.assets[i].ID == in.ID {
+			beforeStatus := s.assets[i].Status
 			s.assets[i].Name = in.Hostname
 			s.assets[i].IP = in.IP
 			s.assets[i].Status = "online"
@@ -515,8 +541,12 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 			s.assets[i].Attributes = attrs
 			if s.db != nil {
 				payload, _ := json.Marshal(attrs)
-				_, err := s.db.Exec(`UPDATE cmdb_assets SET name=$2,ip=$3,status='online',source='linux-agent',last_seen_at=now(),attributes=$4,updated_at=now() WHERE id=$1`, in.ID, in.Hostname, in.IP, payload)
-				if err != nil {
+				if _, err := s.db.Exec(`UPDATE cmdb_assets SET name=$2,ip=$3,status='online',source='linux-agent',last_seen_at=now(),attributes=$4,updated_at=now() WHERE id=$1`, in.ID, in.Hostname, in.IP, payload); err != nil {
+					return Asset{}, err
+				}
+			}
+			if beforeStatus != "online" {
+				if err := s.recordStatusEvent(s.assets[i], "online", "agent"); err != nil {
 					return Asset{}, err
 				}
 			}
@@ -535,19 +565,33 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 			s.models[i].Count++
 		}
 	}
+	if err := s.recordStatusEvent(asset, "agent-registered", "agent"); err != nil {
+		s.assets = s.assets[:len(s.assets)-1]
+		for i := range s.models {
+			if s.models[i].Code == asset.Type {
+				s.models[i].Count--
+			}
+		}
+		return Asset{}, err
+	}
 	return cloneAsset(asset), nil
 }
+
 func (s *Service) MarkAgentAssetOffline(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.assets {
 		if s.assets[i].ID == id && s.assets[i].Source == "linux-agent" {
+			if s.assets[i].Status == "offline" {
+				return nil
+			}
 			s.assets[i].Status = "offline"
 			if s.db != nil {
-				_, err := s.db.Exec(`UPDATE cmdb_assets SET status='offline',updated_at=now() WHERE id=$1`, id)
-				return err
+				if _, err := s.db.Exec(`UPDATE cmdb_assets SET status='offline',updated_at=now() WHERE id=$1`, id); err != nil {
+					return err
+				}
 			}
-			return nil
+			return s.recordStatusEvent(s.assets[i], "offline", "agent-health")
 		}
 	}
 	return ErrNotFound

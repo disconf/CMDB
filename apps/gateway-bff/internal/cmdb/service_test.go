@@ -192,3 +192,33 @@ func TestCreateUpdateAssetWithCustomAttributes(t *testing.T) {
 		t.Fatalf("expected attribute change in history, history=%+v", history)
 	}
 }
+
+func TestAgentLifecycleRecordsEvents(t *testing.T) {
+	s := NewService()
+	in := AgentAssetInput{ID: "host-lifecycle-01", Type: "virtual-machine", Hostname: "lifecycle-01", IP: "10.77.1.1", OS: "linux"}
+	if _, err := s.UpsertAgentAsset(in); err != nil {
+		t.Fatalf("upsert1: %v", err)
+	}
+	if err := s.MarkAgentAssetOffline("host-lifecycle-01"); err != nil {
+		t.Fatalf("offline: %v", err)
+	}
+	if _, err := s.UpsertAgentAsset(in); err != nil {
+		t.Fatalf("upsert2: %v", err)
+	}
+	history, err := s.History("host-lifecycle-01")
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	actions := map[string]bool{}
+	for _, h := range history {
+		actions[h.Action] = true
+	}
+	for _, expected := range []string{"agent-registered", "offline", "online"} {
+		if !actions[expected] {
+			t.Fatalf("missing action %s in %+v", expected, actions)
+		}
+	}
+	if asset, _ := s.GetAsset("host-lifecycle-01"); asset.Status != "online" {
+		t.Fatalf("expected online after re-register, got %s", asset.Status)
+	}
+}
