@@ -91,29 +91,29 @@ func NewService() *Service {
 
 var modelFieldPresets = map[string][]ModelField{
 	"physical-server": {
-		{Name: "serial", Label: "???", Type: "text"},
-		{Name: "vendor", Label: "??", Type: "text"},
-		{Name: "model", Label: "??", Type: "text"},
-		{Name: "bmc_ip", Label: "????IP(BMC)", Type: "text"},
-		{Name: "idc_name", Label: "????", Type: "text"},
-		{Name: "module_name", Label: "??/??", Type: "text"},
-		{Name: "rack_no", Label: "???", Type: "text"},
-		{Name: "u_position", Label: "U?", Type: "text"},
-		{Name: "os_name", Label: "????", Type: "text"},
-		{Name: "kernel", Label: "????", Type: "text"},
+		{Name: "serial", Label: "序列号", Type: "text"},
+		{Name: "vendor", Label: "厂商", Type: "text"},
+		{Name: "model", Label: "型号", Type: "text"},
+		{Name: "bmc_ip", Label: "带外管理IP(BMC)", Type: "text"},
+		{Name: "idc_name", Label: "机房名称", Type: "text"},
+		{Name: "module_name", Label: "模块/区域", Type: "text"},
+		{Name: "rack_no", Label: "机柜号", Type: "text"},
+		{Name: "u_position", Label: "U位", Type: "text"},
+		{Name: "os_name", Label: "操作系统", Type: "text"},
+		{Name: "kernel", Label: "内核版本", Type: "text"},
 		{Name: "cpu", Label: "CPU", Type: "text"},
-		{Name: "memory", Label: "??", Type: "text"},
-		{Name: "disk", Label: "??", Type: "text"},
-		{Name: "mac_addresses", Label: "MAC??", Type: "text"},
+		{Name: "memory", Label: "内存", Type: "text"},
+		{Name: "disk", Label: "磁盘", Type: "text"},
+		{Name: "mac_addresses", Label: "MAC地址", Type: "text"},
 	},
 	"network-device": {
-		{Name: "serial", Label: "???", Type: "text"},
-		{Name: "vendor", Label: "??", Type: "text"},
-		{Name: "model", Label: "??", Type: "text"},
-		{Name: "software_version", Label: "????", Type: "text"},
-		{Name: "firmware", Label: "????", Type: "text"},
-		{Name: "management_ip", Label: "??IP", Type: "text"},
-		{Name: "snmp_community_ref", Label: "SNMP Community??", Type: "text"},
+		{Name: "serial", Label: "序列号", Type: "text"},
+		{Name: "vendor", Label: "厂商", Type: "text"},
+		{Name: "model", Label: "型号", Type: "text"},
+		{Name: "software_version", Label: "软件版本", Type: "text"},
+		{Name: "firmware", Label: "固件版本", Type: "text"},
+		{Name: "management_ip", Label: "管理IP", Type: "text"},
+		{Name: "snmp_community_ref", Label: "SNMP Community引用", Type: "text"},
 	},
 }
 
@@ -727,7 +727,10 @@ func (s *Service) History(id string) ([]HistoryEntry, error) {
 		return nil, ErrNotFound
 	}
 	entries := s.history[id]
-	return append([]HistoryEntry(nil), entries...), nil
+	if len(entries) == 0 {
+		return []HistoryEntry{}, nil
+	}
+	return append([]HistoryEntry{}, entries...), nil
 }
 func hostAssetType(assetType string) bool {
 	return assetType == "physical-server" || assetType == "virtual-machine" || assetType == "k8s-node"
@@ -898,8 +901,8 @@ func diffAsset(a, b Asset) []Change {
 	return result
 }
 func cloneAsset(a Asset) Asset {
-	a.Tags = append([]string(nil), a.Tags...)
-	a.Attributes = append([]Attribute(nil), a.Attributes...)
-	a.Relations = append([]Relation(nil), a.Relations...)
+	a.Tags = append([]string{}, a.Tags...)
+	a.Attributes = append([]Attribute{}, a.Attributes...)
+	a.Relations = append([]Relation{}, a.Relations...)
 	return a
 }

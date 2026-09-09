@@ -76,6 +76,9 @@ func loadModels(ctx context.Context, db *sql.DB) ([]Model, error) {
 			return nil, err
 		}
 		_ = json.Unmarshal(fields, &m.Fields)
+		if m.Fields == nil {
+			m.Fields = []ModelField{}
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()

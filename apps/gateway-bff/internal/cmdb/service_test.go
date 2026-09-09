@@ -141,7 +141,7 @@ func TestCreateUpdateAssetWithCustomAttributes(t *testing.T) {
 	s := NewService()
 	created, err := s.CreateAsset(CreateAssetInput{
 		ID: "p1-srv-001", Name: "p1-srv-001", Type: "physical-server", Status: "online", IP: "10.99.1.1",
-		Environment: "??", ProjectGroup: "?????", Owner: "??", Location: "?????? / A03-12", Source: "manual",
+		Environment: "生产", ProjectGroup: "核心系统组", Owner: "张三", Location: "上海一号机房 / A03-12", Source: "manual",
 		Attributes: []Attribute{{Name: "bmc_ip", Value: "10.99.1.9"}, {Name: "rack_no", Value: "A03"}},
 	}, "tester")
 	if err != nil {
@@ -154,15 +154,15 @@ func TestCreateUpdateAssetWithCustomAttributes(t *testing.T) {
 	for _, a := range created.Attributes {
 		labelBy[a.Name] = a.Label
 	}
-	if labelBy["bmc_ip"] != "????IP(BMC)" {
+	if labelBy["bmc_ip"] != "带外管理IP(BMC)" {
 		t.Fatalf("bmc_ip label not resolved from preset: %q", labelBy["bmc_ip"])
 	}
-	if labelBy["rack_no"] != "???" {
+	if labelBy["rack_no"] != "机柜号" {
 		t.Fatalf("rack_no label not resolved from preset: %q", labelBy["rack_no"])
 	}
 	updated, err := s.UpdateAsset("p1-srv-001", UpdateAssetInput{
-		Name: "p1-srv-001", Status: "online", IP: "10.99.1.1", Environment: "??",
-		ProjectGroup: "?????", Owner: "??", Location: "?????? / A03-12",
+		Name: "p1-srv-001", Status: "online", IP: "10.99.1.1", Environment: "生产",
+		ProjectGroup: "核心系统组", Owner: "张三", Location: "上海一号机房 / A03-12",
 		Attributes: []Attribute{{Name: "bmc_ip", Value: "10.99.1.10"}, {Name: "rack_no", Value: "A03"}},
 	}, "tester")
 	if err != nil {
@@ -184,7 +184,7 @@ func TestCreateUpdateAssetWithCustomAttributes(t *testing.T) {
 	changed := false
 	for _, h := range history {
 		for _, c := range h.Changes {
-			if c.Field == "????IP(BMC)" && c.Before == "10.99.1.9" && c.After == "10.99.1.10" {
+			if c.Field == "带外管理IP(BMC)" && c.Before == "10.99.1.9" && c.After == "10.99.1.10" {
 				changed = true
 			}
 		}

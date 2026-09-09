@@ -12,10 +12,25 @@ const upsert = ref(true)
 const text = ref('id,name,type,status,ip,environment,projectGroup,owner,location,tags,bmc_ip,rack_no,u_position,serial\np1-srv-101,p1-web-101,physical-server,online,10.99.1.101,生产,核心系统组,张三,上海一号机房 / A03-12,测试|Linux,10.99.1.9,A03,12U,SN123456')
 const templateCode = ref(props.models?.[0]?.code ?? 'physical-server')
 const loadingTemplate = ref(false)
-async function loadTemplate() {
+async function downloadTemplate() {
   if (!templateCode.value) return
   loadingTemplate.value = true
-  try { const header = await fetchModelTemplate(auth.token, templateCode.value); text.value = header + '\n' } finally { loadingTemplate.value = false }
+  try {
+    const header = await fetchModelTemplate(auth.token, templateCode.value)
+    const blob = new Blob([header + '\n'], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = templateCode.value + '-template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  } finally { loadingTemplate.value = false }
+}
+function onFileChange(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  file.text().then((t) => { text.value = t })
+  ;(event.target as HTMLInputElement).value = ''
 }
 function submit() { emit('import', parseAssetCsv(text.value), upsert.value) }
 </script>
@@ -29,7 +44,8 @@ function submit() { emit('import', parseAssetCsv(text.value), upsert.value) }
       <div class="import-tip"><UploadCloud /><p>首行 = 标准字段 + 自定义字段（如 bmc_ip / rack_no / u_position / serial）。标签用 <code>|</code> 分隔；勾选“按编号/IP 更新”则重复资产直接更新。</p></div>
       <div class="import-controls">
         <label><span>模板模型</span><select v-model="templateCode"><option v-for="m in props.models ?? []" :key="m.code" :value="m.code">{{ m.name }}</option></select></label>
-        <button type="button" :disabled="loadingTemplate" @click="loadTemplate"><Download /> 载入该模型模板</button>
+        <button type="button" :disabled="loadingTemplate" @click="downloadTemplate"><Download /> 下载该模型CSV模板</button>
+        <label class="file"><span>或直接选择 CSV 上传</span><input type="file" accept=".csv,text/csv" @change="onFileChange"></label>
         <label class="upsert"><input v-model="upsert" type="checkbox"> 重复时按 编号/IP 更新（upsert）</label>
       </div>
       <textarea v-model="text" rows="10"></textarea>
