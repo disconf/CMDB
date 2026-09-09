@@ -298,6 +298,24 @@ func NewServer() *Server {
 		upsert := r.URL.Query().Get("mode") == "upsert"
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, upsert, user.Username))
 	})
+	mux.HandleFunc("GET /api/v1/agent/install/linux-amd64", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		path := os.Getenv("CMDB_AGENT_BUNDLE_FILE")
+		if path == "" {
+			path = "/cmdb-agent"
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "AGENT_BUNDLE_MISSING"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=cmdb-agent")
+		_, _ = w.Write(data)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/agent-install", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
