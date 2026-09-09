@@ -93,7 +93,7 @@ func NewService() *Service {
 	return NewServiceWithCMDB(nil)
 }
 func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
-	s := &Service{cmdb: cmdbService, agents: []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}, tasks: []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}}
+	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}}
 	s.agentToken = os.Getenv("AGENT_SHARED_TOKEN")
 	s.agentSeen = map[string]time.Time{}
 	s.offlineAfter = 3 * time.Minute
@@ -109,6 +109,10 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		}
 		s.db = db
 		s.tasks = tasks
+	}
+	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}
+	if s.db == nil {
+		s.agents = demoAgents
 	}
 	return s
 }
