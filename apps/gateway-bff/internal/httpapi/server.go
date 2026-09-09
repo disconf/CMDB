@@ -239,6 +239,10 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusConflict, map[string]string{"code": "ASSET_CONFLICT", "message": "资产编号已存在"})
 			return
 		}
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
+			return
+		}
 		w.Header().Set("Location", "/api/v1/cmdb/assets/"+created.ID)
 		writeJSON(w, http.StatusCreated, created)
 	})
