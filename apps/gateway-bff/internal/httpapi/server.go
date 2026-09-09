@@ -357,6 +357,23 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
+	mux.HandleFunc("POST /api/v1/discovery/scan-snmp", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		var in discovery.SNMPScanInput
+		if err := decodeJSON(r, &in); err != nil || len(in.CIDRs) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_SCAN_INPUT"})
+			return
+		}
+		res, err := discoveryService.ScanSNMP(r.Context(), in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "SCAN_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-ssh", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
