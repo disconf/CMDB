@@ -71,12 +71,13 @@ type IngestResult struct {
 	Conflicts int    `json:"conflicts"`
 }
 type DiscoveredItem struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	IP         string `json:"ip"`
-	Type       string `json:"type"`
-	Confidence int    `json:"confidence"`
-	State      string `json:"state"`
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	IP         string           `json:"ip"`
+	Type       string           `json:"type"`
+	Confidence int              `json:"confidence"`
+	State      string           `json:"state"`
+	Attributes []cmdb.Attribute `json:"attributes"`
 }
 type AgentReport struct {
 	AgentID  string `json:"agentId"`
@@ -251,7 +252,7 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 		if src == "" {
 			src = "discovery"
 		}
-		_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "???", ProjectGroup: "????", Owner: "???", Source: src, Tags: []string{src}}, "discovery-reconcile")
+		_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: src, Tags: []string{src}, Attributes: item.Attributes}, "discovery-reconcile")
 		if err != nil {
 			if errors.Is(err, cmdb.ErrConflict) {
 				return "conflict", nil
@@ -381,7 +382,7 @@ func (s *Service) Reconcile(id string) (Task, error) {
 				}
 				if s.cmdb != nil {
 					item := s.tasks[i].Items[j]
-					_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: "discovery", Tags: []string{"自动发现"}}, "discovery-reconcile")
+					_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: "discovery", Tags: []string{"自动发现"}, Attributes: item.Attributes}, "discovery-reconcile")
 					if err != nil && !errors.Is(err, cmdb.ErrConflict) {
 						return Task{}, err
 					}
@@ -400,5 +401,5 @@ func (s *Service) Reconcile(id string) (Task, error) {
 	return Task{}, ErrNotFound
 }
 func sampleItems() []DiscoveredItem {
-	return []DiscoveredItem{{"found-01", "new-app-node-01", "10.20.8.31", "physical-server", 96, "pending"}, {"found-02", "new-app-node-02", "10.20.8.32", "physical-server", 94, "pending"}, {"found-03", "prod-k8s-worker-03", "10.22.1.23", "k8s-node", 99, "pending"}}
+	return []DiscoveredItem{{"found-01", "new-app-node-01", "10.20.8.31", "physical-server", 96, "pending", nil}, {"found-02", "new-app-node-02", "10.20.8.32", "physical-server", 94, "pending", nil}, {"found-03", "prod-k8s-worker-03", "10.22.1.23", "k8s-node", 99, "pending", nil}}
 }
