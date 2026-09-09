@@ -11,3 +11,7 @@ export interface HistoryEntry { id:string;assetId:string;action:string;operator:
 export interface ImportResult { total:number;created:number;updated:number;errors:Array<{row:number;id:string;message:string}> }
 
 export interface Analytics { status:{total:number;online:number;warning:number;offline:number}; byType:Array<{code:string;name:string;count:number}>; byGroup:Array<{group:string;count:number}>; bySource:Array<{source:string;count:number}>; completeness:Array<{field:string;label:string;missing:number;total:number;rate:number}> }
+
+export interface IdcRack { id:string;moduleId:string;name:string;uTotal:number;voltage:string }
+export interface IdcModule { id:string;roomId:string;name:string;racks:IdcRack[] }
+export interface IdcRoom { id:string;name:string;location:string;modules:IdcModule[] }

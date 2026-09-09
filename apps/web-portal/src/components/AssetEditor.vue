@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { Plus, Trash2, X } from 'lucide-vue-next'
-import type { Asset, AssetInput, Attribute, CiModel, Relation } from '@/features/cmdb/types'
+import type { Asset, AssetInput, Attribute, CiModel, IdcRoom, Relation } from '@/features/cmdb/types'
 import { validateAssetForm } from '@/features/cmdb/assetForm'
 
-const props = defineProps<{ asset?: Asset; models: CiModel[] }>()
+const props = defineProps<{ asset?: Asset; models: CiModel[]; idcRooms?: IdcRoom[] }>()
 const emit = defineEmits<{ close: []; save: [value: AssetInput] }>()
 const errors = ref<string[]>([])
 const isEdit = computed(() => Boolean(props.asset))
@@ -44,6 +44,24 @@ function prefillFromModel() {
 if (!isEdit.value) prefillFromModel()
 watch(() => form.type, () => { if (!isEdit.value) prefillFromModel() })
 
+const idcRoomId = ref('')
+const idcModuleId = ref('')
+const idcRackId = ref('')
+const idcU = ref('')
+const idcModules = computed(() => props.idcRooms?.find((x) => x.id === idcRoomId.value)?.modules ?? [])
+const selectedModule = computed(() => idcModules.value.find((m) => m.id === idcModuleId.value))
+const idcRacks = computed(() => selectedModule.value?.racks ?? [])
+const selectedRack = computed(() => idcRacks.value.find((r) => r.id === idcRackId.value))
+const uOptions = computed(() => { const u = selectedRack.value?.uTotal ?? 0; return Array.from({ length: u }, (_, i) => String(i + 1)) })
+function setAttr(name: string, label: string, value: string) {
+  const found = attrs.value.find((a) => a.name === name)
+  if (found) { found.value = value; if (!found.label) found.label = label }
+  else if (value) attrs.value.push({ name, label, value })
+}
+watch(idcRoomId, (v) => { if (v) { const room = props.idcRooms?.find((x) => x.id === v); if (room) { setAttr('idc_name', '机房名称', room.name) } } })
+watch(idcModuleId, (v) => { if (v) { const m = idcModules.value.find((x) => x.id === v); if (m) setAttr('module_name', '模块/区域', m.name) } })
+watch(idcRackId, (v) => { if (v) { const r = selectedRack.value; if (r) { setAttr('rack_no', '机柜号', r.name); if (r.voltage) setAttr('voltage', '电压', r.voltage) } } })
+watch(idcU, (v) => { if (v) setAttr('u_position', 'U位', v) })
 function addAttr() { attrs.value.push({ name: '', label: '', value: '' }) }
 function removeAttr(index: number) { attrs.value.splice(index, 1) }
 
@@ -77,6 +95,15 @@ function submit() {
         <label class="wide"><span>位置</span><input v-model="form.location"></label>
         <label class="wide"><span>标签（使用 | 分隔）</span><input v-model="tagsText"></label>
       </div>
+      <section v-if="form.type === 'physical-server' && props.idcRooms?.length" class="attr-editor idc-picker">
+        <header><h3>机房定位（可选）</h3></header>
+        <div class="idc-grid">
+          <label><span>机房</span><select v-model="idcRoomId"><option value="">请选择</option><option v-for="room in props.idcRooms ?? []" :key="room.id" :value="room.id">{{ room.name }}（{{ room.location }}）</option></select></label>
+          <label><span>模块</span><select v-model="idcModuleId" :disabled="!idcModules.length"><option value="">请选择</option><option v-for="m in idcModules" :key="m.id" :value="m.id">{{ m.name }}</option></select></label>
+          <label><span>机柜</span><select v-model="idcRackId" :disabled="!idcRacks.length"><option value="">请选择</option><option v-for="r in idcRacks" :key="r.id" :value="r.id">{{ r.name }}（{{ r.uTotal }}U / {{ r.voltage }}）</option></select></label>
+          <label><span>U位</span><select v-model="idcU" :disabled="!uOptions.length"><option value="">请选择</option><option v-for="u in uOptions" :key="u" :value="u">{{ u }}U</option></select></label>
+        </div>
+      </section>
       <section class="attr-editor">
         <header>
           <h3>扩展属性 / 自定义字段</h3>
@@ -121,5 +148,7 @@ function submit() {
 .attr-remove { background: none; border: none; cursor: pointer; color: var(--danger, #f56c6c); }
 .attr-empty { font-size: 12px; opacity: .5; }
 .rel-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
+.idc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.idc-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .rel-row input, .rel-row select { width: 100%; box-sizing: border-box; }
 </style>

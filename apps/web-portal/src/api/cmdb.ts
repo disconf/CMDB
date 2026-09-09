@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,ImportResult } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -12,6 +12,11 @@ export const fetchHistory=(token:string,id:string)=>get<HistoryEntry[]>(`/api/v1
 export const importAssets=(token:string,rows:AssetInput[],upsert=false)=>send<ImportResult>(`/api/v1/cmdb/imports?mode=${upsert?'upsert':'create'}`,token,'POST',rows)
 export const fetchAnalytics=(token:string)=>get<Analytics>('/api/v1/cmdb/analytics',token)
 export const fetchModelTemplate=(token:string,code:string)=>fetch(`/api/v1/cmdb/models/${encodeURIComponent(code)}/template`,{headers:{Authorization:`Bearer ${token}`}}).then(async(r)=>{if(!r.ok)throw new Error('模板获取失败');return r.text()})
+export const fetchIdcRooms=(token:string)=>get<IdcRoom[]>('/api/v1/idc/rooms',token)
+export const createIdcRoom=(token:string,name:string,location:string)=>send<IdcRoom>('/api/v1/idc/rooms',token,'POST',{name,location})
+export const addIdcModule=(token:string,roomId:string,name:string)=>send<{id:string;roomId:string;name:string;racks:never[]}>(`/api/v1/idc/rooms/${encodeURIComponent(roomId)}/modules`,token,'POST',{name})
+export const addIdcRack=(token:string,moduleId:string,payload:{name:string;uTotal:number;voltage:string})=>send<{id:string;moduleId:string;name:string;uTotal:number;voltage:string}>(`/api/v1/idc/racks`,token,'POST',{moduleId,...payload})
+
 export const createModel=(token:string,input:Omit<CiModel,'count'|'enabled'>)=>send<CiModel>('/api/v1/cmdb/models',token,'POST',input)
 export const updateModel=(token:string,code:string,input:Omit<CiModel,'count'|'enabled'>)=>send<CiModel>(`/api/v1/cmdb/models/${encodeURIComponent(code)}`,token,'PUT',input)
 export const toggleModel=(token:string,code:string)=>send<CiModel>(`/api/v1/cmdb/models/${encodeURIComponent(code)}/toggle`,token,'POST',{})

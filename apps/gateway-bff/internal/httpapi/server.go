@@ -16,6 +16,7 @@ import (
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/dashboard"
 	"cmdb/gateway-bff/internal/discovery"
+	"cmdb/gateway-bff/internal/idc"
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/releases"
@@ -46,6 +47,7 @@ func NewServer() *Server {
 	releasesService := releases.NewService()
 	topologyService := topology.NewService()
 	authService := auth.NewService()
+	idcService := idc.NewService()
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -346,6 +348,66 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	})
+	mux.HandleFunc("GET /api/v1/idc/rooms", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		rooms, err := idcService.ListRooms()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "IDC_ERROR", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, rooms)
+	})
+	mux.HandleFunc("POST /api/v1/idc/rooms", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in idc.CreateRoom
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		room, err := idcService.CreateRoom(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, room)
+	})
+	mux.HandleFunc("POST /api/v1/idc/rooms/{roomId}/modules", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in idc.CreateModule
+		in.RoomID = r.PathValue("roomId")
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		module, err := idcService.AddModule(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, module)
+	})
+	mux.HandleFunc("POST /api/v1/idc/racks", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in idc.CreateRack
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		rack, err := idcService.AddRack(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, rack)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/ingest", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
