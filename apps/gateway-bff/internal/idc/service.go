@@ -99,11 +99,13 @@ func (s *Service) ListRooms() ([]Room, error) {
 				}
 			}
 			rackRows.Close()
-			occupied, err := s.occupiedU(ctx, rooms[i].Modules[j].Racks[len(rooms[i].Modules[j].Racks)-1].ID)
-			if err != nil {
-				return nil, err
+			if n := len(rooms[i].Modules[j].Racks); n > 0 {
+				occupied, err := s.occupiedU(ctx, rooms[i].Modules[j].Racks[n-1].ID)
+				if err != nil {
+					return nil, err
+				}
+				rooms[i].Modules[j].Racks[n-1].OccupiedU = occupied
 			}
-			rooms[i].Modules[j].Racks[len(rooms[i].Modules[j].Racks)-1].OccupiedU = occupied
 		}
 	}
 	return rooms, nil
