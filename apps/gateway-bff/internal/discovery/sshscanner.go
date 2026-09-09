@@ -32,14 +32,18 @@ type SSHScanResult struct {
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
-const sshInventoryCommand = `hostname; grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2; uname -r; uname -m; nproc; awk '/MemTotal/ {print $2}' /proc/meminfo; df -B1 --output=size / | tail -1; awk '/^btime / {print $2}' /proc/stat`
+const sshInventoryCommand = `hostname; grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2; uname -r; uname -m; nproc; awk '/MemTotal/ {print $2}' /proc/meminfo; df -B1 --output=size / | tail -1; awk '/^btime / {print $2}' /proc/stat; (systemd-detect-virt --vm 2>/dev/null || echo none)`
 
 func parseSSHInventory(ip string, output string) *NodeExporterHost {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) < 8 {
 		return nil
 	}
-	host := &NodeExporterHost{IP: ip}
+	virt := "none"
+	if len(lines) >= 9 {
+		virt = strings.TrimSpace(lines[8])
+	}
+	host := &NodeExporterHost{IP: ip, Virtual: virt != "" && virt != "none"}
 	host.Name = strings.TrimSpace(strings.Trim(lines[0], "\""))
 	host.OS = strings.TrimSpace(strings.Trim(lines[1], "\""))
 	host.Kernel = strings.TrimSpace(lines[2])

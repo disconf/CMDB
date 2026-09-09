@@ -51,13 +51,33 @@ func main() {
 		time.Sleep(interval)
 	}
 }
+func detectAssetType() string {
+	value := strings.ToLower(strings.TrimSpace(readFirst("/sys/class/dmi/id/product_name")))
+	if value == "" {
+		value = strings.ToLower(strings.TrimSpace(readFirst("/sys/class/dmi/id/sys_vendor")))
+	}
+	for _, token := range []string{"virtual", "vmware", "kvm", "qemu", "xen", "hyper-v", "virtualbox", "bochs", "parallels"} {
+		if strings.Contains(value, token) {
+			return "virtual-machine"
+		}
+	}
+	if _, err := os.Stat("/sys/hypervisor"); err == nil {
+		return "virtual-machine"
+	}
+	return "physical-server"
+}
+
 func collect() report {
 	hostname, _ := os.Hostname()
 	id := os.Getenv("CMDB_AGENT_ID")
 	if id == "" {
 		id = "host-" + strings.ToLower(strings.ReplaceAll(hostname, "_", "-"))
 	}
-	return report{AgentID: id, Type: strings.TrimSpace(os.Getenv("CMDB_AGENT_TYPE")), Hostname: hostname, IP: primaryIP(), OS: osRelease(), Kernel: readFirst("/proc/sys/kernel/osrelease"), Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memory(), DiskBytes: disk(), BootTime: boot(), Version: version}
+	assetType := strings.TrimSpace(os.Getenv("CMDB_AGENT_TYPE"))
+	if assetType == "" {
+		assetType = detectAssetType()
+	}
+	return report{AgentID: id, Type: assetType, Hostname: hostname, IP: primaryIP(), OS: osRelease(), Kernel: readFirst("/proc/sys/kernel/osrelease"), Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memory(), DiskBytes: disk(), BootTime: boot(), Version: version}
 }
 func send(client *http.Client, url, token string, value report) error {
 	body, _ := json.Marshal(value)

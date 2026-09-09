@@ -52,3 +52,17 @@ onMounted(async()=>{await store.initialize({...filters});const asset=typeof rout
 <ModelManager v-if="showModels" :models="store.models" @close="showModels=false" @changed="store.initialize({...filters})"/>
   </section>
 </template>
+
+<style scoped>
+.analytics-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; max-height: 60vh; overflow:auto; }
+.analytics-body article { background: var(--panel, #0d1526); border:1px solid var(--line,#24314d); border-radius:10px; padding:12px 14px; }
+.analytics-body article.wide { grid-column: 1 / -1; }
+.analytics-body h3 { margin: 0 0 8px; font-size: 13px; letter-spacing:.5px; color: var(--muted,#7f92b0); }
+.analytics-body dl { display:grid; grid-template-columns: repeat(2,1fr); gap:6px 12px; margin:0; }
+.analytics-body dt { color:#7f92b0; font-size:12px; }
+.analytics-body dd { margin:0; font-weight:600; font-size:14px; }
+.analytics-body ul { margin:0; padding:0; list-style:none; }
+.analytics-body li { padding:4px 0; border-bottom:1px dashed var(--line,#24314d); font-size:13px; }
+.analytics-panel { width: min(920px, 94vw); }
+.analytics-panel header { display:flex; align-items:center; justify-content:space-between; }
+</style>

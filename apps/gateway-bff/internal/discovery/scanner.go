@@ -33,6 +33,7 @@ type NodeExporterHost struct {
 	MemoryBytes  uint64           `json:"memoryBytes"`
 	DiskBytes    uint64           `json:"diskBytes"`
 	BootTime     string           `json:"bootTime"`
+	Virtual      bool             `json:"virtual"`
 	Attributes   []cmdb.Attribute `json:"attributes"`
 }
 
