@@ -1,6 +1,10 @@
 package discovery
 
-import "testing"
+import (
+	"testing"
+
+	"cmdb/gateway-bff/internal/cmdb"
+)
 
 func TestRegisterHeartbeatAndSummary(t *testing.T) {
 	s := NewService()
@@ -32,5 +36,28 @@ func TestCreateDiscoveryTaskAndReconcile(t *testing.T) {
 	done, err := s.Reconcile(task.ID)
 	if err != nil || done.Imported != result.Discovered {
 		t.Fatalf("reconcile failed %+v %v", done, err)
+	}
+}
+
+func TestIngestAutoImportsToCMDB(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	s := NewServiceWithCMDB(cmdbService)
+	in := IngestInput{Source: "ssh", Scope: "172.28.69.0/24", Items: []DiscoveredItem{{ID: "ingest-test-001", Name: "ingest-test-001", IP: "10.99.2.1", Type: "virtual-machine", Confidence: 95}}}
+	res, err := s.Ingest(in)
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if res.Imported != 1 || res.Accepted != 1 {
+		t.Fatalf("unexpected result %+v", res)
+	}
+	if _, err := cmdbService.GetAsset("ingest-test-001"); err != nil {
+		t.Fatalf("asset not created: %v", err)
+	}
+	res2, err := s.Ingest(in)
+	if err != nil {
+		t.Fatalf("ingest2: %v", err)
+	}
+	if res2.Conflicts != 1 || res2.Imported != 0 {
+		t.Fatalf("expected conflict on re-ingest, got %+v", res2)
 	}
 }

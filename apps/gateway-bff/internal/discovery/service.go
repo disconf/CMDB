@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +17,12 @@ import (
 var ErrNotFound = errors.New("not found")
 
 type Agent struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Hostname      string `json:"hostname"`
-	IP            string `json:"ip"`
-	OS            string `json:"os"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Hostname string `json:"hostname"`
+	IP       string `json:"ip"`
+	OS       string `json:"os"
+	"strings"`
 	Region        string `json:"region"`
 	Status        string `json:"status"`
 	Version       string `json:"version"`
@@ -30,8 +32,9 @@ type RegisterInput struct {
 	Name     string `json:"name"`
 	Hostname string `json:"hostname"`
 	IP       string `json:"ip"`
-	OS       string `json:"os"`
-	Region   string `json:"region"`
+	OS       string `json:"os"
+	"strings"`
+	Region string `json:"region"`
 }
 type Summary struct {
 	Total   int `json:"total"`
@@ -56,6 +59,17 @@ type CreateTaskInput struct {
 	Source string `json:"source"`
 	Scope  string `json:"scope"`
 }
+type IngestInput struct {
+	Source string           `json:"source"`
+	Scope  string           `json:"scope"`
+	Items  []DiscoveredItem `json:"items"`
+}
+type IngestResult struct {
+	TaskID    string `json:"taskId"`
+	Accepted  int    `json:"accepted"`
+	Imported  int    `json:"imported"`
+	Conflicts int    `json:"conflicts"`
+}
 type DiscoveredItem struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -65,11 +79,12 @@ type DiscoveredItem struct {
 	State      string `json:"state"`
 }
 type AgentReport struct {
-	AgentID      string `json:"agentId"`
-	Type         string `json:"type"`
-	Hostname     string `json:"hostname"`
-	IP           string `json:"ip"`
-	OS           string `json:"os"`
+	AgentID  string `json:"agentId"`
+	Type     string `json:"type"`
+	Hostname string `json:"hostname"`
+	IP       string `json:"ip"`
+	OS       string `json:"os"
+	"strings"`
 	Kernel       string `json:"kernel"`
 	Architecture string `json:"architecture"`
 	CPUCount     int    `json:"cpuCount"`
@@ -230,6 +245,110 @@ func (s *Service) CreateTask(in CreateTaskInput) (Task, error) {
 	}
 	return t, nil
 }
+func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, error) {
+	if s.cmdb != nil {
+		src := source
+		if src == "" {
+			src = "discovery"
+		}
+		_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "???", ProjectGroup: "????", Owner: "???", Source: src, Tags: []string{src}}, "discovery-reconcile")
+		if err != nil {
+			if errors.Is(err, cmdb.ErrConflict) {
+				return "conflict", nil
+			}
+			return "", err
+		}
+	}
+	item.State = "imported"
+	if s.db != nil {
+		if _, err := s.db.Exec("UPDATE discovery_items SET state='imported' WHERE id=$1", item.ID); err != nil {
+			return "", err
+		}
+	}
+	return "imported", nil
+}
+
+// Ingest accepts discovered items from collectors (ssh/snmp/node_exporter) and auto-imports them to CMDB.
+func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
+	if strings.TrimSpace(in.Source) == "" || len(in.Items) == 0 {
+		return IngestResult{}, errors.New("validation")
+	}
+	taskID := in.Source + "-" + time.Now().Format("20060102")
+	result := IngestResult{TaskID: taskID}
+	s.mu.Lock()
+	index := -1
+	for i := range s.tasks {
+		if s.tasks[i].ID == taskID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		s.tasks = append(s.tasks, Task{ID: taskID, Name: in.Source + " ????", Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: time.Now().Format("2006-01-02 15:04")})
+		index = len(s.tasks) - 1
+		if err := s.persistTask(s.tasks[index]); err != nil {
+			s.tasks = s.tasks[:len(s.tasks)-1]
+			s.mu.Unlock()
+			return IngestResult{}, err
+		}
+	}
+	task := &s.tasks[index]
+	var pending []DiscoveredItem
+	for _, item := range in.Items {
+		if item.ID == "" {
+			continue
+		}
+		exists := false
+		for _, existing := range task.Items {
+			if existing.ID == item.ID {
+				exists = true
+				break
+			}
+		}
+		if exists {
+			result.Conflicts++
+			continue
+		}
+		item.State = "pending"
+		task.Items = append(task.Items, item)
+		pending = append(pending, item)
+		if err := s.persistItem(taskID, item, []byte(`{}`)); err != nil {
+			s.mu.Unlock()
+			return IngestResult{}, err
+		}
+	}
+	s.mu.Unlock()
+
+	for _, item := range pending {
+		status, err := s.importDiscovered(item, in.Source)
+		if err != nil {
+			return IngestResult{}, err
+		}
+		result.Accepted++
+		if status == "imported" {
+			result.Imported++
+		} else if status == "conflict" {
+			result.Conflicts++
+		}
+	}
+	s.mu.Lock()
+	if index < len(s.tasks) {
+		s.tasks[index].Discovered = len(s.tasks[index].Items)
+		s.tasks[index].Imported = 0
+		for _, item := range s.tasks[index].Items {
+			if item.State == "imported" {
+				s.tasks[index].Imported++
+			}
+		}
+		if err := s.persistTask(s.tasks[index]); err != nil {
+			s.mu.Unlock()
+			return IngestResult{}, err
+		}
+	}
+	s.mu.Unlock()
+	return result, nil
+}
+
 func (s *Service) RunTask(id string) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -277,6 +277,19 @@ func NewServer() *Server {
 		user, _ := authService.CurrentUser(bearerToken(r))
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, user.Username))
 	})
+	mux.HandleFunc("POST /api/v1/discovery/ingest", func(w http.ResponseWriter, r *http.Request) {
+		var in discovery.IngestInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Items) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_DISCOVERY_PAYLOAD"})
+			return
+		}
+		result, err := discoveryService.Ingest(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "INGEST_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("GET /api/v1/discovery/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
