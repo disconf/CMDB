@@ -32,6 +32,8 @@ async function addRack(moduleId: string) {
 }
 async function renameRack(r:{id:string;name:string;uTotal:number;voltage:string}){const name=prompt('机柜名称',r.name);if(name===null||!name.trim())return;try{await updateIdcRack(auth.token,r.id,{name:name.trim(),uTotal:r.uTotal,voltage:r.voltage});await load();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'改名失败'}}
 async function renameModule(id:string,oldName:string){const name=prompt('模块名称',oldName);if(name===null||!name.trim())return;try{await updateIdcModule(auth.token,id,name.trim());await load();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'改名失败'}}
+const expandedRack = ref('')
+function rackUList(r: { uTotal: number; occupiedU?: string[] }) { const list: Array<{ u: string; occupied: boolean }> = []; const occ = new Set(r.occupiedU || []); for (let i = r.uTotal; i >= 1; i--) { list.push({ u: String(i), occupied: occ.has(String(i)) }) } return list }
 async function removeRack(id:string){try{await deleteIdcRack(auth.token,id);await load();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'删除失败'}}
 async function removeModule(id:string){try{await deleteIdcModule(auth.token,id);await load();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'删除失败(模块下有机柜时请先删除机柜)'}}
 async function removeRoom(id:string){try{await deleteIdcRoom(auth.token,id);await load();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'删除失败'}}
@@ -56,9 +58,12 @@ onMounted(load)
           <div class="idc-modules">
             <div v-for="m in room.modules" :key="m.id" class="idc-module">
               <h4><Server /> 模块：{{ m.name }}<button class="link-plain" @click="renameModule(m.id,m.name)">改名</button><button class="link-danger" title="删除模块" @click="removeModule(m.id)"><Trash2 /></button></h4>
-              <table v-if="m.racks.length"><thead><tr><th>机柜</th><th>U位</th><th>电压</th><th>已占用</th><th></th></tr></thead><tbody><tr v-for="rk in m.racks" :key="rk.id"><td>{{ rk.name }}</td><td>{{ rk.uTotal }}U</td><td>{{ rk.voltage }}</td><td><span v-if="(rk.occupiedU||[]).length">{{ (rk.occupiedU||[]).join(', ') }}</span><span v-else class="muted">空</span></td><td><button class="link-plain" @click="renameRack(rk)">改名</button><button class="link-danger" title="删除机柜" @click="removeRack(rk.id)"><Trash2 /></button></td></tr></tbody></table>
+              <table v-if="m.racks.length"><thead><tr><th>机柜</th><th>U位</th><th>电压</th><th>已占用</th><th></th></tr></thead><tbody><tr v-for="rk in m.racks" :key="rk.id"><td>{{ rk.name }}</td><td>{{ rk.uTotal }}U</td><td>{{ rk.voltage }}</td><td><span v-if="(rk.occupiedU||[]).length">{{ (rk.occupiedU||[]).join(', ') }}</span><span v-else class="muted">空</span></td><td><button class="link-plain" @click="expandedRack = expandedRack===rk.id ? '' : rk.id">U位视图</button><button class="link-plain" @click="renameRack(rk)">改名</button><button class="link-danger" title="删除机柜" @click="removeRack(rk.id)"><Trash2 /></button></td></tr></tbody></table>
               <p v-else class="muted">暂无机柜</p>
-              <div class="idc-inline">
+              <div v-for="rk in m.racks.filter((x) => x.id === expandedRack)" :key="'u'+rk.id" class="u-grid">
+                <div v-for="cell in rackUList(rk)" :key="cell.u" class="u-cell" :class="{ busy: cell.occupied }">{{ cell.u }}U</div>
+              </div>
+<div class="idc-inline">
                 <input v-model="rackName[m.id]" placeholder="机柜名（如 A03）">
                 <input v-model.number="rackU[m.id]" type="number" placeholder="U位">
                 <input v-model="rackVoltage[m.id]" placeholder="电压(如220V)">
@@ -87,6 +92,9 @@ onMounted(load)
 .idc-room > header span { opacity: .6; }
 .idc-module { margin: 10px 0 0 12px; }
 .idc-module h4 { margin: 0 0 6px; display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.u-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 8px 0; }
+.u-cell { border: 1px solid var(--line,#24314d); text-align: center; font-size: 11px; padding: 3px 0; color:#9fb6d9; background:#0a1120; }
+.u-cell.busy { background:#7a2b2b; color:#ffd7d7; border-color:#a33; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; }
 th, td { border: 1px solid var(--line,#24314d); padding: 4px 8px; text-align: left; }
 .muted { opacity: .5; font-size: 12px; }
