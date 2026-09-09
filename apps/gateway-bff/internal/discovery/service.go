@@ -132,6 +132,13 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	}
 	return s
 }
+func (s *Service) AuthorizeAgentToken(token string) bool {
+	if s.agentToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.agentToken)) == 1
+}
+
 func (s *Service) Report(token string, in AgentReport) (cmdb.Asset, error) {
 	if s.agentToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.agentToken)) != 1 {
 		return cmdb.Asset{}, errors.New("unauthorized")

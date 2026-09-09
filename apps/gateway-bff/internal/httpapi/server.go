@@ -278,6 +278,10 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, user.Username))
 	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-node-exporter", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
 		var in discovery.NodeExporterScanInput
 		if err := decodeJSON(r, &in); err != nil || len(in.CIDRs) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_SCAN_INPUT"})
@@ -291,6 +295,10 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/ingest", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
 		var in discovery.IngestInput
 		if err := decodeJSON(r, &in); err != nil || len(in.Items) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_DISCOVERY_PAYLOAD"})
