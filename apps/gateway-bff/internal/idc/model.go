@@ -14,11 +14,12 @@ type Module struct {
 	Racks  []Rack `json:"racks"`
 }
 type Rack struct {
-	ID       string `json:"id"`
-	ModuleID string `json:"moduleId"`
-	Name     string `json:"name"`
-	UTotal   int    `json:"uTotal"`
-	Voltage  string `json:"voltage"`
+	ID        string   `json:"id"`
+	ModuleID  string   `json:"moduleId"`
+	Name      string   `json:"name"`
+	UTotal    int      `json:"uTotal"`
+	Voltage   string   `json:"voltage"`
+	OccupiedU []string `json:"occupiedU"`
 }
 type CreateRoom struct {
 	Name     string `json:"name"`

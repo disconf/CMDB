@@ -3,6 +3,7 @@ package idc
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -92,9 +93,104 @@ func (s *Service) ListRooms() ([]Room, error) {
 				}
 			}
 			rackRows.Close()
+			occupied, err := s.occupiedU(ctx, rooms[i].Modules[j].Racks[len(rooms[i].Modules[j].Racks)-1].ID)
+			if err != nil {
+				return nil, err
+			}
+			rooms[i].Modules[j].Racks[len(rooms[i].Modules[j].Racks)-1].OccupiedU = occupied
 		}
 	}
 	return rooms, nil
+}
+
+func (s *Service) occupiedU(ctx context.Context, rackID string) ([]string, error) {
+	filter, _ := json.Marshal([]map[string]string{{"name": "rack_id", "value": rackID}})
+	rows, err := s.db.QueryContext(ctx, `SELECT attributes FROM cmdb_assets WHERE attributes @> $1::jsonb`, string(filter))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var occupied []string
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var attrs []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		if json.Unmarshal(raw, &attrs) == nil {
+			for _, a := range attrs {
+				if a.Name == "u_position" && a.Value != "" {
+					occupied = append(occupied, a.Value)
+				}
+			}
+		}
+	}
+	return occupied, rows.Err()
+}
+
+var ErrOccupied = errors.New("idc: rack has occupied U positions")
+
+func (s *Service) rackOccupied(rackID string) (bool, error) {
+	list, err := s.occupiedU(context.Background(), rackID)
+	if err != nil {
+		return false, err
+	}
+	return len(list) > 0, nil
+}
+
+func (s *Service) DeleteRack(id string) error {
+	if s.db == nil {
+		return ErrNoDB
+	}
+	busy, err := s.rackOccupied(id)
+	if err != nil {
+		return err
+	}
+	if busy {
+		return ErrOccupied
+	}
+	res, err := s.db.Exec(`DELETE FROM idc_racks WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Service) DeleteModule(id string) error {
+	if s.db == nil {
+		return ErrNoDB
+	}
+	res, err := s.db.Exec(`DELETE FROM idc_modules WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Service) DeleteRoom(id string) error {
+	if s.db == nil {
+		return ErrNoDB
+	}
+	res, err := s.db.Exec(`DELETE FROM idc_rooms WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Service) CreateRoom(in CreateRoom) (Room, error) {

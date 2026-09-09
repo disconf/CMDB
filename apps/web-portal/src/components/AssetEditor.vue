@@ -60,7 +60,7 @@ function setAttr(name: string, label: string, value: string) {
 }
 watch(idcRoomId, (v) => { if (v) { const room = props.idcRooms?.find((x) => x.id === v); if (room) { setAttr('idc_name', '机房名称', room.name) } } })
 watch(idcModuleId, (v) => { if (v) { const m = idcModules.value.find((x) => x.id === v); if (m) setAttr('module_name', '模块/区域', m.name) } })
-watch(idcRackId, (v) => { if (v) { const r = selectedRack.value; if (r) { setAttr('rack_no', '机柜号', r.name); if (r.voltage) setAttr('voltage', '电压', r.voltage) } } })
+watch(idcRackId, (v) => { if (v) { const r = selectedRack.value; if (r) { setAttr('rack_id', '机柜ID', r.id); setAttr('rack_no', '机柜号', r.name); if (r.voltage) setAttr('voltage', '电压', r.voltage) } } })
 watch(idcU, (v) => { if (v) setAttr('u_position', 'U位', v) })
 function addAttr() { attrs.value.push({ name: '', label: '', value: '' }) }
 function removeAttr(index: number) { attrs.value.splice(index, 1) }

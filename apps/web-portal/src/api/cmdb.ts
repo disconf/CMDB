@@ -13,6 +13,11 @@ export const importAssets=(token:string,rows:AssetInput[],upsert=false)=>send<Im
 export const fetchAnalytics=(token:string)=>get<Analytics>('/api/v1/cmdb/analytics',token)
 export const fetchModelTemplate=(token:string,code:string)=>fetch(`/api/v1/cmdb/models/${encodeURIComponent(code)}/template`,{headers:{Authorization:`Bearer ${token}`}}).then(async(r)=>{if(!r.ok)throw new Error('模板获取失败');return r.text()})
 export const fetchIdcRooms=(token:string)=>get<IdcRoom[]>('/api/v1/idc/rooms',token)
+
+async function del<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error('删除失败');return undefined as unknown as T}
+export const deleteIdcRack=(token:string,rackId:string)=>del<void>(`/api/v1/idc/racks/${encodeURIComponent(rackId)}`,token)
+export const deleteIdcModule=(token:string,moduleId:string)=>del<void>(`/api/v1/idc/modules/${encodeURIComponent(moduleId)}`,token)
+export const deleteIdcRoom=(token:string,roomId:string)=>del<void>(`/api/v1/idc/rooms/${encodeURIComponent(roomId)}`,token)
 export const createIdcRoom=(token:string,name:string,location:string)=>send<IdcRoom>('/api/v1/idc/rooms',token,'POST',{name,location})
 export const addIdcModule=(token:string,roomId:string,name:string)=>send<{id:string;roomId:string;name:string;racks:never[]}>(`/api/v1/idc/rooms/${encodeURIComponent(roomId)}/modules`,token,'POST',{name})
 export const addIdcRack=(token:string,moduleId:string,payload:{name:string;uTotal:number;voltage:string})=>send<{id:string;moduleId:string;name:string;uTotal:number;voltage:string}>(`/api/v1/idc/racks`,token,'POST',{moduleId,...payload})

@@ -21,6 +21,7 @@ var runtimeAutoAttrs = map[string]bool{
 	"agent_version": true, "mac_addresses": true,
 }
 var ErrValidation = errors.New("validation failed")
+var ErrSlotTaken = errors.New("机柜U位已被占用")
 var ErrConflict = errors.New("asset already exists")
 
 type Service struct {
@@ -598,6 +599,30 @@ func (s *Service) MarkAgentAssetOffline(id string) error {
 	return ErrNotFound
 }
 
+func attrValue(attrs []Attribute, name string) string {
+	for _, a := range attrs {
+		if a.Name == name {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+func (s *Service) slotTaken(rackID, u, exceptID string) bool {
+	if rackID == "" || u == "" {
+		return false
+	}
+	for _, a := range s.assets {
+		if a.ID == exceptID {
+			continue
+		}
+		if attrValue(a.Attributes, "rack_id") == rackID && attrValue(a.Attributes, "u_position") == u {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, error) {
 	if err := validateCreate(input); err != nil {
 		return Asset{}, err
@@ -622,6 +647,9 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 		return Asset{}, fmt.Errorf("%w: unknown type", ErrValidation)
 	}
 	attrs := normalizeAttributes(input.Attributes, modelFieldsFor(s.models, input.Type))
+	if rackID, uPos := attrValue(attrs, "rack_id"), attrValue(attrs, "u_position"); rackID != "" && uPos != "" && s.slotTaken(rackID, uPos, input.ID) {
+		return Asset{}, ErrSlotTaken
+	}
 	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: attrs, Relations: append([]Relation(nil), input.Relations...)}
 	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: input.ID, Action: "created", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05")}
 	if s.db != nil {
@@ -675,6 +703,10 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 		}
 		if input.Relations != nil {
 			target.Relations = append([]Relation(nil), input.Relations...)
+		}
+		if rackID, uPos := attrValue(target.Attributes, "rack_id"), attrValue(target.Attributes, "u_position"); rackID != "" && uPos != "" && s.slotTaken(rackID, uPos, id) {
+			s.assets[index] = before
+			return Asset{}, ErrSlotTaken
 		}
 		changes := diffAsset(before, *target)
 		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "updated", Operator: operator, OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: changes}

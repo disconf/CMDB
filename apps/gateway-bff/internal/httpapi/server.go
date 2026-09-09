@@ -367,6 +367,41 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, result)
 	})
+	mux.HandleFunc("DELETE /api/v1/idc/racks/{rackId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		err := idcService.DeleteRack(r.PathValue("rackId"))
+		if errors.Is(err, idc.ErrOccupied) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "RACK_OCCUPIED", "message": "该机柜存在占用U位，不能删除"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /api/v1/idc/modules/{moduleId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		if err := idcService.DeleteModule(r.PathValue("moduleId")); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /api/v1/idc/rooms/{roomId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		if err := idcService.DeleteRoom(r.PathValue("roomId")); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /api/v1/idc/rooms", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
