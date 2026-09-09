@@ -33,6 +33,7 @@ func main() {
 	runContext, stopPublisher := context.WithCancel(context.Background())
 	go api.MonitorService().RunEscalations(runContext)
 	go api.DiscoveryService().RunAgentHealth(runContext)
+	go api.DiscoveryService().AutoScanLoops(runContext)
 	var publisher *events.OutboxPublisher
 	if os.Getenv("KAFKA_BROKERS") != "" {
 		var err error

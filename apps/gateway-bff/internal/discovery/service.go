@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -191,6 +193,63 @@ func (s *Service) RunAgentHealth(ctx context.Context) {
 		}
 	}
 }
+
+// AutoScanLoops runs periodic auto-scan jobs configured via env vars:
+//
+//	CMDB_AUTO_SCAN_INTERVAL_MIN  (default 5)
+//	CMDB_AUTO_SCAN_SNMP_CIDRS    (comma separated, uses CMDB_SNMP_COMMUNITY)
+//	CMDB_AUTO_SCAN_NODE_CIDRS    (comma separated, port 9100)
+//	CMDB_AUTO_SCAN_SSH_CIDRS     (comma separated, uses CMDB_SSH_*)
+func (s *Service) AutoScanLoops(ctx context.Context) {
+	interval := 5
+	if v := os.Getenv("CMDB_AUTO_SCAN_INTERVAL_MIN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 1440 {
+			interval = n
+		}
+	}
+	snmp := os.Getenv("CMDB_AUTO_SCAN_SNMP_CIDRS")
+	node := os.Getenv("CMDB_AUTO_SCAN_NODE_CIDRS")
+	ssh := os.Getenv("CMDB_AUTO_SCAN_SSH_CIDRS")
+	if snmp == "" && node == "" && ssh == "" {
+		return
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if snmp != "" {
+				if _, err := s.ScanSNMP(ctx, SNMPScanInput{CIDRs: splitList(snmp)}); err != nil {
+					slog.Error("auto snmp scan", "error", err)
+				}
+			}
+			if node != "" {
+				if _, err := s.ScanNodeExporter(ctx, NodeExporterScanInput{CIDRs: splitList(node)}); err != nil {
+					slog.Error("auto node scan", "error", err)
+				}
+			}
+			if ssh != "" {
+				if _, err := s.ScanSSH(ctx, SSHScanInput{CIDRs: splitList(ssh)}); err != nil {
+					slog.Error("auto ssh scan", "error", err)
+				}
+			}
+		}
+	}
+}
+
+func splitList(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func (s *Service) Register(in RegisterInput) (Agent, error) {
 	if in.Name == "" || in.Hostname == "" {
 		return Agent{}, errors.New("validation")
