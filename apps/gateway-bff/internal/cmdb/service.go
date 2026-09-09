@@ -381,6 +381,20 @@ func (s *Service) MonitoringAssets() []Asset {
 	}
 	return assets
 }
+func (s *Service) HasAssetIP(ip string, exceptID string) bool {
+	if ip == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.assets {
+		if a.IP == ip && a.ID != exceptID && (a.Type == "physical-server" || a.Type == "virtual-machine" || a.Type == "k8s-node") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) GetAsset(id string) (Asset, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

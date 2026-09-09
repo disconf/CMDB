@@ -61,3 +61,18 @@ func TestIngestAutoImportsToCMDB(t *testing.T) {
 		t.Fatalf("expected conflict on re-ingest, got %+v", res2)
 	}
 }
+
+func TestIngestDedupesByIP(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	s := NewServiceWithCMDB(cmdbService)
+	if _, err := s.Ingest(IngestInput{Source: "agent", Items: []DiscoveredItem{{ID: "host-dup-1", Name: "dup-1", IP: "10.99.9.9", Type: "virtual-machine"}}}); err != nil {
+		t.Fatalf("ingest1: %v", err)
+	}
+	res, err := s.Ingest(IngestInput{Source: "ssh", Items: []DiscoveredItem{{ID: "ssh-dup-1", Name: "dup-1-ssh", IP: "10.99.9.9", Type: "virtual-machine"}}})
+	if err != nil {
+		t.Fatalf("ingest2: %v", err)
+	}
+	if res.Conflicts != 1 || res.Imported != 0 {
+		t.Fatalf("expected dedupe conflict by ip, got %+v", res)
+	}
+}

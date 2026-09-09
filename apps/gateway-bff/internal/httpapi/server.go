@@ -277,6 +277,23 @@ func NewServer() *Server {
 		user, _ := authService.CurrentUser(bearerToken(r))
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, user.Username))
 	})
+	mux.HandleFunc("POST /api/v1/discovery/scan-ssh", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		var in discovery.SSHScanInput
+		if err := decodeJSON(r, &in); err != nil || len(in.CIDRs) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_SCAN_INPUT"})
+			return
+		}
+		result, err := discoveryService.ScanSSH(r.Context(), in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "SCAN_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-node-exporter", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})

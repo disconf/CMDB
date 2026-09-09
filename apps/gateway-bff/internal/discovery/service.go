@@ -255,6 +255,9 @@ func (s *Service) CreateTask(in CreateTaskInput) (Task, error) {
 }
 func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, error) {
 	if s.cmdb != nil {
+		if item.IP != "" && s.cmdb.HasAssetIP(item.IP, item.ID) {
+			return "conflict", nil
+		}
 		src := source
 		if src == "" {
 			src = "discovery"
