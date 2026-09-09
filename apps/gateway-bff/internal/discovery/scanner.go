@@ -40,6 +40,7 @@ type NodeExporterScanResult struct {
 	Scanned   int                `json:"scanned"`
 	Found     int                `json:"found"`
 	Adopted   int                `json:"adopted"`
+	Merged    int                `json:"merged"`
 	Conflicts int                `json:"conflicts"`
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
@@ -243,6 +244,7 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 			return result, err
 		}
 		result.Adopted = ingestResult.Imported
+		result.Merged = ingestResult.Merged
 		result.Conflicts = ingestResult.Conflicts
 	}
 	return result, nil

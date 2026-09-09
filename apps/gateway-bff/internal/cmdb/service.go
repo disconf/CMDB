@@ -13,6 +13,12 @@ import (
 )
 
 var ErrNotFound = errors.New("asset not found")
+
+var runtimeAutoAttrs = map[string]bool{
+	"os": true, "kernel": true, "architecture": true, "cpu": true,
+	"memory_bytes": true, "disk_bytes": true, "boot_time": true,
+	"agent_version": true, "mac_addresses": true,
+}
 var ErrValidation = errors.New("validation failed")
 var ErrConflict = errors.New("asset already exists")
 
@@ -381,6 +387,81 @@ func (s *Service) MonitoringAssets() []Asset {
 	}
 	return assets
 }
+func (s *Service) FindHostByIP(ip string, exceptID string) string {
+	if ip == "" {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.assets {
+		if a.IP == ip && a.ID != exceptID && (a.Type == "physical-server" || a.Type == "virtual-machine" || a.Type == "k8s-node") {
+			return a.ID
+		}
+	}
+	return ""
+}
+
+func (s *Service) MergeHostInventory(id, source string, attrs []Attribute) (Asset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.assets {
+		if s.assets[index].ID != id {
+			continue
+		}
+		before := s.assets[index]
+		target := &s.assets[index]
+		byName := make(map[string]int, len(target.Attributes))
+		for i, a := range target.Attributes {
+			byName[a.Name] = i
+		}
+		for _, a := range attrs {
+			if !runtimeAutoAttrs[a.Name] {
+				continue
+			}
+			if idx, ok := byName[a.Name]; ok {
+				target.Attributes[idx].Value = a.Value
+				if target.Attributes[idx].Label == "" {
+					target.Attributes[idx].Label = a.Label
+				}
+			} else {
+				target.Attributes = append(target.Attributes, Attribute{Name: a.Name, Label: a.Label, Value: a.Value})
+				byName[a.Name] = len(target.Attributes) - 1
+			}
+		}
+		target.Status = "online"
+		changes := attributeDiff(before.Attributes, target.Attributes)
+		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "merged-by-" + source, Operator: "discovery", OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: changes}
+		if s.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				return Asset{}, err
+			}
+			attrsJSON, _ := json.Marshal(target.Attributes)
+			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET status='online',attributes=$2,updated_at=now() WHERE id=$1`, id, attrsJSON)
+			if err == nil {
+				err = insertHistory(ctx, tx, entry)
+			}
+			if err == nil {
+				err = insertAssetEvents(ctx, tx, *target, entry)
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				s.assets[index] = before
+				return Asset{}, err
+			}
+			if err = tx.Commit(); err != nil {
+				s.assets[index] = before
+				return Asset{}, err
+			}
+		}
+		s.history[id] = append(s.history[id], entry)
+		return cloneAsset(*target), nil
+	}
+	return Asset{}, ErrNotFound
+}
+
 func (s *Service) HasAssetIP(ip string, exceptID string) bool {
 	if ip == "" {
 		return false

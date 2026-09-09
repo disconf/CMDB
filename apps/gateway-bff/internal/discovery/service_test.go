@@ -58,7 +58,7 @@ func TestIngestAutoImportsToCMDB(t *testing.T) {
 		t.Fatalf("ingest2: %v", err)
 	}
 	if res2.Conflicts != 1 || res2.Imported != 0 {
-		t.Fatalf("expected conflict on re-ingest, got %+v", res2)
+		t.Fatalf("expected same-day duplicate as conflict, got %+v", res2)
 	}
 }
 
@@ -72,7 +72,7 @@ func TestIngestDedupesByIP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ingest2: %v", err)
 	}
-	if res.Conflicts != 1 || res.Imported != 0 {
-		t.Fatalf("expected dedupe conflict by ip, got %+v", res)
+	if res.Merged != 1 || res.Imported != 0 {
+		t.Fatalf("expected merge by ip, got %+v", res)
 	}
 }

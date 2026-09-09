@@ -68,6 +68,7 @@ type IngestResult struct {
 	TaskID    string `json:"taskId"`
 	Accepted  int    `json:"accepted"`
 	Imported  int    `json:"imported"`
+	Merged    int    `json:"merged"`
 	Conflicts int    `json:"conflicts"`
 }
 type DiscoveredItem struct {
@@ -253,29 +254,47 @@ func (s *Service) CreateTask(in CreateTaskInput) (Task, error) {
 	}
 	return t, nil
 }
-func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, error) {
-	if s.cmdb != nil {
-		if item.IP != "" && s.cmdb.HasAssetIP(item.IP, item.ID) {
-			return "conflict", nil
-		}
-		src := source
-		if src == "" {
-			src = "discovery"
-		}
-		_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: src, Tags: []string{src}, Attributes: item.Attributes}, "discovery-reconcile")
-		if err != nil {
-			if errors.Is(err, cmdb.ErrConflict) {
-				return "conflict", nil
-			}
-			return "", err
-		}
-	}
-	item.State = "imported"
+func (s *Service) markImported(item DiscoveredItem) error {
 	if s.db != nil {
 		if _, err := s.db.Exec("UPDATE discovery_items SET state='imported' WHERE id=$1", item.ID); err != nil {
-			return "", err
+			return err
 		}
 	}
+	return nil
+}
+
+func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, error) {
+	if s.cmdb == nil {
+		_ = s.markImported(item)
+		return "imported", nil
+	}
+	src := source
+	if src == "" {
+		src = "discovery"
+	}
+	// Same host already known under a different ID -> merge/refresh, keep canonical asset.
+	if item.IP != "" {
+		if existingID := s.cmdb.FindHostByIP(item.IP, item.ID); existingID != "" {
+			if _, err := s.cmdb.MergeHostInventory(existingID, src, item.Attributes); err != nil {
+				return "", err
+			}
+			_ = s.markImported(item)
+			return "merged", nil
+		}
+	}
+	_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: src, Tags: []string{src}, Attributes: item.Attributes}, "discovery-reconcile")
+	if err != nil {
+		if errors.Is(err, cmdb.ErrConflict) {
+			// Same ID already exists -> refresh in place.
+			if _, err2 := s.cmdb.MergeHostInventory(item.ID, src, item.Attributes); err2 != nil {
+				return "", err2
+			}
+			_ = s.markImported(item)
+			return "merged", nil
+		}
+		return "", err
+	}
+	_ = s.markImported(item)
 	return "imported", nil
 }
 
@@ -295,7 +314,7 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		}
 	}
 	if index < 0 {
-		s.tasks = append(s.tasks, Task{ID: taskID, Name: in.Source + " ????", Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: time.Now().Format("2006-01-02 15:04")})
+		s.tasks = append(s.tasks, Task{ID: taskID, Name: in.Source + " 自动发现", Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: time.Now().Format("2006-01-02 15:04")})
 		index = len(s.tasks) - 1
 		if err := s.persistTask(s.tasks[index]); err != nil {
 			s.tasks = s.tasks[:len(s.tasks)-1]
@@ -329,6 +348,7 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		}
 	}
 	s.mu.Unlock()
+	handled := map[string]bool{}
 
 	for _, item := range pending {
 		status, err := s.importDiscovered(item, in.Source)
@@ -338,13 +358,21 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		result.Accepted++
 		if status == "imported" {
 			result.Imported++
+		} else if status == "merged" {
+			result.Merged++
 		} else if status == "conflict" {
 			result.Conflicts++
 		}
+		handled[item.ID] = true
 	}
 	s.mu.Lock()
 	if index < len(s.tasks) {
 		s.tasks[index].Discovered = len(s.tasks[index].Items)
+		for i := range s.tasks[index].Items {
+			if handled[s.tasks[index].Items[i].ID] {
+				s.tasks[index].Items[i].State = "imported"
+			}
+		}
 		s.tasks[index].Imported = 0
 		for _, item := range s.tasks[index].Items {
 			if item.State == "imported" {
