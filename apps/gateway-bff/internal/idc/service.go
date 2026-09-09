@@ -41,7 +41,13 @@ func NewService() *Service {
 	CREATE TABLE IF NOT EXISTS idc_racks (
 		id text PRIMARY KEY, module_id text NOT NULL REFERENCES idc_modules(id) ON DELETE CASCADE,
 		name text NOT NULL, u_total integer NOT NULL DEFAULT 42,
-		voltage text NOT NULL DEFAULT '220V', created_at timestamptz NOT NULL DEFAULT now());`)
+		voltage text NOT NULL DEFAULT '220V', created_at timestamptz NOT NULL DEFAULT now());
+	CREATE TABLE IF NOT EXISTS idc_rack_occupancy (
+		rack_id text NOT NULL REFERENCES idc_racks(id),
+		u_position text NOT NULL,
+		asset_id text NOT NULL,
+		created_at timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (rack_id, u_position));`)
 	return &Service{db: db}
 }
 

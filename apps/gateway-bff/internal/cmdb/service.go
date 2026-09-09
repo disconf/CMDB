@@ -459,6 +459,10 @@ func (s *Service) MergeHostInventory(id, source string, attrs []Attribute) (Asse
 			}
 		}
 		s.history[id] = append(s.history[id], entry)
+		if err := s.syncSlot(id, target.Attributes); err != nil {
+			s.assets[index] = before
+			return Asset{}, err
+		}
 		return cloneAsset(*target), nil
 	}
 	return Asset{}, ErrNotFound
@@ -608,6 +612,32 @@ func attrValue(attrs []Attribute, name string) string {
 	return ""
 }
 
+func rackSlot(attrs []Attribute) (string, string) {
+	return attrValue(attrs, "rack_id"), attrValue(attrs, "u_position")
+}
+
+func (s *Service) syncSlot(assetID string, attrs []Attribute) error {
+	if s.db == nil {
+		return nil
+	}
+	rackID, u := rackSlot(attrs)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM idc_rack_occupancy WHERE asset_id=$1`, assetID); err != nil {
+		return err
+	}
+	if rackID == "" || u == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO idc_rack_occupancy(rack_id,u_position,asset_id) VALUES($1,$2,$3)`, rackID, u, assetID); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			return ErrSlotTaken
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *Service) slotTaken(rackID, u, exceptID string) bool {
 	if rackID == "" || u == "" {
 		return false
@@ -676,6 +706,14 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 	s.models[modelIndex].Count++
 	s.assets = append(s.assets, created)
 	s.history[input.ID] = append(s.history[input.ID], entry)
+	if err := s.syncSlot(created.ID, created.Attributes); err != nil {
+		s.assets = s.assets[:len(s.assets)-1]
+		s.models[modelIndex].Count--
+		if s.db != nil {
+			_, _ = s.db.Exec(`DELETE FROM cmdb_assets WHERE id=$1`, created.ID)
+		}
+		return Asset{}, err
+	}
 	return cloneAsset(created), nil
 }
 func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string) (Asset, error) {
