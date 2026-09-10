@@ -18,10 +18,11 @@ import (
 // SSHScanInput lists CIDRs to scan over SSH. Credentials come from server env
 // CMDB_SSH_USERNAME / CMDB_SSH_PASSWORD (kept in a k8s Secret), never in payload.
 type SSHScanInput struct {
-	CIDRs        []string `json:"cidrs"`
-	Port         int      `json:"port"`
-	DefaultType  string   `json:"defaultType"`
-	CredentialID string   `json:"credentialId"`
+	CIDRs           []string `json:"cidrs"`
+	Port            int      `json:"port"`
+	DefaultType     string   `json:"defaultType"`
+	CredentialID    string   `json:"credentialId"`
+	RequireApproval bool     `json:"requireApproval"`
 }
 
 type SSHScanResult struct {
@@ -281,7 +282,7 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 		result.Hosts = append(result.Hosts, *host)
 	}
 	if len(items) > 0 {
-		ingestResult, err := s.Ingest(IngestInput{Source: "ssh", Scope: strings.Join(in.CIDRs, ","), Items: items})
+		ingestResult, err := s.Ingest(IngestInput{Source: "ssh", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
 		if err != nil {
 			return result, err
 		}

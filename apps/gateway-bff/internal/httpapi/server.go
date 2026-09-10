@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cmdb/gateway-bff/internal/aiops"
+	"cmdb/gateway-bff/internal/audit"
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/credentials"
@@ -50,6 +51,7 @@ func NewServer() *Server {
 	authService := auth.NewService()
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
+	auditService := audit.NewService()
 	discoveryService.SetCredentialResolver(func(id string) (string, string, error) {
 		m, err := credentialsService.Resolve(id)
 		return m.Username, m.Secret, err
@@ -481,6 +483,49 @@ func NewServer() *Server {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/pending", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.PendingList())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/pending/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		status, err := discoveryService.ApprovePending(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "APPROVE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "discovery.approve", r.PathValue("id"), "status="+status)
+		writeJSON(w, http.StatusOK, map[string]string{"status": status})
+	})
+	mux.HandleFunc("POST /api/v1/discovery/pending/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := discoveryService.RejectPending(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "REJECT_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "discovery.reject", r.PathValue("id"), "")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "rejected"})
+	})
+	mux.HandleFunc("GET /api/v1/audit", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		entries, err := auditService.List(limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "AUDIT_ERROR", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, entries)
+	})
 	mux.HandleFunc("GET /api/v1/credentials", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return
@@ -511,6 +556,9 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
 			return
 		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "credential.create", cred.ID, cred.Kind+"/"+cred.Name)
+		}
 		writeJSON(w, http.StatusCreated, cred)
 	})
 	mux.HandleFunc("DELETE /api/v1/credentials/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -520,6 +568,9 @@ func NewServer() *Server {
 		if err := credentialsService.Delete(r.PathValue("id")); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "DELETE_FAILED", "message": err.Error()})
 			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "credential.delete", r.PathValue("id"), "")
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

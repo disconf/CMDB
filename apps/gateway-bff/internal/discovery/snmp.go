@@ -15,11 +15,12 @@ import (
 )
 
 type SNMPScanInput struct {
-	CIDRs        []string `json:"cidrs"`
-	Community    string   `json:"community"`
-	Port         int      `json:"port"`
-	DefaultType  string   `json:"defaultType"` // network-device / physical-server / ""(自动)
-	CredentialID string   `json:"credentialId"`
+	CIDRs           []string `json:"cidrs"`
+	Community       string   `json:"community"`
+	Port            int      `json:"port"`
+	DefaultType     string   `json:"defaultType"` // network-device / physical-server / ""(自动)
+	CredentialID    string   `json:"credentialId"`
+	RequireApproval bool     `json:"requireApproval"`
 }
 
 type SNMPScanResult struct {
@@ -267,7 +268,7 @@ func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResul
 		result.Hosts = append(result.Hosts, *host)
 	}
 	if len(items) > 0 {
-		ing, err := s.Ingest(IngestInput{Source: "snmp", Scope: strings.Join(in.CIDRs, ","), Items: items})
+		ing, err := s.Ingest(IngestInput{Source: "snmp", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
 		if err != nil {
 			return result, err
 		}

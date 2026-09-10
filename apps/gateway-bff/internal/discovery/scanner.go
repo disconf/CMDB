@@ -18,9 +18,10 @@ import (
 
 // NodeExporterScanInput lists CIDRs to scan for node_exporter (/metrics on a port).
 type NodeExporterScanInput struct {
-	CIDRs       []string `json:"cidrs"`
-	Port        int      `json:"port"`
-	DefaultType string   `json:"defaultType"`
+	CIDRs           []string `json:"cidrs"`
+	Port            int      `json:"port"`
+	DefaultType     string   `json:"defaultType"`
+	RequireApproval bool     `json:"requireApproval"`
 }
 
 type NodeExporterHost struct {
@@ -240,7 +241,7 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 		result.Hosts = append(result.Hosts, *host)
 	}
 	if len(items) > 0 {
-		ingestResult, err := s.Ingest(IngestInput{Source: "node-exporter", Scope: strings.Join(in.CIDRs, ","), Items: items})
+		ingestResult, err := s.Ingest(IngestInput{Source: "node-exporter", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
 		if err != nil {
 			return result, err
 		}

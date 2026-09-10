@@ -62,9 +62,20 @@ type CreateTaskInput struct {
 	Scope  string `json:"scope"`
 }
 type IngestInput struct {
-	Source string           `json:"source"`
-	Scope  string           `json:"scope"`
-	Items  []DiscoveredItem `json:"items"`
+	Source          string           `json:"source"`
+	Scope           string           `json:"scope"`
+	Items           []DiscoveredItem `json:"items"`
+	RequireApproval bool             `json:"requireApproval"`
+}
+
+type PendingItem struct {
+	TaskID string `json:"taskId"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	IP     string `json:"ip"`
+	Type   string `json:"type"`
+	Source string `json:"source"`
+	State  string `json:"state"`
 }
 type IngestResult struct {
 	TaskID    string `json:"taskId"`
@@ -448,6 +459,17 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		}
 	}
 	s.mu.Unlock()
+	if in.RequireApproval {
+		s.mu.Lock()
+		if index < len(s.tasks) {
+			s.tasks[index].Status = "pending-approval"
+			s.tasks[index].Discovered = len(s.tasks[index].Items)
+			_ = s.persistTask(s.tasks[index])
+		}
+		s.mu.Unlock()
+		result.Accepted = len(pending)
+		return result, nil
+	}
 	handled := map[string]bool{}
 
 	for _, item := range pending {
@@ -486,6 +508,71 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 	}
 	s.mu.Unlock()
 	return result, nil
+}
+
+func (s *Service) PendingList() []PendingItem {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []PendingItem{}
+	for _, task := range s.tasks {
+		for _, item := range task.Items {
+			if item.State == "pending" {
+				out = append(out, PendingItem{TaskID: task.ID, ID: item.ID, Name: item.Name, IP: item.IP, Type: item.Type, Source: task.Source, State: item.State})
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) ApprovePending(itemID string) (string, error) {
+	s.mu.RLock()
+	var item DiscoveredItem
+	source, taskIndex, itemIndex := "", -1, -1
+	for i := range s.tasks {
+		for j := range s.tasks[i].Items {
+			if s.tasks[i].Items[j].ID == itemID && s.tasks[i].Items[j].State == "pending" {
+				item = s.tasks[i].Items[j]
+				source = s.tasks[i].Source
+				taskIndex, itemIndex = i, j
+			}
+		}
+	}
+	s.mu.RUnlock()
+	if taskIndex < 0 {
+		return "", ErrNotFound
+	}
+	status, err := s.importDiscovered(item, source)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	s.tasks[taskIndex].Items[itemIndex].State = "imported"
+	s.tasks[taskIndex].Status = "completed"
+	s.tasks[taskIndex].Imported++
+	_ = s.persistTask(s.tasks[taskIndex])
+	s.mu.Unlock()
+	if s.db != nil {
+		_, _ = s.db.Exec("UPDATE discovery_items SET state='imported' WHERE id=$1", itemID)
+	}
+	return status, nil
+}
+
+func (s *Service) RejectPending(itemID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.tasks {
+		for j := range s.tasks[i].Items {
+			if s.tasks[i].Items[j].ID == itemID && s.tasks[i].Items[j].State == "pending" {
+				s.tasks[i].Items[j].State = "rejected"
+				_ = s.persistTask(s.tasks[i])
+				if s.db != nil {
+					_, _ = s.db.Exec("UPDATE discovery_items SET state='rejected' WHERE id=$1", itemID)
+				}
+				return nil
+			}
+		}
+	}
+	return ErrNotFound
 }
 
 func (s *Service) RunTask(id string) (Task, error) {
