@@ -13,6 +13,8 @@ func TestAuditActionAndTarget(t *testing.T) {
 		target string
 	}{
 		{http.MethodPatch, "/api/v1/cmdb/assets/srv-001", "cmdb.asset.update", "srv-001"},
+		{http.MethodPost, "/api/v1/discovery/scan-ssh", "discovery.scan.ssh", "scan-ssh"},
+		{http.MethodPost, "/api/v1/discovery/scan-node-exporter", "discovery.scan.node_exporter", "scan-node-exporter"},
 		{http.MethodPost, "/api/v1/discovery/agent-install", "discovery.agent.install", "agent-install"},
 		{http.MethodPost, "/api/v1/discovery/agent-uninstall", "discovery.agent.uninstall", "agent-uninstall"},
 		{http.MethodPost, "/api/v1/discovery/remote-executions", "discovery.remote_execution.create", "remote-executions"},

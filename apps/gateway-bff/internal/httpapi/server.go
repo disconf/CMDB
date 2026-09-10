@@ -374,8 +374,7 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-snmp", func(w http.ResponseWriter, r *http.Request) {
-		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+		if !authorize(w, r, authService, "discovery:manage") {
 			return
 		}
 		var in discovery.SNMPScanInput
@@ -391,8 +390,7 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-ssh", func(w http.ResponseWriter, r *http.Request) {
-		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+		if !authorize(w, r, authService, "discovery:manage") {
 			return
 		}
 		var in discovery.SSHScanInput
@@ -408,8 +406,7 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-node-exporter", func(w http.ResponseWriter, r *http.Request) {
-		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+		if !authorize(w, r, authService, "discovery:manage") {
 			return
 		}
 		var in discovery.NodeExporterScanInput

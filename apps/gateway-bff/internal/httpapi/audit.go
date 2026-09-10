@@ -70,7 +70,6 @@ func shouldAuditMutation(method, path string) bool {
 		"/api/v1/agent/report",
 		"/api/v1/monitor/alerts/webhook",
 		"/api/v1/discovery/ingest",
-		"/api/v1/discovery/scan-",
 		"/api/v1/discovery/pending/",
 		"/api/v1/credentials",
 	}
@@ -96,6 +95,12 @@ func auditAction(method, path string) string {
 		return "cmdb.model.update"
 	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/cmdb/models/"):
 		return "cmdb.model.toggle"
+	case method == http.MethodPost && path == "/api/v1/discovery/scan-node-exporter":
+		return "discovery.scan.node_exporter"
+	case method == http.MethodPost && path == "/api/v1/discovery/scan-ssh":
+		return "discovery.scan.ssh"
+	case method == http.MethodPost && path == "/api/v1/discovery/scan-snmp":
+		return "discovery.scan.snmp"
 	case method == http.MethodPost && path == "/api/v1/discovery/remote-executions":
 		return "discovery.remote_execution.create"
 	case method == http.MethodPost && strings.HasSuffix(path, "/approve") && strings.HasPrefix(path, "/api/v1/discovery/remote-executions/"):
