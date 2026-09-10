@@ -26,3 +26,20 @@ x86_64
 		t.Fatalf("disk=%d", h.DiskBytes)
 	}
 }
+
+func TestParseSSHInventoryVirtualization(t *testing.T) {
+	out := "vm-host\n\"Ubuntu 22.04\"\n5.15.0\nx86_64\n4\n8388608\n10737418240\n1718726400\nvmware"
+	h := parseSSHInventory("10.0.0.10", out)
+	if h == nil || !h.Virtual {
+		t.Fatalf("expected virtual host: %+v", h)
+	}
+	found := false
+	for _, item := range h.Attributes {
+		if item.Name == "virtualization_type" && item.Value == "vmware" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("virtualization attribute missing: %+v", h.Attributes)
+	}
+}

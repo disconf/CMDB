@@ -69,6 +69,9 @@ func parseSSHInventory(ip string, output string) *NodeExporterHost {
 	if host.BootTime != "" {
 		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "boot_time", Label: "启动时间", Value: host.BootTime})
 	}
+	if virt != "" && virt != "none" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "virtualization_type", Label: "虚拟化类型", Value: virt})
+	}
 	return host
 }
 
@@ -238,9 +241,6 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 		return result, errors.New("CMDB_SSH_USERNAME/CMDB_SSH_PASSWORD not configured")
 	}
 	defaultType := strings.TrimSpace(in.DefaultType)
-	if defaultType == "" {
-		defaultType = "physical-server"
-	}
 	var targets []string
 	for _, cidr := range in.CIDRs {
 		ips, err := expandCIDR(cidr)
@@ -276,11 +276,19 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 	result.Found = len(found)
 	items := make([]DiscoveredItem, 0, len(found))
 	for _, host := range found {
+		itemType := defaultType
+		if itemType == "" {
+			if host.Virtual {
+				itemType = "virtual-machine"
+			} else {
+				itemType = "physical-server"
+			}
+		}
 		item := DiscoveredItem{
 			ID:         "ssh-" + strings.ReplaceAll(host.IP, ".", "-"),
 			Name:       host.Name,
 			IP:         host.IP,
-			Type:       defaultType,
+			Type:       itemType,
 			Confidence: 95,
 			Attributes: host.Attributes,
 		}

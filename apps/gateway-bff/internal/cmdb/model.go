@@ -149,6 +149,27 @@ type ImportResult struct {
 	Errors  []ImportError `json:"errors"`
 }
 
+type K8sNamespaceInventory struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Status    string         `json:"status"`
+	Counts    map[string]int `json:"counts"`
+	Resources []Asset        `json:"resources"`
+}
+type K8sClusterInventory struct {
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Status           string                  `json:"status"`
+	Version          string                  `json:"version,omitempty"`
+	NamespaceCount   int                     `json:"namespaceCount"`
+	Counts           map[string]int          `json:"counts"`
+	Namespaces       []K8sNamespaceInventory `json:"namespaces"`
+	ClusterResources []Asset                 `json:"clusterResources"`
+}
+type K8sInventory struct {
+	Clusters []K8sClusterInventory `json:"clusters"`
+}
+
 type Analytics struct {
 	Status       Summary        `json:"status"`
 	ByType       []TypeCount    `json:"byType"`

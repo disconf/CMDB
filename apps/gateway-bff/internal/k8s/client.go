@@ -194,6 +194,55 @@ type ServiceResource struct {
 		} `json:"ports"`
 	} `json:"spec"`
 }
+type PersistentVolumeClaim struct {
+	Metadata ObjectMeta `json:"metadata"`
+	Spec     struct {
+		VolumeName       string   `json:"volumeName"`
+		StorageClassName string   `json:"storageClassName"`
+		AccessModes      []string `json:"accessModes"`
+		Resources        struct {
+			Requests map[string]string `json:"requests"`
+		} `json:"resources"`
+	} `json:"spec"`
+	Status struct {
+		Phase    string            `json:"phase"`
+		Capacity map[string]string `json:"capacity"`
+	} `json:"status"`
+}
+type PersistentVolume struct {
+	Metadata ObjectMeta `json:"metadata"`
+	Spec     struct {
+		StorageClassName string            `json:"storageClassName"`
+		AccessModes      []string          `json:"accessModes"`
+		Capacity         map[string]string `json:"capacity"`
+		ClaimRef         *struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"claimRef"`
+	} `json:"spec"`
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+type StorageClass struct {
+	Metadata             ObjectMeta `json:"metadata"`
+	Provisioner          string     `json:"provisioner"`
+	ReclaimPolicy        string     `json:"reclaimPolicy"`
+	VolumeBindingMode    string     `json:"volumeBindingMode"`
+	AllowVolumeExpansion *bool      `json:"allowVolumeExpansion"`
+}
+type PVCList struct {
+	Metadata ListMeta                `json:"metadata"`
+	Items    []PersistentVolumeClaim `json:"items"`
+}
+type PVList struct {
+	Metadata ListMeta           `json:"metadata"`
+	Items    []PersistentVolume `json:"items"`
+}
+type StorageClassList struct {
+	Metadata ListMeta       `json:"metadata"`
+	Items    []StorageClass `json:"items"`
+}
 type Ingress struct {
 	Metadata ObjectMeta `json:"metadata"`
 	Spec     struct {

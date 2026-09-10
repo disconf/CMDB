@@ -61,3 +61,24 @@ func TestCurrentUserRejectsUnknownToken(t *testing.T) {
 		t.Fatalf("expected unauthorized, got %v", err)
 	}
 }
+
+func TestSameAccountCanCreateMultipleSessions(t *testing.T) {
+	service := NewService()
+	first, err := service.Login("admin", "admin123")
+	if err != nil {
+		t.Fatalf("first login: %v", err)
+	}
+	second, err := service.Login("admin", "admin123")
+	if err != nil {
+		t.Fatalf("second login: %v", err)
+	}
+	if first.Token == second.Token {
+		t.Fatal("concurrent sessions must use independent tokens")
+	}
+	for _, session := range []Session{first, second} {
+		user, err := service.CurrentUser(session.Token)
+		if err != nil || user.Username != "admin" {
+			t.Fatalf("session %s invalid: %+v %v", session.Token, user, err)
+		}
+	}
+}

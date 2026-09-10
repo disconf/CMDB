@@ -24,6 +24,12 @@
 - [ ] 选择本地 CSV 上传；勾选 upsert 后重复(同编号/IP)更新而非报错
 - [ ] 导入结果显示 成功/更新/错误行
 
+## 4.1 资产导航与服务器分组
+- [ ] CMDB 左侧出现“服务器”聚合菜单，物理机、虚拟机和 K8s Node 同列表展示
+- [ ] K8s Pod 不出现在“服务器”分组中，只在 K8s 管理视图显示
+- [ ] SSH 自动采集时执行 `systemd-detect-virt`，`none` 归为物理机，其他归为虚拟机
+- [ ] 虚拟机扩展属性包含 `virtualization_type`
+
 ## 5. 自动发现/采集
 - [ ] 主机列表：全部资产=物理+虚拟混合，左侧可按类型筛选
 - [ ] Agent 纳管主机显示在线；SSH/批量安装面板有“自动识别”
@@ -67,6 +73,10 @@
 - [ ] 提交和审批均出现在审计日志
 
 ## 11. Kubernetes 资源采集
+- [ ] CMDB 左侧“K8s 集群”作为独立一级分组，不与其他 CI 模型混排
+- [ ] 选择集群后展示命名空间二级菜单
+- [ ] 进入命名空间后可分组查看 Pod、Service、Workload、PVC、Ingress
+- [ ] 集群级资源可查看 Node、PV、StorageClass
 - [ ] “Agent 与自动发现 → K8s 资源”显示采集器可用、集群名称和 Kubernetes 版本
 - [ ] 点击“立即同步到 CMDB”返回总数、新增、更新、未变化和失败数量
 - [ ] CMDB 中可筛选 K8s 集群、Namespace、Workload、Pod、Service、Ingress 模型

@@ -47,7 +47,7 @@ func NewService() *Service {
 		asset("redis-prod-01", "session-redis", "middleware", "中间件", "online", "10.23.3.41", "生产", "核心系统组", "吴涛", "Redis Cluster / session", "Agent", []string{"Redis", "会话"}),
 		asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
 	}
-	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
 	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry)}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
@@ -145,6 +145,25 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "service_type", Label: "Service 类型", Type: "text"},
 		{Name: "cluster_ip", Label: "Cluster IP", Type: "text"},
 		{Name: "ports", Label: "端口", Type: "text"},
+	},
+	"k8s-pvc": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "namespace", Label: "命名空间", Type: "text"},
+		{Name: "storage_class", Label: "存储类", Type: "text"},
+		{Name: "capacity", Label: "容量", Type: "text"},
+		{Name: "volume_phase", Label: "PVC 状态", Type: "text"},
+	},
+	"k8s-pv": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "storage_class", Label: "存储类", Type: "text"},
+		{Name: "capacity", Label: "容量", Type: "text"},
+		{Name: "volume_phase", Label: "PV 状态", Type: "text"},
+	},
+	"k8s-storageclass": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "provisioner", Label: "Provisioner", Type: "text"},
+		{Name: "reclaim_policy", Label: "回收策略", Type: "text"},
+		{Name: "volume_binding_mode", Label: "绑定模式", Type: "text"},
 	},
 	"k8s-ingress": {
 		{Name: "cluster_name", Label: "集群名称", Type: "text"},
@@ -389,8 +408,14 @@ func (s *Service) ListAssets(q AssetQuery) AssetPage {
 		if search != "" && !strings.Contains(strings.ToLower(a.Name+" "+a.ID+" "+a.IP), search) {
 			continue
 		}
-		if q.Type != "" && a.Type != q.Type {
-			continue
+		if q.Type != "" {
+			typeMatches := a.Type == q.Type
+			if q.Type == "server" {
+				typeMatches = a.Type == "physical-server" || a.Type == "virtual-machine" || a.Type == "k8s-node"
+			}
+			if !typeMatches {
+				continue
+			}
 		}
 		if q.Status != "" && a.Status != q.Status {
 			continue
@@ -920,6 +945,87 @@ func (s *Service) ImportAssets(rows []CreateAssetInput, upsert bool, operator st
 }
 
 // Analytics returns inventory reports (status/type/group/source/completeness).
+func (s *Service) KubernetesInventory() K8sInventory {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	clusters := map[string]*K8sClusterInventory{}
+	for _, asset := range s.assets {
+		if asset.Type != "k8s-cluster" {
+			continue
+		}
+		clusters[asset.ID] = &K8sClusterInventory{ID: asset.ID, Name: asset.Name, Status: asset.Status, Version: attrValue(asset.Attributes, "k8s_version"), Counts: map[string]int{}, Namespaces: []K8sNamespaceInventory{}, ClusterResources: []Asset{}}
+	}
+	for _, asset := range s.assets {
+		if asset.Type != "k8s-namespace" {
+			continue
+		}
+		cluster := clusterForAsset(clusters, asset)
+		if cluster == nil {
+			continue
+		}
+		cluster.Namespaces = append(cluster.Namespaces, K8sNamespaceInventory{ID: asset.ID, Name: asset.Name, Status: asset.Status, Counts: map[string]int{}, Resources: []Asset{}})
+	}
+	for _, asset := range s.assets {
+		if !strings.HasPrefix(asset.Type, "k8s-") || asset.Type == "k8s-cluster" || asset.Type == "k8s-namespace" {
+			continue
+		}
+		cluster := clusterForAsset(clusters, asset)
+		if cluster == nil {
+			continue
+		}
+		namespace := attrValue(asset.Attributes, "namespace")
+		if namespace == "" {
+			cluster.ClusterResources = append(cluster.ClusterResources, asset)
+			cluster.Counts[asset.Type]++
+			continue
+		}
+		for i := range cluster.Namespaces {
+			if cluster.Namespaces[i].Name == namespace {
+				cluster.Namespaces[i].Resources = append(cluster.Namespaces[i].Resources, asset)
+				cluster.Namespaces[i].Counts[asset.Type]++
+				break
+			}
+		}
+	}
+	out := K8sInventory{Clusters: []K8sClusterInventory{}}
+	for _, cluster := range clusters {
+		cluster.NamespaceCount = len(cluster.Namespaces)
+		sort.Slice(cluster.Namespaces, func(i, j int) bool { return cluster.Namespaces[i].Name < cluster.Namespaces[j].Name })
+		sort.Slice(cluster.ClusterResources, func(i, j int) bool {
+			if cluster.ClusterResources[i].Type == cluster.ClusterResources[j].Type {
+				return cluster.ClusterResources[i].Name < cluster.ClusterResources[j].Name
+			}
+			return cluster.ClusterResources[i].Type < cluster.ClusterResources[j].Type
+		})
+		for i := range cluster.Namespaces {
+			sort.Slice(cluster.Namespaces[i].Resources, func(a, b int) bool {
+				if cluster.Namespaces[i].Resources[a].Type == cluster.Namespaces[i].Resources[b].Type {
+					return cluster.Namespaces[i].Resources[a].Name < cluster.Namespaces[i].Resources[b].Name
+				}
+				return cluster.Namespaces[i].Resources[a].Type < cluster.Namespaces[i].Resources[b].Type
+			})
+		}
+		out.Clusters = append(out.Clusters, *cluster)
+	}
+	sort.Slice(out.Clusters, func(i, j int) bool { return out.Clusters[i].Name < out.Clusters[j].Name })
+	return out
+}
+
+func clusterForAsset(clusters map[string]*K8sClusterInventory, asset Asset) *K8sClusterInventory {
+	name := attrValue(asset.Attributes, "cluster_name")
+	for _, cluster := range clusters {
+		if cluster.Name == name {
+			return cluster
+		}
+	}
+	if len(clusters) == 1 {
+		for _, cluster := range clusters {
+			return cluster
+		}
+	}
+	return nil
+}
+
 func (s *Service) Analytics() Analytics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

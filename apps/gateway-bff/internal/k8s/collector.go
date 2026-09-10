@@ -11,15 +11,18 @@ import (
 )
 
 type Snapshot struct {
-	Version      Version
-	Nodes        []Node
-	Namespaces   []Namespace
-	Deployments  []Workload
-	StatefulSets []Workload
-	DaemonSets   []Workload
-	Pods         []Pod
-	Services     []ServiceResource
-	Ingresses    []Ingress
+	Version        Version
+	Nodes          []Node
+	Namespaces     []Namespace
+	Deployments    []Workload
+	StatefulSets   []Workload
+	DaemonSets     []Workload
+	Pods           []Pod
+	Services       []ServiceResource
+	Ingresses      []Ingress
+	PVCs           []PersistentVolumeClaim
+	PVs            []PersistentVolume
+	StorageClasses []StorageClass
 }
 
 type RelationRef struct {
@@ -77,6 +80,21 @@ func (c *Client) Collect(ctx context.Context) (Snapshot, error) {
 		return snapshot, err
 	}
 	snapshot.Ingresses = ingresses.Items
+	var pvcs PVCList
+	if err := c.get(ctx, "/api/v1/persistentvolumeclaims", &pvcs); err != nil {
+		return snapshot, err
+	}
+	snapshot.PVCs = pvcs.Items
+	var pvs PVList
+	if err := c.get(ctx, "/api/v1/persistentvolumes", &pvs); err != nil {
+		return snapshot, err
+	}
+	snapshot.PVs = pvs.Items
+	var storageClasses StorageClassList
+	if err := c.get(ctx, "/apis/storage.k8s.io/v1/storageclasses", &storageClasses); err != nil {
+		return snapshot, err
+	}
+	snapshot.StorageClasses = storageClasses.Items
 	return snapshot, nil
 }
 
@@ -123,7 +141,41 @@ func BuildResources(clusterName, apiServer string, snapshot Snapshot) []Resource
 		}
 		resources = append(resources, Resource{Key: "ingress/" + namespace + "/" + name, Asset: cmdb.CreateAssetInput{ID: "k8s-ingress/" + namespace + "/" + name, Name: name, Type: "k8s-ingress", Status: status, Environment: "生产", ProjectGroup: "Kubernetes", Owner: "待分配", Location: clusterName + " / " + namespace, Source: "kubernetes", Tags: []string{"K8s", "Ingress", namespace}, Attributes: attrs(map[string]string{"cluster_name": clusterName, "namespace": namespace, "hosts": ingressHosts(ingress), "load_balancer": ingressLB(ingress)})}, Relations: []RelationRef{{Type: "belongs-to", TargetKey: "namespace/" + namespace}}})
 	}
+	for _, pvc := range snapshot.PVCs {
+		namespace, name, status := pvc.Metadata.Namespace, pvc.Metadata.Name, volumeStatus(pvc.Status.Phase)
+		resources = append(resources, Resource{
+			Key:       "pvc/" + namespace + "/" + name,
+			Asset:     cmdb.CreateAssetInput{ID: "k8s-pvc/" + namespace + "/" + name, Name: name, Type: "k8s-pvc", Status: status, Environment: "生产", ProjectGroup: "Kubernetes", Owner: "待分配", Location: clusterName + " / " + namespace, Source: "kubernetes", Tags: []string{"K8s", "Storage", namespace}, Attributes: attrs(map[string]string{"cluster_name": clusterName, "namespace": namespace, "volume_name": pvc.Spec.VolumeName, "storage_class": pvc.Spec.StorageClassName, "access_modes": strings.Join(pvc.Spec.AccessModes, ","), "requested_storage": pvc.Spec.Resources.Requests["storage"], "capacity": pvc.Status.Capacity["storage"], "volume_phase": pvc.Status.Phase})},
+			Relations: []RelationRef{{Type: "belongs-to", TargetKey: "namespace/" + namespace}},
+		})
+	}
+	for _, pv := range snapshot.PVs {
+		name, status := pv.Metadata.Name, volumeStatus(pv.Status.Phase)
+		relations := []RelationRef{}
+		if pv.Spec.StorageClassName != "" {
+			relations = append(relations, RelationRef{Type: "belongs-to", TargetKey: "storageclass/" + pv.Spec.StorageClassName})
+		}
+		resources = append(resources, Resource{
+			Key:       "pv/" + name,
+			Asset:     cmdb.CreateAssetInput{ID: "k8s-pv/" + name, Name: name, Type: "k8s-pv", Status: status, Environment: "生产", ProjectGroup: "Kubernetes", Owner: "待分配", Location: clusterName + " / Storage", Source: "kubernetes", Tags: []string{"K8s", "Storage", "PV"}, Attributes: attrs(map[string]string{"cluster_name": clusterName, "storage_class": pv.Spec.StorageClassName, "access_modes": strings.Join(pv.Spec.AccessModes, ","), "capacity": pv.Spec.Capacity["storage"], "volume_phase": pv.Status.Phase})},
+			Relations: relations,
+		})
+	}
+	for _, storageClass := range snapshot.StorageClasses {
+		name := storageClass.Metadata.Name
+		resources = append(resources, Resource{Key: "storageclass/" + name, Asset: cmdb.CreateAssetInput{ID: "k8s-storageclass/" + name, Name: name, Type: "k8s-storageclass", Status: "online", Environment: "生产", ProjectGroup: "Kubernetes", Owner: "待分配", Location: clusterName + " / StorageClass", Source: "kubernetes", Tags: []string{"K8s", "Storage", "StorageClass"}, Attributes: attrs(map[string]string{"cluster_name": clusterName, "provisioner": storageClass.Provisioner, "reclaim_policy": storageClass.ReclaimPolicy, "volume_binding_mode": storageClass.VolumeBindingMode})}})
+	}
 	return resources
+}
+
+func volumeStatus(phase string) string {
+	if strings.EqualFold(phase, "Bound") {
+		return "online"
+	}
+	if strings.EqualFold(phase, "Available") {
+		return "online"
+	}
+	return "warning"
 }
 
 func workloadResource(kind string, workload Workload, clusterName string) Resource {

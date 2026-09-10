@@ -215,6 +215,12 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, item)
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/kubernetes", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.KubernetesInventory())
+	})
 	mux.HandleFunc("GET /api/v1/cmdb/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return

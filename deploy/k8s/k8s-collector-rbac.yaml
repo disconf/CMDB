@@ -18,6 +18,8 @@ rules:
   - namespaces
   - pods
   - services
+  - persistentvolumeclaims
+  - persistentvolumes
   verbs:
   - get
   - list
@@ -43,6 +45,13 @@ rules:
   - networking.k8s.io
   resources:
   - ingresses
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
   verbs:
   - get
   - list
