@@ -85,6 +85,34 @@ kind: Service
 metadata: {name: alertmanager, namespace: monitoring}
 spec: {selector: {app: alertmanager}, ports: [{name: http, port: 9093, targetPort: 9093}]}
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: snmp-exporter, namespace: monitoring}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: snmp-exporter}}
+  template:
+    metadata: {labels: {app: snmp-exporter}}
+    spec:
+      securityContext: {runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532}
+      imagePullSecrets: [{name: cmdb-registry}]
+      containers:
+      - name: snmp-exporter
+        image: harbor.qa.bcavt.com/cmdb/snmp-exporter:0.30.1
+        ports: [{name: http, containerPort: 9116}]
+        volumeMounts:
+        - {name: config, mountPath: /etc/snmp_exporter, readOnly: true}
+        readinessProbe: {httpGet: {path: /-/healthy, port: 9116}, initialDelaySeconds: 5, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /-/healthy, port: 9116}, initialDelaySeconds: 10, periodSeconds: 15}
+        resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 300m, memory: 256Mi}}
+      volumes:
+      - {name: config, secret: {secretName: snmp-exporter-config}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: snmp-exporter, namespace: monitoring}
+spec: {selector: {app: snmp-exporter}, ports: [{name: http, port: 9116, targetPort: 9116}]}
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: {name: grafana-data, namespace: monitoring}

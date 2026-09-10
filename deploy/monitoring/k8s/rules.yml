@@ -36,3 +36,17 @@ groups:
         annotations:
           summary: "主机磁盘空间不足"
           description: "主机 {{ $labels.instance }} 根分区使用率已超过 85%。"
+      - alert: CMDBDeviceDown
+        expr: up{job="cmdb-snmp"} == 0
+        for: 2m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "CMDB 纳管网络设备不可用"
+          description: "设备 {{ $labels.asset_name }}（{{ $labels.instance }}）已不可用超过 2 分钟。"
+      - alert: NetworkInterfaceDown
+        expr: ifOperStatus{job="cmdb-snmp"} != 1
+        for: 5m
+        labels: {severity: warning, category: availability}
+        annotations:
+          summary: "网络设备接口 Down"
+          description: "设备 {{ $labels.asset_name }} 接口 {{ $labels.ifName }} 已 Down 超过 5 分钟。"

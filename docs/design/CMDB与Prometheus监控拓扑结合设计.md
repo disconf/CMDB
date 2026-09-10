@@ -11,6 +11,9 @@
 - Alertmanager 告警触发与恢复事件均已通过网关 Webhook 回写 CMDB，告警中心可查询 `firing/resolved` 状态。
 - Grafana 的 Prometheus 数据源已创建，并可通过数据源代理查询 `up` 指标。
 - Prometheus 服务发现接口已启用 Agent Token 鉴权；Alertmanager Webhook 对 `endsAt`、`generatorURL` 等标准字段做兼容接收。
+- 已部署 `snmp_exporter:0.30.1`，CMDB 新增 `/api/v1/monitor/service-discovery/snmp`；真实 SNMP 设备 `172.31.42.124` 已作为 Prometheus 动态目标，设备和接口指标采集正常。
+- 拓扑中心已改为读取 CMDB 真实资产与关系；SNMP 扫描支持采集 LLDP 邻居并生成设备链路，未识别的邻居会作为待完善节点展示。
+- Grafana 已增加“CMDB 网络设备监控”大盘，展示设备状态、接口流量、错误、丢弃和接口 Up/Down。
 
 ## 1. 核心结论（先记住三条）
 

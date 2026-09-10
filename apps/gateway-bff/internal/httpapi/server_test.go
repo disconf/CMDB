@@ -74,6 +74,24 @@ func TestPrometheusServiceDiscoveryEndpoint(t *testing.T) {
 	}
 }
 
+func TestPrometheusSNMPServiceDiscoveryEndpoint(t *testing.T) {
+	t.Setenv("AGENT_SHARED_TOKEN", "prometheus-snmp-discovery-token")
+	server := NewServer()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/monitor/service-discovery/snmp", nil)
+	request.Header.Set("Authorization", "Bearer prometheus-snmp-discovery-token")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected SNMP service discovery 200, got %d", recorder.Code)
+	}
+	var groups []map[string]any
+	if err := json.NewDecoder(recorder.Body).Decode(&groups); err != nil {
+		t.Fatalf("decode SNMP service discovery response: %v", err)
+	}
+	if groups == nil {
+		t.Fatal("SNMP service discovery response must be a JSON array")
+	}
+}
 func TestHostMonitoringEndpointRequiresAuthAndValidAsset(t *testing.T) {
 	server := NewServer()
 	unauthorized := httptest.NewRecorder()

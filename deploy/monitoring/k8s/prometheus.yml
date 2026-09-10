@@ -40,3 +40,24 @@ scrape_configs:
         target_label: cmdb_asset_id
       - source_labels: [asset_name]
         target_label: instance
+
+  - job_name: cmdb-snmp
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      auth: [public_v2]
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/snmp
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: snmp-exporter.monitoring.svc.cluster.local:9116
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: asset_name

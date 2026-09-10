@@ -1,0 +1,85 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "count(up{job=\"cmdb-snmp\"})", "refId": "A"}],
+      "title": "纳管网络设备",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(up{job=\"cmdb-snmp\"})", "refId": "A"}],
+      "title": "设备在线",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "count(up{job=\"cmdb-snmp\"} == 0) or vector(0)", "refId": "A"}],
+      "title": "设备离线",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "bps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 4,
+      "options": {"legend": {"displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "rate(ifHCInOctets{job=\"cmdb-snmp\"}[5m]) * 8", "legendFormat": "{{asset_name}} {{ifName}} 入", "refId": "A"},
+        {"expr": "rate(ifHCOutOctets{job=\"cmdb-snmp\"}[5m]) * 8", "legendFormat": "{{asset_name}} {{ifName}} 出", "refId": "B"}
+      ],
+      "title": "接口流量",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"unit": "pps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "id": 5,
+      "options": {"legend": {"displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "rate(ifInErrors{job=\"cmdb-snmp\"}[5m])", "legendFormat": "{{asset_name}} {{ifName}} 入错误", "refId": "A"},
+        {"expr": "rate(ifOutErrors{job=\"cmdb-snmp\"}[5m])", "legendFormat": "{{asset_name}} {{ifName}} 出错误", "refId": "B"},
+        {"expr": "rate(ifInDiscards{job=\"cmdb-snmp\"}[5m])", "legendFormat": "{{asset_name}} {{ifName}} 入丢弃", "refId": "C"}
+      ],
+      "title": "接口错误与丢弃",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"1": {"color": "green", "text": "Up"}}, "type": "value"}, {"options": {"2": {"color": "red", "text": "Down"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 12},
+      "id": 6,
+      "options": {"footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true},
+      "targets": [{"expr": "ifOperStatus{job=\"cmdb-snmp\"}", "format": "table", "instant": true, "refId": "A"}],
+      "title": "接口运行状态",
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "__name__": true, "job": true, "service": true}, "renameByName": {"Value": "状态", "asset_name": "设备", "ifName": "接口", "ifDescr": "接口描述", "ifAlias": "别名", "instance": "设备IP"}}}],
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["CMDB", "SNMP", "Network"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "CMDB 网络设备监控",
+  "uid": "cmdb-network-overview",
+  "version": 1
+}

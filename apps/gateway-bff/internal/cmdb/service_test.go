@@ -107,6 +107,22 @@ func TestUpsertAgentAssetPreservesExporterAttributes(t *testing.T) {
 		t.Fatalf("expected preserved exporter target, got %#v", targets)
 	}
 }
+func TestPrometheusSNMPTargetGroupsOnlyIncludeSNMPDiscovered(t *testing.T) {
+	service := NewService()
+	if got := service.PrometheusSNMPTargetGroups(); len(got) != 0 {
+		t.Fatalf("demo network device must not be monitored without SNMP discovery: %#v", got)
+	}
+	if _, err := service.MergeHostInventory("net-sw-001", "snmp", []Attribute{{Name: "snmp_discovered", Label: "SNMP发现", Value: "true"}}); err != nil {
+		t.Fatalf("merge snmp discovery: %v", err)
+	}
+	targets := service.PrometheusSNMPTargetGroups()
+	if len(targets) != 1 || targets[0].Targets[0] != "10.10.0.2" {
+		t.Fatalf("unexpected SNMP targets: %#v", targets)
+	}
+	if targets[0].Labels["asset_id"] != "net-sw-001" || targets[0].Labels["service"] != "network-device" {
+		t.Fatalf("missing SNMP labels: %#v", targets[0].Labels)
+	}
+}
 func TestMonitoringAssetsIncludeOfflineAgentAssets(t *testing.T) {
 	service := NewService()
 	_, _ = service.UpsertAgentAsset(AgentAssetInput{ID: "agent-offline", Hostname: "offline-host", IP: "10.88.0.12"})

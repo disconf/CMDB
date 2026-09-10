@@ -1,6 +1,6 @@
 # CMDB 监控底座部署
 
-监控组件部署在 `monitoring` 命名空间，包含 Prometheus、Alertmanager 和 Grafana。Prometheus 通过 CMDB HTTP 服务发现获取 `node_exporter` 目标，Alertmanager 通过网关 Webhook 将告警写回 CMDB。
+监控组件部署在 `monitoring` 命名空间，包含 Prometheus、Alertmanager、snmp_exporter 和 Grafana。Prometheus 通过 CMDB HTTP 服务发现获取 `node_exporter` 目标，Alertmanager 通过网关 Webhook 将告警写回 CMDB。
 
 ## 前置配置
 
@@ -20,6 +20,13 @@ kubectl -n monitoring create secret generic grafana-admin `
   --from-literal=admin-password='<grafana-password>'
 ```
 
+将 `snmp-exporter.yml.template` 复制为 `snmp-exporter.yml`，替换 `__SNMP_COMMUNITY__` 后创建 Secret：
+
+```powershell
+kubectl -n monitoring create secret generic snmp-exporter-config `
+  --from-file=snmp.yml=snmp-exporter.yml
+```
+
 ## 配置与部署
 
 ```powershell
@@ -35,10 +42,12 @@ kubectl -n monitoring create configmap grafana-datasources `
   --from-file=grafana-datasource.yml=grafana-datasource.yml --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n monitoring create configmap grafana-dashboards `
   --from-file=grafana-dashboards.yml=grafana-dashboards.yml `
-  --from-file=cmdb-host-overview.json=grafana-host-dashboard.json --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=cmdb-host-overview.json=grafana-host-dashboard.json `
+  --from-file=cmdb-network-overview.json=grafana-network-dashboard.json --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n monitoring rollout status deployment/prometheus
 kubectl -n monitoring rollout status deployment/alertmanager
+kubectl -n monitoring rollout status deployment/snmp-exporter
 kubectl -n monitoring rollout status deployment/grafana
 ```
 
@@ -56,6 +65,8 @@ kubectl -n monitoring port-forward svc/grafana 13000:3000
 - Prometheus `up{job="cmdb-node-exporter"}` 用于确认主机采集状态。
 - Alertmanager 触发和恢复通知会调用 `/api/v1/monitor/alerts/webhook`。
 - Grafana 默认数据源 `Prometheus` 指向 `http://prometheus.monitoring.svc.cluster.local:9090`。
+- `cmdb-snmp` 任务通过 `snmp-exporter.monitoring.svc.cluster.local:9116` 抓取 CMDB 中真实 SNMP 发现的设备。
+- Grafana 自动加载“CMDB 主机监控”和“CMDB 网络设备监控”大盘。
 ## Grafana 访问入口
 
 Grafana 通过现有 APISIX 域名暴露在：

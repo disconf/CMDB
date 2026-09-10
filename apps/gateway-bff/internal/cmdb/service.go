@@ -20,6 +20,9 @@ var runtimeAutoAttrs = map[string]bool{
 	"memory_bytes": true, "disk_bytes": true, "boot_time": true,
 	"agent_version": true, "mac_addresses": true, "virtualization_type": true,
 	"node_exporter_status": true, "node_exporter_port": true, "node_exporter_version": true,
+	"snmp_discovered": true, "sys_descr": true, "sys_name": true, "sys_object_id": true,
+	"management_ip": true, "vendor": true, "model": true, "serial": true, "entity_desc": true,
+	"if_number": true, "bmc_ip": true, "oob": true, "lldp_neighbors": true,
 }
 var ErrValidation = errors.New("validation failed")
 var ErrSlotTaken = errors.New("机柜U位已被占用")
@@ -500,6 +503,33 @@ func (s *Service) FindHostByIP(ip string, exceptID string) string {
 	return ""
 }
 
+func (s *Service) PrometheusSNMPTargetGroups() []PrometheusTargetGroup {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groups := make([]PrometheusTargetGroup, 0)
+	for _, a := range s.assets {
+		if a.Status != "online" || strings.TrimSpace(a.IP) == "" {
+			continue
+		}
+		snmpDiscovered := strings.EqualFold(attrValue(a.Attributes, "snmp_discovered"), "true")
+		hasSNMPInventory := attrValue(a.Attributes, "management_ip") == a.IP && attrValue(a.Attributes, "sys_name") != ""
+		if !snmpDiscovered && !hasSNMPInventory {
+			continue
+		}
+		groups = append(groups, PrometheusTargetGroup{
+			Targets: []string{a.IP},
+			Labels: map[string]string{
+				"asset_id":      a.ID,
+				"asset_name":    a.Name,
+				"environment":   a.Environment,
+				"project_group": a.ProjectGroup,
+				"service":       "network-device",
+				"device_type":   a.TypeName,
+			},
+		})
+	}
+	return groups
+}
 func (s *Service) MergeHostInventory(id, source string, attrs []Attribute) (Asset, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

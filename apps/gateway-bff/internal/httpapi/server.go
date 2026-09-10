@@ -48,7 +48,7 @@ func NewServer() *Server {
 	systemService := system.NewService()
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
-	topologyService := topology.NewService()
+	topologyService := topology.NewServiceWithCMDB(cmdbService)
 	authService := auth.NewService()
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
@@ -72,6 +72,14 @@ func NewServer() *Server {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, cmdbService.PrometheusTargetGroups(os.Getenv("CMDB_NODE_EXPORTER_PORT")))
+	})
+	mux.HandleFunc("GET /api/v1/monitor/service-discovery/snmp", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, cmdbService.PrometheusSNMPTargetGroups())
 	})
 	mux.HandleFunc("POST /api/v1/monitor/alerts/webhook", func(w http.ResponseWriter, r *http.Request) {
 		var payload monitor.WebhookPayload
