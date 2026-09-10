@@ -184,7 +184,7 @@ func (s *Service) AgentBatchUninstall(hosts []string, port int) ([]AgentInstallR
 func AgentBundleVersion() string {
 	v := os.Getenv("CMDB_AGENT_VERSION")
 	if v == "" {
-		return "0.1.1"
+		return "0.1.2"
 	}
 	return v
 }
