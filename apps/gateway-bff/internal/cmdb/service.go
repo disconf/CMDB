@@ -453,11 +453,10 @@ func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
 			continue
 		}
 		exporterStatus := attrValue(a.Attributes, "node_exporter_status")
-		exporterPort := attrValue(a.Attributes, "node_exporter_port")
-		hasExporter := a.Source == "node-exporter" || exporterStatus == "active" || containsValue(a.Tags, "node-exporter")
-		if !hasExporter || exporterStatus == "removed" {
+		if exporterStatus != "active" {
 			continue
 		}
+		exporterPort := attrValue(a.Attributes, "node_exporter_port")
 		targetPort := port
 		if exporterPort != "" {
 			targetPort = exporterPort
@@ -783,15 +782,6 @@ func (s *Service) MarkAgentAssetOffline(id string) error {
 		}
 	}
 	return ErrNotFound
-}
-
-func containsValue(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func mergeRuntimeAttributes(existing, incoming []Attribute) []Attribute {
