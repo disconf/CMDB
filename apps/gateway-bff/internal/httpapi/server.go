@@ -341,6 +341,62 @@ func NewServer() *Server {
 		w.Header().Set("Content-Disposition", "attachment; filename=cmdb-agent")
 		_, _ = w.Write(data)
 	})
+	mux.HandleFunc("GET /api/v1/agent/install/node-exporter/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"version": discovery.NodeExporterVersion()})
+	})
+	mux.HandleFunc("GET /api/v1/agent/install/node-exporter/linux-amd64", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		path := os.Getenv("CMDB_NODE_EXPORTER_BUNDLE_FILE")
+		if path == "" {
+			path = "/node_exporter"
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NODE_EXPORTER_BUNDLE_MISSING"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=node_exporter")
+		_, _ = w.Write(data)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/exporter-install", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in discovery.ExporterInstallInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		result, err := discoveryService.ExporterBatchInstall(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "EXPORTER_INSTALL_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/exporter-uninstall", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in struct {
+			Hosts []string `json:"hosts"`
+			Port  int      `json:"port"`
+		}
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		result, err := discoveryService.ExporterBatchUninstall(in.Hosts, in.Port)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "EXPORTER_UNINSTALL_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/agent-uninstall", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})

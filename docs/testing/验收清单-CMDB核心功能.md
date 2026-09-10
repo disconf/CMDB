@@ -74,5 +74,13 @@
 - [ ] Pod、Workload、Namespace、Service、Ingress 之间存在关系数据
 - [ ] 采集器只使用 get/list 权限，不具备创建、修改、删除 K8s 资源权限
 
+## 12. node_exporter 一键管理
+- [ ] “Agent 与自动发现 → Exporter 管理”显示内置版本与 systemd 托管方式
+- [ ] 输入主机、SSH 端口和自定义 node_exporter 端口后可批量安装/升级
+- [ ] 安装成功后返回 `ACTIVE=active PORT=...`
+- [ ] 使用自定义端口扫描，能够发现该主机并合并到已有 CMDB 资产
+- [ ] CMDB 主机扩展属性出现 Exporter 状态、端口和版本
+- [ ] 卸载操作会停止并移除 node_exporter systemd 服务
+
 ## 备注
 - 各项验收如有失败，记录：步骤/期望/实际/控制台报错。

@@ -45,7 +45,7 @@
 ### P3（更广覆盖）
 - [x] K8s 资源采集器：集群→Node→Namespace→Workload→Pod→Service→Ingress 自动入 CMDB（只读 ServiceAccount）
 - [ ] 云资源同步（阿里/腾讯/AWS/VMware API）
-- [ ] Exporter 管理：一键装/卸 node_exporter(9100) 并自动纳入监控
+- [x] Exporter 管理：一键装/卸 node_exporter，支持自定义端口，并将状态/端口回写 CMDB
 - [ ] 与监控联动：Agent/exporter 离线即告警；采集质量报表
 
 ## 5. 数据模型建议（后续）

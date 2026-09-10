@@ -107,6 +107,10 @@ func auditAction(method, path string) string {
 		return "discovery.remote_execution.create"
 	case method == http.MethodPost && strings.HasSuffix(path, "/approve") && strings.HasPrefix(path, "/api/v1/discovery/remote-executions/"):
 		return "discovery.remote_execution.approve"
+	case method == http.MethodPost && path == "/api/v1/discovery/exporter-install":
+		return "discovery.exporter.install"
+	case method == http.MethodPost && path == "/api/v1/discovery/exporter-uninstall":
+		return "discovery.exporter.uninstall"
 	case method == http.MethodPost && path == "/api/v1/discovery/agent-install":
 		return "discovery.agent.install"
 	case method == http.MethodPost && path == "/api/v1/discovery/agent-uninstall":
