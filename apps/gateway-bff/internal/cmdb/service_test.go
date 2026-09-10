@@ -254,3 +254,14 @@ func TestAnalyticsAndTemplate(t *testing.T) {
 		t.Fatalf("template missing model fields: %s", header)
 	}
 }
+
+func TestReclassifyHostUpdatesType(t *testing.T) {
+	service := NewService()
+	if err := service.ReclassifyHost("srv-prod-001", "virtual-machine", "ssh"); err != nil {
+		t.Fatalf("reclassify: %v", err)
+	}
+	asset, err := service.GetAsset("srv-prod-001")
+	if err != nil || asset.Type != "virtual-machine" || asset.TypeName != "虚拟机" {
+		t.Fatalf("unexpected asset: %+v err=%v", asset, err)
+	}
+}
