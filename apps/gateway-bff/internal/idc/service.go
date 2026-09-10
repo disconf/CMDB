@@ -95,16 +95,17 @@ func (s *Service) ListRooms() ([]Room, error) {
 			for rackRows.Next() {
 				var k Rack
 				if err := rackRows.Scan(&k.ID, &k.ModuleID, &k.Name, &k.UTotal, &k.Voltage); err == nil {
+					k.OccupiedU = []string{}
 					rooms[i].Modules[j].Racks = append(rooms[i].Modules[j].Racks, k)
 				}
 			}
 			rackRows.Close()
-			if n := len(rooms[i].Modules[j].Racks); n > 0 {
-				occupied, err := s.occupiedU(ctx, rooms[i].Modules[j].Racks[n-1].ID)
+			for rackIndex := range rooms[i].Modules[j].Racks {
+				occupied, err := s.occupiedU(ctx, rooms[i].Modules[j].Racks[rackIndex].ID)
 				if err != nil {
 					return nil, err
 				}
-				rooms[i].Modules[j].Racks[n-1].OccupiedU = occupied
+				rooms[i].Modules[j].Racks[rackIndex].OccupiedU = occupied
 			}
 		}
 	}

@@ -284,6 +284,14 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
 			return
 		}
+		if errors.Is(err, cmdb.ErrSlotTaken) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "IDC_SLOT_TAKEN", "message": err.Error()})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UPDATE_FAILED", "message": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, updated)
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/assets/{id}/history", func(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type RemoteOperation struct {
 type RemoteExecutionInput struct {
 	OperationID  string   `json:"operationId"`
 	Targets      []string `json:"targets"`
+	Port         int      `json:"port"`
 	CredentialID string   `json:"credentialId"`
 	RequestedBy  string   `json:"requestedBy"`
 }
@@ -44,6 +46,7 @@ type RemoteExecution struct {
 	OperationID   string               `json:"operationId"`
 	OperationName string               `json:"operationName"`
 	Targets       []string             `json:"targets"`
+	Port          int                  `json:"port"`
 	CredentialID  string               `json:"credentialId,omitempty"`
 	Status        string               `json:"status"`
 	RequestedBy   string               `json:"requestedBy"`
@@ -55,7 +58,7 @@ type RemoteExecution struct {
 	Results       []RemoteTargetResult `json:"results"`
 }
 
-type RemoteRunner func(ctx context.Context, target, command, username, secret string, timeout time.Duration) (string, error)
+type RemoteRunner func(ctx context.Context, target string, port int, command, username, secret string, timeout time.Duration) (string, error)
 
 var remoteOperations = []RemoteOperation{
 	{ID: "uptime", Name: "运行时长与负载", Description: "查看系统启动时间和 1/5/15 分钟负载", Command: "uptime", Risk: "low"},
@@ -113,10 +116,16 @@ func (s *Service) CreateRemoteExecution(in RemoteExecutionInput) (RemoteExecutio
 	if err != nil {
 		return RemoteExecution{}, err
 	}
+	if in.Port == 0 {
+		in.Port = 22
+	}
+	if in.Port < 1 || in.Port > 65535 {
+		return RemoteExecution{}, ErrRemoteValidation
+	}
 	now := time.Now()
 	execution := RemoteExecution{
 		ID: fmt.Sprintf("rexec-%d", now.UnixNano()), OperationID: operation.ID, OperationName: operation.Name,
-		Targets: targets, CredentialID: strings.TrimSpace(in.CredentialID), Status: "awaiting_approval",
+		Targets: targets, Port: in.Port, CredentialID: strings.TrimSpace(in.CredentialID), Status: "awaiting_approval",
 		RequestedBy: in.RequestedBy, CreatedAt: now.Format("2006-01-02 15:04:05"), Results: make([]RemoteTargetResult, 0, len(targets)),
 	}
 	for _, target := range targets {
@@ -216,7 +225,7 @@ func (s *Service) runRemoteExecution(id string) {
 	for index, target := range execution.Targets {
 		started := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		output, runErr := runner(ctx, target, operation.Command, username, secret, 15*time.Second)
+		output, runErr := runner(ctx, target, execution.Port, operation.Command, username, secret, 15*time.Second)
 		cancel()
 		result := RemoteTargetResult{Target: target, Status: "success", Output: truncateOutput(output), Duration: time.Since(started).Round(time.Millisecond).String()}
 		if runErr != nil {
@@ -317,14 +326,14 @@ func truncateOutput(output string) string {
 	return output
 }
 
-func sshRemoteRunner(ctx context.Context, target, command, username, secret string, timeout time.Duration) (string, error) {
+func sshRemoteRunner(ctx context.Context, target string, port int, command, username, secret string, timeout time.Duration) (string, error) {
 	config := &ssh.ClientConfig{
 		User:            username,
 		Auth:            []ssh.AuthMethod{ssh.Password(secret)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         timeout,
 	}
-	address := net.JoinHostPort(target, "22")
+	address := net.JoinHostPort(target, strconv.Itoa(port))
 	client, err := ssh.Dial("tcp", address, config)
 	if err != nil {
 		return "", err
@@ -357,7 +366,7 @@ func (s *Service) loadRemoteExecutions() error {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT id,operation_id,operation_name,targets,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results FROM remote_executions ORDER BY created_at DESC LIMIT 200`)
+	rows, err := s.db.Query(`SELECT id,operation_id,operation_name,targets,port,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results FROM remote_executions ORDER BY created_at DESC LIMIT 200`)
 	if err != nil {
 		return err
 	}
@@ -366,7 +375,7 @@ func (s *Service) loadRemoteExecutions() error {
 	for rows.Next() {
 		var execution RemoteExecution
 		var targets, results []byte
-		if err := rows.Scan(&execution.ID, &execution.OperationID, &execution.OperationName, &targets, &execution.CredentialID, &execution.Status, &execution.RequestedBy, &execution.ApprovedBy, &execution.CreatedAt, &execution.ApprovedAt, &execution.StartedAt, &execution.FinishedAt, &results); err != nil {
+		if err := rows.Scan(&execution.ID, &execution.OperationID, &execution.OperationName, &targets, &execution.Port, &execution.CredentialID, &execution.Status, &execution.RequestedBy, &execution.ApprovedBy, &execution.CreatedAt, &execution.ApprovedAt, &execution.StartedAt, &execution.FinishedAt, &results); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(targets, &execution.Targets)
@@ -392,6 +401,6 @@ func (s *Service) persistRemoteExecution(execution RemoteExecution) error {
 	}
 	targets, _ := json.Marshal(execution.Targets)
 	results, _ := json.Marshal(execution.Results)
-	_, err := s.db.Exec(`INSERT INTO remote_executions(id,operation_id,operation_name,targets,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,approved_by=excluded.approved_by,approved_at=excluded.approved_at,started_at=excluded.started_at,finished_at=excluded.finished_at,results=excluded.results,updated_at=now()`, execution.ID, execution.OperationID, execution.OperationName, targets, execution.CredentialID, execution.Status, execution.RequestedBy, execution.ApprovedBy, execution.CreatedAt, execution.ApprovedAt, execution.StartedAt, execution.FinishedAt, results)
+	_, err := s.db.Exec(`INSERT INTO remote_executions(id,operation_id,operation_name,targets,port,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now()) ON CONFLICT(id) DO UPDATE SET port=excluded.port,status=excluded.status,approved_by=excluded.approved_by,approved_at=excluded.approved_at,started_at=excluded.started_at,finished_at=excluded.finished_at,results=excluded.results,updated_at=now()`, execution.ID, execution.OperationID, execution.OperationName, targets, execution.Port, execution.CredentialID, execution.Status, execution.RequestedBy, execution.ApprovedBy, execution.CreatedAt, execution.ApprovedAt, execution.StartedAt, execution.FinishedAt, results)
 	return err
 }

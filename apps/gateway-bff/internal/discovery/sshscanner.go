@@ -125,6 +125,9 @@ func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult,
 	if port == 0 {
 		port = 22
 	}
+	if port < 1 || port > 65535 {
+		return nil, errors.New("invalid port")
+	}
 	assetType := in.AssetType
 	if assetType == "" {
 		assetType = "virtual-machine"
@@ -154,6 +157,9 @@ func (s *Service) AgentBatchUninstall(hosts []string, port int) ([]AgentInstallR
 	password := os.Getenv("CMDB_SSH_PASSWORD")
 	if port == 0 {
 		port = 22
+	}
+	if port < 1 || port > 65535 {
+		return nil, errors.New("invalid port")
 	}
 	script := "systemctl stop cmdb-agent 2>/dev/null; systemctl disable cmdb-agent 2>/dev/null; rm -f /etc/systemd/system/cmdb-agent.service /opt/cmdb-agent/cmdb-agent /opt/cmdb-agent/cmdb-agent.env; rmdir /opt/cmdb-agent 2>/dev/null || true; systemctl daemon-reload; echo UNINSTALLED"
 	results := []AgentInstallResult{}
@@ -217,6 +223,9 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 	port := in.Port
 	if port == 0 {
 		port = 22
+	}
+	if port < 1 || port > 65535 {
+		return result, errors.New("invalid port")
 	}
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")

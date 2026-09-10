@@ -178,6 +178,9 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 	if port == 0 {
 		port = 9100
 	}
+	if port < 1 || port > 65535 {
+		return result, errors.New("invalid port")
+	}
 	defaultType := strings.TrimSpace(in.DefaultType)
 	if defaultType == "" {
 		defaultType = "physical-server"

@@ -186,7 +186,7 @@ func TestRemoteExecutionRequiresApprovalAndUsesWhitelist(t *testing.T) {
 	s := NewServiceWithCMDB(nil)
 	s.tasks = nil
 	called := make(chan string, 2)
-	s.remoteRunner = func(_ context.Context, target, command, username, secret string, _ time.Duration) (string, error) {
+	s.remoteRunner = func(_ context.Context, target string, port int, command, username, secret string, _ time.Duration) (string, error) {
 		called <- command
 		return "up 1 day", nil
 	}

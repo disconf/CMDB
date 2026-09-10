@@ -213,6 +213,9 @@ func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResul
 	if port == 0 {
 		port = 161
 	}
+	if port < 1 || port > 65535 {
+		return result, errors.New("invalid port")
+	}
 	var targets []string
 	for _, cidr := range in.CIDRs {
 		ips, err := expandCIDR(cidr)
