@@ -1139,11 +1139,91 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, agent)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-operations", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.RemoteOperations())
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-executions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.RemoteExecutions())
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-executions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		execution, err := discoveryService.RemoteExecution(r.PathValue("id"))
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "REMOTE_EXECUTION_NOT_FOUND"})
+			return
+		}
+		writeJSON(w, http.StatusOK, execution)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-executions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in discovery.RemoteExecutionInput
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REMOTE_EXECUTION"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		in.RequestedBy = user.Username
+		execution, err := discoveryService.CreateRemoteExecution(in)
+		if errors.Is(err, discovery.ErrRemoteValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "INVALID_REMOTE_EXECUTION", "message": "操作类型、目标主机或凭据无效"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REMOTE_EXECUTION_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, execution)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-executions/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		execution, err := discoveryService.ApproveRemoteExecution(r.PathValue("id"), user.Username)
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "REMOTE_EXECUTION_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, discovery.ErrRemoteValidation) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "INVALID_REMOTE_EXECUTION_STATE"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REMOTE_EXECUTION_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, execution)
+	})
 	mux.HandleFunc("GET /api/v1/discovery/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
 		}
 		writeJSON(w, http.StatusOK, discoveryService.Tasks())
+	})
+	mux.HandleFunc("GET /api/v1/discovery/tasks/{id}/results", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		detail, err := discoveryService.TaskDetail(r.PathValue("id"))
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "TASK_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TASK_RESULT_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {

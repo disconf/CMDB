@@ -96,6 +96,10 @@ func auditAction(method, path string) string {
 		return "cmdb.model.update"
 	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/cmdb/models/"):
 		return "cmdb.model.toggle"
+	case method == http.MethodPost && path == "/api/v1/discovery/remote-executions":
+		return "discovery.remote_execution.create"
+	case method == http.MethodPost && strings.HasSuffix(path, "/approve") && strings.HasPrefix(path, "/api/v1/discovery/remote-executions/"):
+		return "discovery.remote_execution.approve"
 	case method == http.MethodPost && path == "/api/v1/discovery/agent-install":
 		return "discovery.agent.install"
 	case method == http.MethodPost && path == "/api/v1/discovery/agent-uninstall":

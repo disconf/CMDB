@@ -75,7 +75,7 @@ func (s *Service) consumeMessage(payload []byte) error {
 		s.tasks = append(s.tasks, task)
 		index = len(s.tasks) - 1
 	}
-	item := DiscoveredItem{ID: d.ID, Name: d.Name, IP: d.IP, Type: d.Type, Confidence: d.Confidence, State: "pending"}
+	item := DiscoveredItem{ID: d.ID, Name: d.Name, IP: d.IP, Type: d.Type, Confidence: d.Confidence, State: "pending", Result: "pending", Message: "等待入库", UpdatedAt: time.Now().Format("2006-01-02 15:04:05")}
 	if err := s.persistItem(d.TaskID, item, payload); err != nil {
 		return err
 	}

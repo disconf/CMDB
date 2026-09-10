@@ -1,7 +1,9 @@
 package discovery
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"cmdb/gateway-bff/internal/cmdb"
 )
@@ -145,5 +147,88 @@ func TestIngestRequiresApprovalAndRejects(t *testing.T) {
 	}
 	if err := s.RejectPending("approval-test-no"); err != ErrNotFound {
 		t.Fatalf("second rejection error=%v", err)
+	}
+}
+
+func TestTaskDetailIncludesOutcomeAndEvents(t *testing.T) {
+	s := NewServiceWithCMDB(cmdb.NewService())
+	s.tasks = nil
+	s.events = map[string][]TaskEvent{}
+	result, err := s.Ingest(IngestInput{
+		Source: "detail-test", Scope: "10.99.2.0/24", RequireApproval: true,
+		Items: []DiscoveredItem{{ID: "detail-test-001", Name: "detail-test-001", IP: "10.99.2.10", Type: "physical-server"}},
+	})
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	detail, err := s.TaskDetail(result.TaskID)
+	if err != nil {
+		t.Fatalf("task detail: %v", err)
+	}
+	if detail.Summary.Pending != 1 || len(detail.Events) == 0 {
+		t.Fatalf("unexpected pending detail %+v", detail)
+	}
+	if _, err := s.ApprovePending("detail-test-001"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	detail, err = s.TaskDetail(result.TaskID)
+	if err != nil {
+		t.Fatalf("task detail after approval: %v", err)
+	}
+	if detail.Summary.Imported != 1 || detail.Task.Items[0].Result != "imported" {
+		t.Fatalf("unexpected approved detail %+v", detail)
+	}
+}
+
+func TestRemoteExecutionRequiresApprovalAndUsesWhitelist(t *testing.T) {
+	t.Setenv("CMDB_SSH_USERNAME", "tester")
+	t.Setenv("CMDB_SSH_PASSWORD", "secret")
+	s := NewServiceWithCMDB(nil)
+	s.tasks = nil
+	called := make(chan string, 2)
+	s.remoteRunner = func(_ context.Context, target, command, username, secret string, _ time.Duration) (string, error) {
+		called <- command
+		return "up 1 day", nil
+	}
+	execution, err := s.CreateRemoteExecution(RemoteExecutionInput{
+		OperationID: "uptime", Targets: []string{"10.0.0.1", "10.0.0.1", "10.0.0.2"}, RequestedBy: "admin",
+	})
+	if err != nil {
+		t.Fatalf("create remote execution: %v", err)
+	}
+	if execution.Status != "awaiting_approval" || len(execution.Targets) != 2 {
+		t.Fatalf("unexpected execution %+v", execution)
+	}
+	select {
+	case command := <-called:
+		t.Fatalf("command ran before approval: %s", command)
+	default:
+	}
+	if _, err := s.ApproveRemoteExecution(execution.ID, "approver"); err != nil {
+		t.Fatalf("approve remote execution: %v", err)
+	}
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		current, err := s.RemoteExecution(execution.ID)
+		if err != nil {
+			t.Fatalf("get remote execution: %v", err)
+		}
+		if current.Status == "success" {
+			if len(current.Results) != 2 || current.Results[0].Output != "up 1 day" {
+				t.Fatalf("unexpected results %+v", current)
+			}
+			if command := <-called; command != "uptime" {
+				t.Fatalf("unexpected command %q", command)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("remote execution did not finish")
+}
+
+func TestRemoteExecutionRejectsInjectedTarget(t *testing.T) {
+	s := NewServiceWithCMDB(nil)
+	if _, err := s.CreateRemoteExecution(RemoteExecutionInput{OperationID: "uptime", Targets: []string{"10.0.0.1;id"}, RequestedBy: "admin"}); err != ErrRemoteValidation {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }

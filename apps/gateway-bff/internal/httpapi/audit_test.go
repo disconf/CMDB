@@ -15,6 +15,8 @@ func TestAuditActionAndTarget(t *testing.T) {
 		{http.MethodPatch, "/api/v1/cmdb/assets/srv-001", "cmdb.asset.update", "srv-001"},
 		{http.MethodPost, "/api/v1/discovery/agent-install", "discovery.agent.install", "agent-install"},
 		{http.MethodPost, "/api/v1/discovery/agent-uninstall", "discovery.agent.uninstall", "agent-uninstall"},
+		{http.MethodPost, "/api/v1/discovery/remote-executions", "discovery.remote_execution.create", "remote-executions"},
+		{http.MethodPost, "/api/v1/discovery/remote-executions/rexec-1/approve", "discovery.remote_execution.approve", "rexec-1"},
 		{http.MethodPost, "/api/v1/idc/rooms/room-1/modules", "idc.module.create", "modules"},
 		{http.MethodPost, "/api/v1/jobs/executions/job-1/retry", "job.execution.retry", "job-1"},
 		{http.MethodPost, "/api/v1/tickets/ticket-1/approve", "ticket.approve", "ticket-1"},

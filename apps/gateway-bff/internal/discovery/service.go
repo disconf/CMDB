@@ -51,9 +51,32 @@ type Task struct {
 	Scope      string           `json:"scope"`
 	Status     string           `json:"status"`
 	CreatedAt  string           `json:"createdAt"`
+	UpdatedAt  string           `json:"updatedAt,omitempty"`
 	Discovered int              `json:"discovered"`
 	Imported   int              `json:"imported"`
 	Items      []DiscoveredItem `json:"items"`
+}
+type TaskEvent struct {
+	ID        string `json:"id"`
+	TaskID    string `json:"taskId"`
+	Level     string `json:"level"`
+	Event     string `json:"event"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"createdAt"`
+}
+type TaskResultSummary struct {
+	Discovered int `json:"discovered"`
+	Imported   int `json:"imported"`
+	Merged     int `json:"merged"`
+	Pending    int `json:"pending"`
+	Rejected   int `json:"rejected"`
+	Conflicts  int `json:"conflicts"`
+	Failed     int `json:"failed"`
+}
+type TaskDetail struct {
+	Task    Task              `json:"task"`
+	Summary TaskResultSummary `json:"summary"`
+	Events  []TaskEvent       `json:"events"`
 }
 type CreateTaskInput struct {
 	Name   string `json:"name"`
@@ -84,6 +107,7 @@ type IngestResult struct {
 	Imported  int    `json:"imported"`
 	Merged    int    `json:"merged"`
 	Conflicts int    `json:"conflicts"`
+	Failed    int    `json:"failed"`
 }
 type DiscoveredItem struct {
 	ID         string           `json:"id"`
@@ -92,6 +116,9 @@ type DiscoveredItem struct {
 	Type       string           `json:"type"`
 	Confidence int              `json:"confidence"`
 	State      string           `json:"state"`
+	Result     string           `json:"result,omitempty"`
+	Message    string           `json:"message,omitempty"`
+	UpdatedAt  string           `json:"updatedAt,omitempty"`
 	Attributes []cmdb.Attribute `json:"attributes"`
 }
 type AgentReport struct {
@@ -109,15 +136,19 @@ type AgentReport struct {
 	Version      string `json:"version"`
 }
 type Service struct {
-	mu           sync.RWMutex
-	agents       []Agent
-	tasks        []Task
-	db           *sql.DB
-	cmdb         *cmdb.Service
-	agentToken   string
-	agentSeen    map[string]time.Time
-	offlineAfter time.Duration
-	credResolver func(id string) (string, string, error)
+	mu               sync.RWMutex
+	agents           []Agent
+	tasks            []Task
+	db               *sql.DB
+	cmdb             *cmdb.Service
+	agentToken       string
+	agentSeen        map[string]time.Time
+	offlineAfter     time.Duration
+	credResolver     func(id string) (string, string, error)
+	events           map[string][]TaskEvent
+	nextEvent        int64
+	remoteExecutions []RemoteExecution
+	remoteRunner     RemoteRunner
 }
 
 func NewService() *Service {
@@ -127,6 +158,10 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}}
 	s.agentToken = os.Getenv("AGENT_SHARED_TOKEN")
 	s.agentSeen = map[string]time.Time{}
+	s.events = map[string][]TaskEvent{}
+	s.nextEvent = time.Now().UnixNano()
+	s.remoteExecutions = []RemoteExecution{}
+	s.remoteRunner = sshRemoteRunner
 	s.offlineAfter = 3 * time.Minute
 	if value := os.Getenv("AGENT_OFFLINE_AFTER"); value != "" {
 		if parsed, err := time.ParseDuration(value); err == nil && parsed >= 30*time.Second {
@@ -140,6 +175,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		}
 		s.db = db
 		s.tasks = tasks
+		if err := s.loadRemoteExecutions(); err != nil {
+			panic(fmt.Sprintf("load remote executions: %v", err))
+		}
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}
 	if s.db == nil {
@@ -361,7 +399,7 @@ func (s *Service) CreateTask(in CreateTaskInput) (Task, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := Task{ID: fmt.Sprintf("disc-%03d", len(s.tasks)+1), Name: in.Name, Source: in.Source, Scope: in.Scope, Status: "pending", CreatedAt: time.Now().Format("2006-01-02 15:04")}
+	t := Task{ID: fmt.Sprintf("disc-%03d", len(s.tasks)+1), Name: in.Name, Source: in.Source, Scope: in.Scope, Status: "pending", CreatedAt: time.Now().Format("2006-01-02 15:04"), UpdatedAt: time.Now().Format("2006-01-02 15:04:05")}
 	s.tasks = append(s.tasks, t)
 	if err := s.persistTask(t); err != nil {
 		s.tasks = s.tasks[:len(s.tasks)-1]
@@ -428,6 +466,8 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 	}
 	taskID := in.Source + "-" + time.Now().Format("20060102")
 	result := IngestResult{TaskID: taskID}
+	now := time.Now()
+	created := false
 	s.mu.Lock()
 	index := -1
 	for i := range s.tasks {
@@ -437,8 +477,9 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		}
 	}
 	if index < 0 {
-		s.tasks = append(s.tasks, Task{ID: taskID, Name: in.Source + " 自动发现", Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: time.Now().Format("2006-01-02 15:04")})
+		s.tasks = append(s.tasks, Task{ID: taskID, Name: in.Source + " 自动发现", Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: now.Format("2006-01-02 15:04"), UpdatedAt: now.Format("2006-01-02 15:04:05")})
 		index = len(s.tasks) - 1
+		created = true
 		if err := s.persistTask(s.tasks[index]); err != nil {
 			s.tasks = s.tasks[:len(s.tasks)-1]
 			s.mu.Unlock()
@@ -460,9 +501,23 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		}
 		if exists {
 			result.Conflicts++
+			conflict := item
+			conflict.ID = fmt.Sprintf("%s-conflict-%d", item.ID, time.Now().UnixNano())
+			conflict.State = "conflict"
+			conflict.Result = "conflict"
+			conflict.Message = "同一发现任务中出现重复资源编号"
+			conflict.UpdatedAt = now.Format("2006-01-02 15:04:05")
+			task.Items = append(task.Items, conflict)
+			if err := s.persistItem(taskID, conflict, itemPayload(conflict)); err != nil {
+				s.mu.Unlock()
+				return IngestResult{}, err
+			}
 			continue
 		}
 		item.State = "pending"
+		item.Result = "pending"
+		item.Message = "等待入库"
+		item.UpdatedAt = now.Format("2006-01-02 15:04:05")
 		task.Items = append(task.Items, item)
 		pending = append(pending, item)
 		if err := s.persistItem(taskID, item, itemPayload(item)); err != nil {
@@ -470,55 +525,71 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 			return IngestResult{}, err
 		}
 	}
+	task.Discovered = len(task.Items)
+	task.UpdatedAt = now.Format("2006-01-02 15:04:05")
 	s.mu.Unlock()
+	if created {
+		s.recordTaskEvent(taskID, "info", "task.started", "发现任务已创建")
+	}
 	if in.RequireApproval {
 		s.mu.Lock()
 		if index < len(s.tasks) {
 			s.tasks[index].Status = "pending-approval"
-			s.tasks[index].Discovered = len(s.tasks[index].Items)
+			s.tasks[index].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 			_ = s.persistTask(s.tasks[index])
 		}
 		s.mu.Unlock()
 		result.Accepted = len(pending)
+		s.recordTaskEvent(taskID, "warning", "approval.required", fmt.Sprintf("发现 %d 个资源，等待人工审批", len(pending)))
 		return result, nil
 	}
-	handled := map[string]bool{}
 
 	for _, item := range pending {
 		status, err := s.importDiscovered(item, in.Source)
 		if err != nil {
-			return IngestResult{}, err
+			result.Failed++
+			_ = s.setMemoryItemOutcome(taskID, item.ID, "failed", "failed", err.Error())
+			_ = s.updatePersistedItemOutcome(item.ID, "failed", "failed", err.Error())
+			s.recordTaskEvent(taskID, "error", "item.failed", fmt.Sprintf("%s (%s): %v", item.Name, item.IP, err))
+			continue
 		}
 		result.Accepted++
-		if status == "imported" {
+		switch status {
+		case "imported":
 			result.Imported++
-		} else if status == "merged" {
+		case "merged":
 			result.Merged++
-		} else if status == "conflict" {
+		case "conflict":
 			result.Conflicts++
 		}
-		handled[item.ID] = true
+		if err := s.updatePersistedItemOutcome(item.ID, "imported", status, ""); err != nil {
+			result.Failed++
+			s.recordTaskEvent(taskID, "error", "item.persist_failed", fmt.Sprintf("%s: %v", item.ID, err))
+			continue
+		}
+		if err := s.setMemoryItemOutcome(taskID, item.ID, "imported", status, ""); err != nil && s.db == nil {
+			return IngestResult{}, err
+		}
+		s.recordTaskEvent(taskID, "success", "item."+status, fmt.Sprintf("%s (%s) -> %s", item.Name, item.IP, status))
 	}
 	s.mu.Lock()
 	if index < len(s.tasks) {
 		s.tasks[index].Discovered = len(s.tasks[index].Items)
-		for i := range s.tasks[index].Items {
-			if handled[s.tasks[index].Items[i].ID] {
-				s.tasks[index].Items[i].State = "imported"
-			}
-		}
 		s.tasks[index].Imported = 0
 		for _, item := range s.tasks[index].Items {
 			if item.State == "imported" {
 				s.tasks[index].Imported++
 			}
 		}
+		s.tasks[index].Status = "completed"
+		s.tasks[index].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 		if err := s.persistTask(s.tasks[index]); err != nil {
 			s.mu.Unlock()
 			return IngestResult{}, err
 		}
 	}
 	s.mu.Unlock()
+	s.recordTaskEvent(taskID, "info", "task.completed", fmt.Sprintf("发现 %d，入库 %d，合并 %d，冲突 %d，失败 %d", len(pending), result.Imported, result.Merged, result.Conflicts, result.Failed))
 	return result, nil
 }
 
@@ -574,9 +645,13 @@ func (s *Service) ApprovePending(itemID string) (string, error) {
 		}
 		return "", err
 	}
-	if err := s.setMemoryItemState(taskID, itemID, "imported"); err != nil && s.db == nil {
+	if err := s.updatePersistedItemOutcome(itemID, "imported", status, ""); err != nil {
 		return "", err
 	}
+	if err := s.setMemoryItemOutcome(taskID, itemID, "imported", status, ""); err != nil && s.db == nil {
+		return "", err
+	}
+	s.recordTaskEvent(taskID, "success", "approval.approved", fmt.Sprintf("%s (%s) -> %s", item.Name, item.IP, status))
 	return status, nil
 }
 
@@ -594,15 +669,20 @@ func (s *Service) RejectPending(itemID string) error {
 			return err
 		}
 	}
-	if err := s.setMemoryItemState(taskID, itemID, "rejected"); err != nil && s.db == nil {
+	if err := s.updatePersistedItemOutcome(itemID, "rejected", "rejected", "人工审批拒绝"); err != nil {
 		return err
 	}
+	if err := s.setMemoryItemOutcome(taskID, itemID, "rejected", "rejected", "人工审批拒绝"); err != nil && s.db == nil {
+		return err
+	}
+	s.recordTaskEvent(taskID, "warning", "approval.rejected", itemID+" 已被人工拒绝")
 	return nil
 }
 
-func (s *Service) setMemoryItemState(taskID, itemID, state string) error {
+func (s *Service) setMemoryItemOutcome(taskID, itemID, state, result, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now().Format("2006-01-02 15:04:05")
 	for i := range s.tasks {
 		if taskID != "" && s.tasks[i].ID != taskID {
 			continue
@@ -612,6 +692,9 @@ func (s *Service) setMemoryItemState(taskID, itemID, state string) error {
 				continue
 			}
 			s.tasks[i].Items[j].State = state
+			s.tasks[i].Items[j].Result = result
+			s.tasks[i].Items[j].Message = message
+			s.tasks[i].Items[j].UpdatedAt = now
 			hasPending := false
 			s.tasks[i].Imported = 0
 			for _, item := range s.tasks[i].Items {
@@ -627,6 +710,7 @@ func (s *Service) setMemoryItemState(taskID, itemID, state string) error {
 			} else {
 				s.tasks[i].Status = "completed"
 			}
+			s.tasks[i].UpdatedAt = now
 			if err := s.persistTask(s.tasks[i]); err != nil {
 				return err
 			}
@@ -634,6 +718,81 @@ func (s *Service) setMemoryItemState(taskID, itemID, state string) error {
 		}
 	}
 	return ErrNotFound
+}
+
+func (s *Service) recordTaskEvent(taskID, level, event, message string) {
+	if taskID == "" {
+		return
+	}
+	now := time.Now()
+	s.mu.Lock()
+	s.nextEvent++
+	eventID := fmt.Sprintf("tev-%d", s.nextEvent)
+	s.mu.Unlock()
+	item := TaskEvent{ID: eventID, TaskID: taskID, Level: level, Event: event, Message: message, CreatedAt: now.Format("2006-01-02 15:04:05")}
+	if s.db != nil {
+		if _, err := s.db.Exec(`INSERT INTO discovery_task_events(id,task_id,level,event,message,created_at) VALUES($1,$2,$3,$4,$5,now())`, item.ID, item.TaskID, item.Level, item.Event, item.Message); err != nil {
+			slog.Error("record discovery task event", "task", taskID, "error", err)
+		}
+	}
+	s.mu.Lock()
+	s.events[taskID] = append(s.events[taskID], item)
+	if len(s.events[taskID]) > 500 {
+		s.events[taskID] = s.events[taskID][len(s.events[taskID])-500:]
+	}
+	s.mu.Unlock()
+}
+
+func taskResultSummary(task Task) TaskResultSummary {
+	summary := TaskResultSummary{Discovered: len(task.Items)}
+	for _, item := range task.Items {
+		switch item.State {
+		case "imported":
+			switch item.Result {
+			case "merged":
+				summary.Merged++
+			default:
+				summary.Imported++
+			}
+		case "pending", "approving":
+			summary.Pending++
+		case "rejected":
+			summary.Rejected++
+		case "conflict":
+			summary.Conflicts++
+		case "failed":
+			summary.Failed++
+		}
+	}
+	return summary
+}
+
+func (s *Service) TaskDetail(id string) (TaskDetail, error) {
+	var task Task
+	var events []TaskEvent
+	if s.db != nil {
+		var err error
+		task, events, err = s.persistedTaskDetail(id)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+	} else {
+		s.mu.RLock()
+		found := false
+		for _, candidate := range s.tasks {
+			if candidate.ID == id {
+				task = candidate
+				found = true
+				break
+			}
+		}
+		events = append([]TaskEvent(nil), s.events[id]...)
+		s.mu.RUnlock()
+		if !found {
+			return TaskDetail{}, ErrNotFound
+		}
+	}
+	return TaskDetail{Task: task, Summary: taskResultSummary(task), Events: events}, nil
 }
 
 func itemPayload(item DiscoveredItem) []byte {
@@ -695,5 +854,9 @@ func (s *Service) Reconcile(id string) (Task, error) {
 	return Task{}, ErrNotFound
 }
 func sampleItems() []DiscoveredItem {
-	return []DiscoveredItem{{"found-01", "new-app-node-01", "10.20.8.31", "physical-server", 96, "pending", nil}, {"found-02", "new-app-node-02", "10.20.8.32", "physical-server", 94, "pending", nil}, {"found-03", "prod-k8s-worker-03", "10.22.1.23", "k8s-node", 99, "pending", nil}}
+	return []DiscoveredItem{
+		{ID: "found-01", Name: "new-app-node-01", IP: "10.20.8.31", Type: "physical-server", Confidence: 96, State: "pending", Result: "pending", Message: "等待入库"},
+		{ID: "found-02", Name: "new-app-node-02", IP: "10.20.8.32", Type: "physical-server", Confidence: 94, State: "pending", Result: "pending", Message: "等待入库"},
+		{ID: "found-03", Name: "prod-k8s-worker-03", IP: "10.22.1.23", Type: "k8s-node", Confidence: 99, State: "pending", Result: "pending", Message: "等待入库"},
+	}
 }

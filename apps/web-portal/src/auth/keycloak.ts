@@ -1,9 +1,15 @@
 import Keycloak from 'keycloak-js'
+import { runtimeConfig } from './runtime'
+
+const config = runtimeConfig()
+if (!config.keycloakUrl) {
+  console.error('Keycloak runtime configuration is missing')
+}
 
 export const keycloak = new Keycloak({
-  url: import.meta.env.VITE_KEYCLOAK_URL || 'http://192.168.85.134:8081',
-  realm: import.meta.env.VITE_KEYCLOAK_REALM || 'cmdb',
-  clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'cmdb-web',
+  url: config.keycloakUrl || window.location.origin,
+  realm: config.realm,
+  clientId: config.clientId,
 })
 
 export const initializeKeycloak = () =>

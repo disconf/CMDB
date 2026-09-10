@@ -42,6 +42,11 @@ spec:
       - name: web
         image: cmdb/web:1.4.0
         ports: [{containerPort: 8080}]
+        env:
+        - {name: GATEWAY_URL, value: "http://gateway:8080"}
+        - {name: KEYCLOAK_URL, value: "https://keycloak.jzq.com:31443"}
+        - {name: KEYCLOAK_REALM, value: "cmdb"}
+        - {name: KEYCLOAK_CLIENT_ID, value: "cmdb-web"}
         readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 2}
         livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 5}
         resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {cpu: 300m, memory: 128Mi}}
