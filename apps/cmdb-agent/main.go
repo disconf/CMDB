@@ -18,18 +18,19 @@ import (
 const version = "0.1.2"
 
 type report struct {
-	AgentID      string `json:"agentId"`
-	Type         string `json:"type"`
-	Hostname     string `json:"hostname"`
-	IP           string `json:"ip"`
-	OS           string `json:"os"`
-	Kernel       string `json:"kernel"`
-	Architecture string `json:"architecture"`
-	CPUCount     int    `json:"cpuCount"`
-	MemoryBytes  uint64 `json:"memoryBytes"`
-	DiskBytes    uint64 `json:"diskBytes"`
-	BootTime     string `json:"bootTime"`
-	Version      string `json:"version"`
+	AgentID        string `json:"agentId"`
+	Type           string `json:"type"`
+	Hostname       string `json:"hostname"`
+	IP             string `json:"ip"`
+	OS             string `json:"os"`
+	Kernel         string `json:"kernel"`
+	Architecture   string `json:"architecture"`
+	CPUCount       int    `json:"cpuCount"`
+	MemoryBytes    uint64 `json:"memoryBytes"`
+	DiskBytes      uint64 `json:"diskBytes"`
+	BootTime       string `json:"bootTime"`
+	Version        string `json:"version"`
+	Virtualization string `json:"virtualization"`
 }
 
 func main() {
@@ -51,11 +52,11 @@ func main() {
 		time.Sleep(interval)
 	}
 }
-func detectAssetType() string {
+func detectVirtualization() string {
 	if output, err := exec.Command("systemd-detect-virt", "--vm").Output(); err == nil {
 		value := strings.ToLower(strings.TrimSpace(string(output)))
 		if value != "" && value != "none" {
-			return "virtual-machine"
+			return value
 		}
 	}
 	value := strings.ToLower(strings.TrimSpace(readFirst("/sys/class/dmi/id/product_name")))
@@ -64,10 +65,17 @@ func detectAssetType() string {
 	}
 	for _, token := range []string{"virtual", "vmware", "kvm", "qemu", "xen", "hyper-v", "virtualbox", "bochs", "parallels"} {
 		if strings.Contains(value, token) {
-			return "virtual-machine"
+			return token
 		}
 	}
 	if _, err := os.Stat("/sys/hypervisor"); err == nil {
+		return "hypervisor"
+	}
+	return ""
+}
+
+func detectAssetType() string {
+	if detectVirtualization() != "" {
 		return "virtual-machine"
 	}
 	return "physical-server"
@@ -83,7 +91,7 @@ func collect() report {
 	if assetType == "" {
 		assetType = detectAssetType()
 	}
-	return report{AgentID: id, Type: assetType, Hostname: hostname, IP: primaryIP(), OS: osRelease(), Kernel: readFirst("/proc/sys/kernel/osrelease"), Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memory(), DiskBytes: disk(), BootTime: boot(), Version: version}
+	return report{AgentID: id, Type: assetType, Hostname: hostname, IP: primaryIP(), OS: osRelease(), Kernel: readFirst("/proc/sys/kernel/osrelease"), Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memory(), DiskBytes: disk(), BootTime: boot(), Version: version, Virtualization: detectVirtualization()}
 }
 func send(client *http.Client, url, token string, value report) error {
 	body, _ := json.Marshal(value)

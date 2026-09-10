@@ -122,18 +122,19 @@ type DiscoveredItem struct {
 	Attributes []cmdb.Attribute `json:"attributes"`
 }
 type AgentReport struct {
-	AgentID      string `json:"agentId"`
-	Type         string `json:"type"`
-	Hostname     string `json:"hostname"`
-	IP           string `json:"ip"`
-	OS           string `json:"os"`
-	Kernel       string `json:"kernel"`
-	Architecture string `json:"architecture"`
-	CPUCount     int    `json:"cpuCount"`
-	MemoryBytes  uint64 `json:"memoryBytes"`
-	DiskBytes    uint64 `json:"diskBytes"`
-	BootTime     string `json:"bootTime"`
-	Version      string `json:"version"`
+	AgentID        string `json:"agentId"`
+	Type           string `json:"type"`
+	Hostname       string `json:"hostname"`
+	IP             string `json:"ip"`
+	OS             string `json:"os"`
+	Kernel         string `json:"kernel"`
+	Architecture   string `json:"architecture"`
+	CPUCount       int    `json:"cpuCount"`
+	MemoryBytes    uint64 `json:"memoryBytes"`
+	DiskBytes      uint64 `json:"diskBytes"`
+	BootTime       string `json:"bootTime"`
+	Version        string `json:"version"`
+	Virtualization string `json:"virtualization"`
 }
 type Service struct {
 	mu               sync.RWMutex
@@ -210,7 +211,7 @@ func (s *Service) Report(token string, in AgentReport) (cmdb.Asset, error) {
 	if s.cmdb == nil || in.AgentID == "" || in.Hostname == "" {
 		return cmdb.Asset{}, errors.New("validation")
 	}
-	asset, err := s.cmdb.UpsertAgentAsset(cmdb.AgentAssetInput{ID: in.AgentID, Type: in.Type, Hostname: in.Hostname, IP: in.IP, OS: in.OS, Kernel: in.Kernel, Architecture: in.Architecture, CPUCount: in.CPUCount, MemoryBytes: in.MemoryBytes, DiskBytes: in.DiskBytes, BootTime: in.BootTime, AgentVersion: in.Version})
+	asset, err := s.cmdb.UpsertAgentAsset(cmdb.AgentAssetInput{ID: in.AgentID, Type: in.Type, Hostname: in.Hostname, IP: in.IP, OS: in.OS, Kernel: in.Kernel, Architecture: in.Architecture, CPUCount: in.CPUCount, MemoryBytes: in.MemoryBytes, DiskBytes: in.DiskBytes, BootTime: in.BootTime, AgentVersion: in.Version, Virtualization: in.Virtualization})
 	if err != nil {
 		return cmdb.Asset{}, err
 	}
@@ -433,6 +434,9 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			if _, err := s.cmdb.MergeHostInventory(existingID, src, item.Attributes); err != nil {
 				return "", err
 			}
+			if err := s.cmdb.ReclassifyHost(existingID, item.Type, src); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
+				return "", err
+			}
 			if err := s.markImported(item); err != nil {
 				return "", err
 			}
@@ -445,6 +449,9 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			// Same ID already exists -> refresh in place.
 			if _, err2 := s.cmdb.MergeHostInventory(item.ID, src, item.Attributes); err2 != nil {
 				return "", err2
+			}
+			if err := s.cmdb.ReclassifyHost(item.ID, item.Type, src); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
+				return "", err
 			}
 			if err := s.markImported(item); err != nil {
 				return "", err

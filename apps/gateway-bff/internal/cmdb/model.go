@@ -27,18 +27,19 @@ type ModelInput struct {
 	Fields      []ModelField `json:"fields"`
 }
 type AgentAssetInput struct {
-	ID           string
-	Type         string
-	Hostname     string
-	IP           string
-	OS           string
-	Kernel       string
-	Architecture string
-	CPUCount     int
-	MemoryBytes  uint64
-	DiskBytes    uint64
-	BootTime     string
-	AgentVersion string
+	ID             string
+	Type           string
+	Hostname       string
+	IP             string
+	OS             string
+	Kernel         string
+	Architecture   string
+	CPUCount       int
+	MemoryBytes    uint64
+	DiskBytes      uint64
+	BootTime       string
+	AgentVersion   string
+	Virtualization string
 }
 type Attribute struct {
 	Name  string `json:"name"`

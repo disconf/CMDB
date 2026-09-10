@@ -555,6 +555,73 @@ func (s *Service) MergeHostInventory(id, source string, attrs []Attribute) (Asse
 	return Asset{}, ErrNotFound
 }
 
+func (s *Service) ReclassifyHost(id, assetType, source string) error {
+	if id == "" || !isHostAssetType(assetType) {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.assets {
+		if s.assets[i].ID != id {
+			continue
+		}
+		if !isHostAssetType(s.assets[i].Type) || s.assets[i].Type == assetType {
+			return nil
+		}
+		before := s.assets[i]
+		typeName := assetType
+		for _, model := range s.models {
+			if model.Code == assetType && model.Enabled {
+				typeName = model.Name
+				break
+			}
+		}
+		s.assets[i].Type = assetType
+		s.assets[i].TypeName = typeName
+		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "reclassified-by-" + source, Operator: "discovery", OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: []Change{{Field: "type", Before: before.TypeName, After: typeName}}}
+		if s.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				s.assets[i] = before
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET type=$2,type_name=$3,updated_at=now() WHERE id=$1`, id, assetType, typeName)
+			if err == nil {
+				err = insertHistory(ctx, tx, entry)
+			}
+			if err == nil {
+				err = insertAssetEvents(ctx, tx, s.assets[i], entry)
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				s.assets[i] = before
+				return err
+			}
+			if err = tx.Commit(); err != nil {
+				s.assets[i] = before
+				return err
+			}
+		}
+		for j := range s.models {
+			if s.models[j].Code == before.Type && s.models[j].Count > 0 {
+				s.models[j].Count--
+			}
+			if s.models[j].Code == assetType {
+				s.models[j].Count++
+			}
+		}
+		s.history[id] = append(s.history[id], entry)
+		return nil
+	}
+	return ErrNotFound
+}
+
+func isHostAssetType(value string) bool {
+	return value == "physical-server" || value == "virtual-machine" || value == "k8s-node"
+}
+
 func (s *Service) HasAssetIP(ip string, exceptID string) bool {
 	if ip == "" {
 		return false
@@ -609,6 +676,9 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 		return Asset{}, ErrValidation
 	}
 	attrs := []Attribute{{Name: "os", Label: "操作系统", Value: in.OS}, {Name: "kernel", Label: "内核", Value: in.Kernel}, {Name: "architecture", Label: "架构", Value: in.Architecture}, {Name: "cpu", Label: "CPU核心", Value: fmt.Sprint(in.CPUCount)}, {Name: "memory_bytes", Label: "内存字节", Value: fmt.Sprint(in.MemoryBytes)}, {Name: "disk_bytes", Label: "磁盘字节", Value: fmt.Sprint(in.DiskBytes)}, {Name: "boot_time", Label: "启动时间", Value: in.BootTime}, {Name: "agent_version", Label: "Agent版本", Value: in.AgentVersion}}
+	if in.Virtualization != "" {
+		attrs = append(attrs, Attribute{Name: "virtualization_type", Label: "虚拟化类型", Value: in.Virtualization})
+	}
 	assetType := strings.TrimSpace(in.Type)
 	if assetType == "" {
 		assetType = "physical-server"
@@ -625,17 +695,31 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	for i := range s.assets {
 		if s.assets[i].ID == in.ID {
-			beforeStatus := s.assets[i].Status
+			beforeStatus, beforeType := s.assets[i].Status, s.assets[i].Type
 			s.assets[i].Name = in.Hostname
 			s.assets[i].IP = in.IP
 			s.assets[i].Status = "online"
 			s.assets[i].Source = "linux-agent"
 			s.assets[i].LastSeenAt = now
 			s.assets[i].Attributes = attrs
+			if isHostAssetType(assetType) && s.assets[i].Type != assetType {
+				s.assets[i].Type = assetType
+				s.assets[i].TypeName = typeName
+			}
 			if s.db != nil {
 				payload, _ := json.Marshal(attrs)
-				if _, err := s.db.Exec(`UPDATE cmdb_assets SET name=$2,ip=$3,status='online',source='linux-agent',last_seen_at=now(),attributes=$4,updated_at=now() WHERE id=$1`, in.ID, in.Hostname, in.IP, payload); err != nil {
+				if _, err := s.db.Exec(`UPDATE cmdb_assets SET name=$2,ip=$3,status='online',source='linux-agent',type=$5,type_name=$6,last_seen_at=now(),attributes=$4,updated_at=now() WHERE id=$1`, in.ID, in.Hostname, in.IP, payload, s.assets[i].Type, s.assets[i].TypeName); err != nil {
 					return Asset{}, err
+				}
+			}
+			if beforeType != s.assets[i].Type {
+				for j := range s.models {
+					if s.models[j].Code == beforeType && s.models[j].Count > 0 {
+						s.models[j].Count--
+					}
+					if s.models[j].Code == s.assets[i].Type {
+						s.models[j].Count++
+					}
 				}
 			}
 			if beforeStatus != "online" {
