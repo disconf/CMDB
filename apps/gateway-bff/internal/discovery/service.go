@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,12 +20,11 @@ import (
 var ErrNotFound = errors.New("not found")
 
 type Agent struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Hostname string `json:"hostname"`
-	IP       string `json:"ip"`
-	OS       string `json:"os"
-	"strings"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Hostname      string `json:"hostname"`
+	IP            string `json:"ip"`
+	OS            string `json:"os"`
 	Region        string `json:"region"`
 	Status        string `json:"status"`
 	Version       string `json:"version"`
@@ -34,9 +34,8 @@ type RegisterInput struct {
 	Name     string `json:"name"`
 	Hostname string `json:"hostname"`
 	IP       string `json:"ip"`
-	OS       string `json:"os"
-	"strings"`
-	Region string `json:"region"`
+	OS       string `json:"os"`
+	Region   string `json:"region"`
 }
 type Summary struct {
 	Total   int `json:"total"`
@@ -69,13 +68,15 @@ type IngestInput struct {
 }
 
 type PendingItem struct {
-	TaskID string `json:"taskId"`
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	IP     string `json:"ip"`
-	Type   string `json:"type"`
-	Source string `json:"source"`
-	State  string `json:"state"`
+	TaskID       string `json:"taskId"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	IP           string `json:"ip"`
+	Type         string `json:"type"`
+	Source       string `json:"source"`
+	State        string `json:"state"`
+	Confidence   int    `json:"confidence"`
+	DiscoveredAt string `json:"discoveredAt"`
 }
 type IngestResult struct {
 	TaskID    string `json:"taskId"`
@@ -94,12 +95,11 @@ type DiscoveredItem struct {
 	Attributes []cmdb.Attribute `json:"attributes"`
 }
 type AgentReport struct {
-	AgentID  string `json:"agentId"`
-	Type     string `json:"type"`
-	Hostname string `json:"hostname"`
-	IP       string `json:"ip"`
-	OS       string `json:"os"
-	"strings"`
+	AgentID      string `json:"agentId"`
+	Type         string `json:"type"`
+	Hostname     string `json:"hostname"`
+	IP           string `json:"ip"`
+	OS           string `json:"os"`
 	Kernel       string `json:"kernel"`
 	Architecture string `json:"architecture"`
 	CPUCount     int    `json:"cpuCount"`
@@ -347,7 +347,11 @@ func (s *Service) Summary() Summary {
 		}
 	}
 	for _, t := range s.tasks {
-		r.Pending += t.Discovered - t.Imported
+		for _, item := range t.Items {
+			if item.State == "pending" || item.State == "approving" {
+				r.Pending++
+			}
+		}
 	}
 	return r
 }
@@ -376,7 +380,9 @@ func (s *Service) markImported(item DiscoveredItem) error {
 
 func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, error) {
 	if s.cmdb == nil {
-		_ = s.markImported(item)
+		if err := s.markImported(item); err != nil {
+			return "", err
+		}
 		return "imported", nil
 	}
 	src := source
@@ -389,7 +395,9 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			if _, err := s.cmdb.MergeHostInventory(existingID, src, item.Attributes); err != nil {
 				return "", err
 			}
-			_ = s.markImported(item)
+			if err := s.markImported(item); err != nil {
+				return "", err
+			}
 			return "merged", nil
 		}
 	}
@@ -400,12 +408,16 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			if _, err2 := s.cmdb.MergeHostInventory(item.ID, src, item.Attributes); err2 != nil {
 				return "", err2
 			}
-			_ = s.markImported(item)
+			if err := s.markImported(item); err != nil {
+				return "", err
+			}
 			return "merged", nil
 		}
 		return "", err
 	}
-	_ = s.markImported(item)
+	if err := s.markImported(item); err != nil {
+		return "", err
+	}
 	return "imported", nil
 }
 
@@ -453,7 +465,7 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		item.State = "pending"
 		task.Items = append(task.Items, item)
 		pending = append(pending, item)
-		if err := s.persistItem(taskID, item, []byte(`{}`)); err != nil {
+		if err := s.persistItem(taskID, item, itemPayload(item)); err != nil {
 			s.mu.Unlock()
 			return IngestResult{}, err
 		}
@@ -510,69 +522,126 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 	return result, nil
 }
 
-func (s *Service) PendingList() []PendingItem {
+func (s *Service) PendingList() ([]PendingItem, error) {
+	if s.db != nil {
+		return s.persistedPendingItems()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []PendingItem{}
 	for _, task := range s.tasks {
 		for _, item := range task.Items {
 			if item.State == "pending" {
-				out = append(out, PendingItem{TaskID: task.ID, ID: item.ID, Name: item.Name, IP: item.IP, Type: item.Type, Source: task.Source, State: item.State})
+				out = append(out, PendingItem{TaskID: task.ID, ID: item.ID, Name: item.Name, IP: item.IP, Type: item.Type, Source: task.Source, State: item.State, Confidence: item.Confidence})
 			}
 		}
 	}
-	return out
+	return out, nil
+}
+
+func (s *Service) pendingForDecision(itemID string) (DiscoveredItem, string, string, error) {
+	if s.db != nil {
+		return s.persistedPendingItem(itemID)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, task := range s.tasks {
+		for _, item := range task.Items {
+			if item.ID == itemID && item.State == "pending" {
+				return item, task.Source, task.ID, nil
+			}
+		}
+	}
+	return DiscoveredItem{}, "", "", ErrNotFound
 }
 
 func (s *Service) ApprovePending(itemID string) (string, error) {
-	s.mu.RLock()
-	var item DiscoveredItem
-	source, taskIndex, itemIndex := "", -1, -1
-	for i := range s.tasks {
-		for j := range s.tasks[i].Items {
-			if s.tasks[i].Items[j].ID == itemID && s.tasks[i].Items[j].State == "pending" {
-				item = s.tasks[i].Items[j]
-				source = s.tasks[i].Source
-				taskIndex, itemIndex = i, j
-			}
-		}
-	}
-	s.mu.RUnlock()
-	if taskIndex < 0 {
-		return "", ErrNotFound
-	}
-	status, err := s.importDiscovered(item, source)
+	item, source, taskID, err := s.pendingForDecision(itemID)
 	if err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	s.tasks[taskIndex].Items[itemIndex].State = "imported"
-	s.tasks[taskIndex].Status = "completed"
-	s.tasks[taskIndex].Imported++
-	_ = s.persistTask(s.tasks[taskIndex])
-	s.mu.Unlock()
+	claimed := false
 	if s.db != nil {
-		_, _ = s.db.Exec("UPDATE discovery_items SET state='imported' WHERE id=$1", itemID)
+		if err := s.claimPersistedItem(itemID); err != nil {
+			return "", err
+		}
+		claimed = true
+	}
+	status, err := s.importDiscovered(item, source)
+	if err != nil {
+		if claimed {
+			_ = s.setPersistedItemState(itemID, "approving", "pending")
+		}
+		return "", err
+	}
+	if err := s.setMemoryItemState(taskID, itemID, "imported"); err != nil && s.db == nil {
+		return "", err
 	}
 	return status, nil
 }
 
 func (s *Service) RejectPending(itemID string) error {
+	_, _, taskID, err := s.pendingForDecision(itemID)
+	if err != nil {
+		return err
+	}
+	if s.db != nil {
+		if err := s.claimPersistedItem(itemID); err != nil {
+			return err
+		}
+		if err := s.setPersistedItemState(itemID, "approving", "rejected"); err != nil {
+			_ = s.setPersistedItemState(itemID, "approving", "pending")
+			return err
+		}
+	}
+	if err := s.setMemoryItemState(taskID, itemID, "rejected"); err != nil && s.db == nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) setMemoryItemState(taskID, itemID, state string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.tasks {
+		if taskID != "" && s.tasks[i].ID != taskID {
+			continue
+		}
 		for j := range s.tasks[i].Items {
-			if s.tasks[i].Items[j].ID == itemID && s.tasks[i].Items[j].State == "pending" {
-				s.tasks[i].Items[j].State = "rejected"
-				_ = s.persistTask(s.tasks[i])
-				if s.db != nil {
-					_, _ = s.db.Exec("UPDATE discovery_items SET state='rejected' WHERE id=$1", itemID)
-				}
-				return nil
+			if s.tasks[i].Items[j].ID != itemID {
+				continue
 			}
+			s.tasks[i].Items[j].State = state
+			hasPending := false
+			s.tasks[i].Imported = 0
+			for _, item := range s.tasks[i].Items {
+				if item.State == "imported" {
+					s.tasks[i].Imported++
+				}
+				if item.State == "pending" || item.State == "approving" {
+					hasPending = true
+				}
+			}
+			if hasPending {
+				s.tasks[i].Status = "pending-approval"
+			} else {
+				s.tasks[i].Status = "completed"
+			}
+			if err := s.persistTask(s.tasks[i]); err != nil {
+				return err
+			}
+			return nil
 		}
 	}
 	return ErrNotFound
+}
+
+func itemPayload(item DiscoveredItem) []byte {
+	payload, err := json.Marshal(item)
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return payload
 }
 
 func (s *Service) RunTask(id string) (Task, error) {
@@ -587,7 +656,7 @@ func (s *Service) RunTask(id string) (Task, error) {
 				return Task{}, err
 			}
 			for _, item := range s.tasks[i].Items {
-				if err := s.persistItem(id, item, []byte(`{}`)); err != nil {
+				if err := s.persistItem(id, item, itemPayload(item)); err != nil {
 					return Task{}, err
 				}
 			}

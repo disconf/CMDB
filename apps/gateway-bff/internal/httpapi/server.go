@@ -487,7 +487,12 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, discoveryService.PendingList())
+		items, err := discoveryService.PendingList()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "PENDING_LIST_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/pending/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
@@ -1588,7 +1593,7 @@ func NewServer() *Server {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND", "message": "接口不存在"})
 	})
-	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(mux))), discovery: discoveryService, monitor: monitorService}
+	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService}
 }
 
 func bearerToken(r *http.Request) string {

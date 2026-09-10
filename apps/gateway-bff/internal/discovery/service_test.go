@@ -76,3 +76,74 @@ func TestIngestDedupesByIP(t *testing.T) {
 		t.Fatalf("expected merge by ip, got %+v", res)
 	}
 }
+
+func TestIngestRequiresApprovalAndApproves(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	s := NewServiceWithCMDB(cmdbService)
+	s.tasks = nil
+	in := IngestInput{
+		Source:          "approval-test",
+		Scope:           "10.99.0.0/24",
+		RequireApproval: true,
+		Items: []DiscoveredItem{{
+			ID: "approval-test-ok", Name: "approval-test-ok", IP: "10.99.1.1", Type: "physical-server", Confidence: 97,
+			Attributes: []cmdb.Attribute{{Name: "room", Label: "机房", Value: "A-01"}},
+		}},
+	}
+	result, err := s.Ingest(in)
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if result.Accepted != 1 || result.Imported != 0 {
+		t.Fatalf("expected staged result, got %+v", result)
+	}
+	if _, err := cmdbService.GetAsset("approval-test-ok"); err == nil {
+		t.Fatal("asset must not be created before approval")
+	}
+	pending, err := s.PendingList()
+	if err != nil || len(pending) != 1 || pending[0].ID != "approval-test-ok" {
+		t.Fatalf("unexpected pending list %+v err=%v", pending, err)
+	}
+	status, err := s.ApprovePending("approval-test-ok")
+	if err != nil || status != "imported" {
+		t.Fatalf("approve status=%q err=%v", status, err)
+	}
+	asset, err := cmdbService.GetAsset("approval-test-ok")
+	if err != nil || asset.ID != "approval-test-ok" {
+		t.Fatalf("approved asset missing: %+v err=%v", asset, err)
+	}
+	pending, err = s.PendingList()
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending should be empty: %+v err=%v", pending, err)
+	}
+	if _, err := s.ApprovePending("approval-test-ok"); err != ErrNotFound {
+		t.Fatalf("second approval error=%v", err)
+	}
+}
+
+func TestIngestRequiresApprovalAndRejects(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	s := NewServiceWithCMDB(cmdbService)
+	s.tasks = nil
+	_, err := s.Ingest(IngestInput{
+		Source:          "approval-test",
+		RequireApproval: true,
+		Items:           []DiscoveredItem{{ID: "approval-test-no", Name: "approval-test-no", IP: "10.99.1.2", Type: "virtual-machine"}},
+	})
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if err := s.RejectPending("approval-test-no"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if _, err := cmdbService.GetAsset("approval-test-no"); err == nil {
+		t.Fatal("rejected asset must not be created")
+	}
+	pending, err := s.PendingList()
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending should be empty: %+v err=%v", pending, err)
+	}
+	if err := s.RejectPending("approval-test-no"); err != ErrNotFound {
+		t.Fatalf("second rejection error=%v", err)
+	}
+}
