@@ -52,6 +52,12 @@ func main() {
 	}
 }
 func detectAssetType() string {
+	if output, err := exec.Command("systemd-detect-virt", "--vm").Output(); err == nil {
+		value := strings.ToLower(strings.TrimSpace(string(output)))
+		if value != "" && value != "none" {
+			return "virtual-machine"
+		}
+	}
 	value := strings.ToLower(strings.TrimSpace(readFirst("/sys/class/dmi/id/product_name")))
 	if value == "" {
 		value = strings.ToLower(strings.TrimSpace(readFirst("/sys/class/dmi/id/sys_vendor")))
