@@ -21,6 +21,7 @@ func TestAlertPersistsAcrossServiceRestart(t *testing.T) {
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	}{Status: "firing", Labels: map[string]string{"alertname": "PersistenceCheck", "severity": "critical", "instance": "integration"}, Annotations: map[string]string{"summary": "Persistence check"}, StartsAt: time.Now(), Fingerprint: id})
 	if _, err := first.ReceiveWebhook(payload); err != nil {

@@ -1,0 +1,38 @@
+groups:
+  - name: cmdb-platform
+    rules:
+      - alert: CMDBTargetDown
+        expr: up{job=~"cmdb-gateway|prometheus|alertmanager"} == 0
+        for: 2m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "监控组件不可用"
+          description: "{{ $labels.job }} 目标 {{ $labels.instance }} 已不可用超过 2 分钟。"
+      - alert: CMDBHostDown
+        expr: up{job="cmdb-node-exporter"} == 0
+        for: 2m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "CMDB 纳管主机不可用"
+          description: "资产 {{ $labels.cmdb_asset_id }}（{{ $labels.instance }}）已不可用超过 2 分钟。"
+      - alert: HostCPUHigh
+        expr: 100 - avg by(instance,cmdb_asset_id,asset_name,environment,project_group) (rate(node_cpu_seconds_total{job="cmdb-node-exporter",mode="idle"}[5m])) * 100 > 85
+        for: 10m
+        labels: {severity: warning, category: capacity}
+        annotations:
+          summary: "主机 CPU 使用率过高"
+          description: "主机 {{ $labels.instance }} CPU 已超过 85% 持续 10 分钟。"
+      - alert: HostMemoryHigh
+        expr: (1 - node_memory_MemAvailable_bytes{job="cmdb-node-exporter"} / node_memory_MemTotal_bytes{job="cmdb-node-exporter"}) * 100 > 90
+        for: 10m
+        labels: {severity: critical, category: capacity}
+        annotations:
+          summary: "主机内存使用率过高"
+          description: "主机 {{ $labels.instance }} 内存已超过 90% 持续 10 分钟。"
+      - alert: HostDiskSpaceLow
+        expr: (1 - node_filesystem_avail_bytes{job="cmdb-node-exporter",mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{job="cmdb-node-exporter",mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 > 85
+        for: 15m
+        labels: {severity: warning, category: capacity}
+        annotations:
+          summary: "主机磁盘空间不足"
+          description: "主机 {{ $labels.instance }} 根分区使用率已超过 85%。"

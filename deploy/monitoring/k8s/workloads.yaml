@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: prometheus-data, namespace: monitoring}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: prometheus, namespace: monitoring}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: prometheus}}
+  template:
+    metadata: {labels: {app: prometheus}}
+    spec:
+      serviceAccountName: default
+      securityContext: {fsGroup: 65534}
+      imagePullSecrets: [{name: cmdb-registry}]
+      containers:
+      - name: prometheus
+        image: harbor.qa.bcavt.com/library/prom/prometheus:latest
+        args: ["--config.file=/etc/prometheus/prometheus.yml","--storage.tsdb.path=/prometheus","--web.enable-lifecycle"]
+        ports: [{name: http, containerPort: 9090}]
+        volumeMounts:
+        - {name: config, mountPath: /etc/prometheus}
+        - {name: rules, mountPath: /etc/prometheus/rules}
+        - {name: agent-token, mountPath: /etc/prometheus/token}
+        - {name: data, mountPath: /prometheus}
+        readinessProbe: {httpGet: {path: /-/ready, port: 9090}, initialDelaySeconds: 10, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /-/healthy, port: 9090}, initialDelaySeconds: 20, periodSeconds: 15}
+        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 1, memory: 1Gi}}
+      volumes:
+      - {name: config, configMap: {name: prometheus-config}}
+      - {name: rules, configMap: {name: prometheus-rules}}
+      - {name: agent-token, secret: {secretName: prometheus-cmdb-token}}
+      - {name: data, persistentVolumeClaim: {claimName: prometheus-data}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prometheus, namespace: monitoring}
+spec: {selector: {app: prometheus}, ports: [{name: http, port: 9090, targetPort: 9090}]}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: alertmanager-data, namespace: monitoring}
+spec: {accessModes: [ReadWriteOnce], storageClassName: longhorn, resources: {requests: {storage: 2Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: alertmanager, namespace: monitoring}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: alertmanager}}
+  template:
+    metadata: {labels: {app: alertmanager}}
+    spec:
+      securityContext: {fsGroup: 65534}
+      imagePullSecrets: [{name: cmdb-registry}]
+      containers:
+      - name: alertmanager
+        image: harbor.qa.bcavt.com/inchtek/alertmanager:v0.27.0
+        args: ["--config.file=/etc/alertmanager/alertmanager.yml","--storage.path=/alertmanager"]
+        ports: [{name: http, containerPort: 9093}]
+        volumeMounts:
+        - {name: config, mountPath: /etc/alertmanager}
+        - {name: data, mountPath: /alertmanager}
+        readinessProbe: {httpGet: {path: /-/ready, port: 9093}, initialDelaySeconds: 5, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /-/healthy, port: 9093}, initialDelaySeconds: 10, periodSeconds: 15}
+        resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 300m, memory: 256Mi}}
+      volumes:
+      - {name: config, configMap: {name: alertmanager-config}}
+      - {name: data, persistentVolumeClaim: {claimName: alertmanager-data}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: alertmanager, namespace: monitoring}
+spec: {selector: {app: alertmanager}, ports: [{name: http, port: 9093, targetPort: 9093}]}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: grafana-data, namespace: monitoring}
+spec: {accessModes: [ReadWriteOnce], storageClassName: longhorn, resources: {requests: {storage: 5Gi}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: grafana, namespace: monitoring}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: grafana}}
+  template:
+    metadata: {labels: {app: grafana}}
+    spec:
+      securityContext: {fsGroup: 472}
+      imagePullSecrets: [{name: cmdb-registry}]
+      containers:
+      - name: grafana
+        image: harbor.qa.bcavt.com/library/grafana/grafana:latest
+        env:
+        - {name: GF_SECURITY_ADMIN_USER, valueFrom: {secretKeyRef: {name: grafana-admin, key: admin-user}}}
+        - {name: GF_SECURITY_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: grafana-admin, key: admin-password}}}
+        - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+        ports: [{name: http, containerPort: 3000}]
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/grafana}
+        - {name: datasources, mountPath: /etc/grafana/provisioning/datasources}
+        resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+      volumes:
+      - {name: data, persistentVolumeClaim: {claimName: grafana-data}}
+      - {name: datasources, configMap: {name: grafana-datasources}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: grafana, namespace: monitoring}
+spec: {selector: {app: grafana}, ports: [{name: http, port: 3000, targetPort: 3000}]}

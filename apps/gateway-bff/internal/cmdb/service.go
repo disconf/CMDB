@@ -18,7 +18,8 @@ var ErrNotFound = errors.New("asset not found")
 var runtimeAutoAttrs = map[string]bool{
 	"os": true, "kernel": true, "architecture": true, "cpu": true,
 	"memory_bytes": true, "disk_bytes": true, "boot_time": true,
-	"agent_version": true, "mac_addresses": true,
+	"agent_version": true, "mac_addresses": true, "virtualization_type": true,
+	"node_exporter_status": true, "node_exporter_port": true, "node_exporter_version": true,
 }
 var ErrValidation = errors.New("validation failed")
 var ErrSlotTaken = errors.New("机柜U位已被占用")
@@ -448,11 +449,21 @@ func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
 	defer s.mu.RUnlock()
 	groups := make([]PrometheusTargetGroup, 0)
 	for _, a := range s.assets {
-		if a.Status != "online" || a.Source != "linux-agent" || strings.TrimSpace(a.IP) == "" {
+		if a.Status != "online" || strings.TrimSpace(a.IP) == "" {
 			continue
 		}
+		exporterStatus := attrValue(a.Attributes, "node_exporter_status")
+		exporterPort := attrValue(a.Attributes, "node_exporter_port")
+		hasExporter := a.Source == "node-exporter" || exporterStatus == "active" || containsValue(a.Tags, "node-exporter")
+		if !hasExporter || exporterStatus == "removed" {
+			continue
+		}
+		targetPort := port
+		if exporterPort != "" {
+			targetPort = exporterPort
+		}
 		groups = append(groups, PrometheusTargetGroup{
-			Targets: []string{a.IP + ":" + port},
+			Targets: []string{a.IP + ":" + targetPort},
 			Labels: map[string]string{
 				"asset_id":      a.ID,
 				"asset_name":    a.Name,
@@ -701,13 +712,13 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 			s.assets[i].Status = "online"
 			s.assets[i].Source = "linux-agent"
 			s.assets[i].LastSeenAt = now
-			s.assets[i].Attributes = attrs
+			s.assets[i].Attributes = mergeRuntimeAttributes(s.assets[i].Attributes, attrs)
 			if isHostAssetType(assetType) && s.assets[i].Type != assetType {
 				s.assets[i].Type = assetType
 				s.assets[i].TypeName = typeName
 			}
 			if s.db != nil {
-				payload, _ := json.Marshal(attrs)
+				payload, _ := json.Marshal(s.assets[i].Attributes)
 				if _, err := s.db.Exec(`UPDATE cmdb_assets SET name=$2,ip=$3,status='online',source='linux-agent',type=$5,type_name=$6,last_seen_at=now(),attributes=$4,updated_at=now() WHERE id=$1`, in.ID, in.Hostname, in.IP, payload, s.assets[i].Type, s.assets[i].TypeName); err != nil {
 					return Asset{}, err
 				}
@@ -774,6 +785,37 @@ func (s *Service) MarkAgentAssetOffline(id string) error {
 	return ErrNotFound
 }
 
+func containsValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeRuntimeAttributes(existing, incoming []Attribute) []Attribute {
+	result := append([]Attribute(nil), existing...)
+	byName := make(map[string]int, len(result))
+	for i, attribute := range result {
+		byName[attribute.Name] = i
+	}
+	for _, attribute := range incoming {
+		if !runtimeAutoAttrs[attribute.Name] {
+			continue
+		}
+		if index, ok := byName[attribute.Name]; ok {
+			result[index].Value = attribute.Value
+			if result[index].Label == "" {
+				result[index].Label = attribute.Label
+			}
+			continue
+		}
+		result = append(result, Attribute{Name: attribute.Name, Label: attribute.Label, Value: attribute.Value})
+		byName[attribute.Name] = len(result) - 1
+	}
+	return result
+}
 func attrValue(attrs []Attribute, name string) string {
 	for _, a := range attrs {
 		if a.Name == name {

@@ -28,6 +28,7 @@ func TestAlertmanagerWebhookUpsertsAndResolvesAlert(t *testing.T) {
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	}{Status: "firing", Labels: map[string]string{"alertname": "HostDown", "severity": "critical", "instance": "host-01"}, Annotations: map[string]string{"summary": "主机不可用", "description": "探测失败"}, StartsAt: time.Now(), Fingerprint: "fp-01"})
 	if got, err := s.ReceiveWebhook(payload); err != nil || got != 1 {
@@ -62,6 +63,7 @@ func TestAlertmanagerUsesCMDBAssetIDForAssociation(t *testing.T) {
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	}{Status: "firing", Labels: map[string]string{"alertname": "HostDown", "instance": "host-a", "cmdb_asset_id": "asset-a"}, StartsAt: time.Now(), Fingerprint: "fp-asset"})
 	if _, err := s.ReceiveWebhook(payload); err != nil {
@@ -81,6 +83,7 @@ func TestRepeatedWebhookIsDeduplicatedAndAcknowledgementIsPreserved(t *testing.T
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	}{Status: "firing", Labels: map[string]string{"alertname": "HighLoad", "instance": "host-02"}, StartsAt: time.Now(), Fingerprint: "fp-repeat"})
 	_, _ = s.ReceiveWebhook(payload)

@@ -49,13 +49,19 @@ func TestGetAssetReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestPrometheusTargetGroupsOnlyIncludeOnlineLinuxAgents(t *testing.T) {
+func TestPrometheusTargetGroupsOnlyIncludeActiveExporters(t *testing.T) {
 	service := NewService()
 	_, err := service.UpsertAgentAsset(AgentAssetInput{ID: "agent-monitor-01", Hostname: "monitor-01", IP: "10.88.0.11"})
 	if err != nil {
 		t.Fatalf("upsert agent asset: %v", err)
 	}
-	targets := service.PrometheusTargetGroups("9200")
+	if got := service.PrometheusTargetGroups("9100"); len(got) != 0 {
+		t.Fatalf("plain agent must not be discovered without exporter: %#v", got)
+	}
+	if _, err := service.MergeHostInventory("agent-monitor-01", "node-exporter", []Attribute{{Name: "node_exporter_status", Label: "Exporter 状态", Value: "active"}, {Name: "node_exporter_port", Label: "Exporter 端口", Value: "9200"}}); err != nil {
+		t.Fatalf("merge exporter attrs: %v", err)
+	}
+	targets := service.PrometheusTargetGroups("9100")
 	if len(targets) != 1 || targets[0].Targets[0] != "10.88.0.11:9200" {
 		t.Fatalf("unexpected service discovery targets: %#v", targets)
 	}
@@ -70,6 +76,37 @@ func TestPrometheusTargetGroupsOnlyIncludeOnlineLinuxAgents(t *testing.T) {
 	}
 }
 
+func TestUpsertAgentAssetPreservesExporterAttributes(t *testing.T) {
+	service := NewService()
+	in := AgentAssetInput{ID: "agent-exporter-preserve", Type: "virtual-machine", Hostname: "exporter-preserve", IP: "10.88.0.13", Virtualization: "kvm"}
+	if _, err := service.UpsertAgentAsset(in); err != nil {
+		t.Fatalf("upsert agent asset: %v", err)
+	}
+	if _, err := service.MergeHostInventory(in.ID, "node-exporter", []Attribute{
+		{Name: "node_exporter_status", Label: "Exporter 状态", Value: "active"},
+		{Name: "node_exporter_port", Label: "Exporter 端口", Value: "19200"},
+		{Name: "node_exporter_version", Label: "Exporter 版本", Value: "1.11.1"},
+	}); err != nil {
+		t.Fatalf("merge exporter attrs: %v", err)
+	}
+	if _, err := service.UpsertAgentAsset(in); err != nil {
+		t.Fatalf("second agent report: %v", err)
+	}
+	asset, err := service.GetAsset(in.ID)
+	if err != nil {
+		t.Fatalf("get asset: %v", err)
+	}
+	if got := attrValue(asset.Attributes, "node_exporter_status"); got != "active" {
+		t.Fatalf("expected exporter status to be preserved, got %q", got)
+	}
+	if got := attrValue(asset.Attributes, "node_exporter_port"); got != "19200" {
+		t.Fatalf("expected exporter port to be preserved, got %q", got)
+	}
+	targets := service.PrometheusTargetGroups("9100")
+	if len(targets) != 1 || targets[0].Targets[0] != "10.88.0.13:19200" {
+		t.Fatalf("expected preserved exporter target, got %#v", targets)
+	}
+}
 func TestMonitoringAssetsIncludeOfflineAgentAssets(t *testing.T) {
 	service := NewService()
 	_, _ = service.UpsertAgentAsset(AgentAssetInput{ID: "agent-offline", Hostname: "offline-host", IP: "10.88.0.12"})

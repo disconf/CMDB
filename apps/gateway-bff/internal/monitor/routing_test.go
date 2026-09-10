@@ -21,6 +21,7 @@ func TestRoutingRuleAutomaticallyAssignsWebhookAlert(t *testing.T) {
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	}{Status: "firing", Labels: map[string]string{"alertname": "PostgresDown", "service": "postgresql", "instance": "db-01"}, StartsAt: time.Now(), Fingerprint: "routed-alert"})
 	if _, err := s.ReceiveWebhook(payload); err != nil {
@@ -48,6 +49,7 @@ func TestExplicitOwnerLabelOverridesRoutingRule(t *testing.T) {
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	}{Status: "firing", Labels: map[string]string{"alertname": "HostDown", "severity": "critical", "owner": "explicit-owner"}, StartsAt: time.Now(), Fingerprint: "explicit-alert"})
 	_, _ = s.ReceiveWebhook(payload)

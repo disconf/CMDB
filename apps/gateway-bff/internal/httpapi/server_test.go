@@ -41,18 +41,27 @@ func TestMetricsAndAlertmanagerWebhookEndpoints(t *testing.T) {
 	if metrics.Code != http.StatusOK || !bytes.Contains(metrics.Body.Bytes(), []byte("cmdb_assets_total")) {
 		t.Fatalf("unexpected metrics response %d", metrics.Code)
 	}
-	body := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"GatewayDown","severity":"critical","instance":"gateway"},"annotations":{"summary":"Gateway down"},"startsAt":"2026-07-21T01:00:00Z","fingerprint":"webhook-test"}]}`
+	body := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"GatewayDown","severity":"critical","instance":"gateway"},"annotations":{"summary":"Gateway down"},"startsAt":"2026-07-21T01:00:00Z","generatorURL":"http://prometheus.example/graph","fingerprint":"webhook-test"}]}`
 	webhook := httptest.NewRecorder()
 	server.Handler().ServeHTTP(webhook, httptest.NewRequest(http.MethodPost, "/api/v1/monitor/alerts/webhook", bytes.NewBufferString(body)))
 	if webhook.Code != http.StatusAccepted {
 		t.Fatalf("expected webhook 202, got %d: %s", webhook.Code, webhook.Body.String())
 	}
+	resolvedBody := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"GatewayDown","severity":"critical","instance":"gateway"},"annotations":{"summary":"Gateway down"},"startsAt":"2026-07-21T01:00:00Z","endsAt":"2026-07-21T01:05:00Z","generatorURL":"http://prometheus.example/graph","fingerprint":"webhook-test"}]}`
+	resolved := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resolved, httptest.NewRequest(http.MethodPost, "/api/v1/monitor/alerts/webhook", bytes.NewBufferString(resolvedBody)))
+	if resolved.Code != http.StatusAccepted {
+		t.Fatalf("expected resolved webhook 202, got %d: %s", resolved.Code, resolved.Body.String())
+	}
 }
 
 func TestPrometheusServiceDiscoveryEndpoint(t *testing.T) {
+	t.Setenv("AGENT_SHARED_TOKEN", "prometheus-discovery-token")
 	server := NewServer()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/monitor/service-discovery/node-exporter", nil)
+	request.Header.Set("Authorization", "Bearer prometheus-discovery-token")
 	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/monitor/service-discovery/node-exporter", nil))
+	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected service discovery 200, got %d", recorder.Code)
 	}

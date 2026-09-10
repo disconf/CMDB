@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: jzq-cluster
+    environment: ops-qa
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager.monitoring.svc.cluster.local:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels: {service: prometheus}
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager.monitoring.svc.cluster.local:9093"]
+        labels: {service: alertmanager}
+
+  - job_name: cmdb-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway.ops-qa.svc.cluster.local:8080"]
+        labels: {service: gateway-bff}
+
+  - job_name: cmdb-node-exporter
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/node-exporter
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance

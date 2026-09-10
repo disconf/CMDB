@@ -115,6 +115,7 @@ type WebhookPayload struct {
 		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	} `json:"alerts"`
 }

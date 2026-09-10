@@ -65,13 +65,17 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 	mux.Handle("GET /metrics", platformMetrics.Handler())
-	mux.HandleFunc("GET /api/v1/monitor/service-discovery/node-exporter", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/v1/monitor/service-discovery/node-exporter", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, cmdbService.PrometheusTargetGroups(os.Getenv("CMDB_NODE_EXPORTER_PORT")))
 	})
 	mux.HandleFunc("POST /api/v1/monitor/alerts/webhook", func(w http.ResponseWriter, r *http.Request) {
 		var payload monitor.WebhookPayload
-		if err := decodeJSON(r, &payload); err != nil {
+		if err := decodeJSONLenient(r, &payload); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_ALERTMANAGER_PAYLOAD"})
 			return
 		}
@@ -1772,6 +1776,9 @@ func bearerToken(r *http.Request) string {
 	return value[len(prefix):]
 }
 
+func decodeJSONLenient(r *http.Request, value any) error {
+	return json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(value)
+}
 func decodeJSON(r *http.Request, value any) error {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
