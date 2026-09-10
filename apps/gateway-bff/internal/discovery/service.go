@@ -260,7 +260,7 @@ func (s *Service) RunAgentHealth(ctx context.Context) {
 //
 //	CMDB_AUTO_SCAN_INTERVAL_MIN  (default 5)
 //	CMDB_AUTO_SCAN_SNMP_CIDRS    (comma separated, uses CMDB_SNMP_COMMUNITY)
-//	CMDB_AUTO_SCAN_NODE_CIDRS    (comma separated, port 9100)
+//	CMDB_AUTO_SCAN_NODE_CIDRS    (comma separated, ports from CMDB_AUTO_SCAN_NODE_PORTS, default 9100,19100)
 //	CMDB_AUTO_SCAN_SSH_CIDRS     (comma separated, uses CMDB_SSH_*)
 func (s *Service) AutoScanLoops(ctx context.Context) {
 	interval := 5
@@ -271,6 +271,7 @@ func (s *Service) AutoScanLoops(ctx context.Context) {
 	}
 	snmp := os.Getenv("CMDB_AUTO_SCAN_SNMP_CIDRS")
 	node := os.Getenv("CMDB_AUTO_SCAN_NODE_CIDRS")
+	nodePorts := autoNodeExporterPorts()
 	ssh := os.Getenv("CMDB_AUTO_SCAN_SSH_CIDRS")
 	if snmp == "" && node == "" && ssh == "" {
 		return
@@ -288,7 +289,7 @@ func (s *Service) AutoScanLoops(ctx context.Context) {
 				}
 			}
 			if node != "" {
-				if _, err := s.ScanNodeExporter(ctx, NodeExporterScanInput{CIDRs: splitList(node)}); err != nil {
+				if _, err := s.ScanNodeExporter(ctx, NodeExporterScanInput{CIDRs: splitList(node), Ports: nodePorts}); err != nil {
 					slog.Error("auto node scan", "error", err)
 				}
 			}
@@ -301,6 +302,30 @@ func (s *Service) AutoScanLoops(ctx context.Context) {
 	}
 }
 
+func autoNodeExporterPorts() []int {
+	for _, name := range []string{"CMDB_AUTO_SCAN_NODE_PORTS", "CMDB_AUTO_SCAN_NODE_PORT"} {
+		if value := os.Getenv(name); value != "" {
+			if ports := parseNodeExporterPorts(value); len(ports) > 0 {
+				return ports
+			}
+		}
+	}
+	return []int{9100, 19100}
+}
+
+func parseNodeExporterPorts(value string) []int {
+	seen := map[int]bool{}
+	ports := make([]int, 0)
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		port, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || port < 1 || port > 65535 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		ports = append(ports, port)
+	}
+	return ports
+}
 func splitList(value string) []string {
 	var out []string
 	for _, part := range strings.Split(value, ",") {
@@ -499,33 +524,22 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		if item.ID == "" {
 			continue
 		}
-		exists := false
-		for _, existing := range task.Items {
-			if existing.ID == item.ID {
-				exists = true
+		existingIndex := -1
+		for i := range task.Items {
+			if task.Items[i].ID == item.ID {
+				existingIndex = i
 				break
 			}
 		}
-		if exists {
-			result.Conflicts++
-			conflict := item
-			conflict.ID = fmt.Sprintf("%s-conflict-%d", item.ID, time.Now().UnixNano())
-			conflict.State = "conflict"
-			conflict.Result = "conflict"
-			conflict.Message = "同一发现任务中出现重复资源编号"
-			conflict.UpdatedAt = now.Format("2006-01-02 15:04:05")
-			task.Items = append(task.Items, conflict)
-			if err := s.persistItem(taskID, conflict, itemPayload(conflict)); err != nil {
-				s.mu.Unlock()
-				return IngestResult{}, err
-			}
-			continue
-		}
 		item.State = "pending"
 		item.Result = "pending"
-		item.Message = "等待入库"
+		item.Message = "等待刷新兴库"
 		item.UpdatedAt = now.Format("2006-01-02 15:04:05")
-		task.Items = append(task.Items, item)
+		if existingIndex >= 0 {
+			task.Items[existingIndex] = item
+		} else {
+			task.Items = append(task.Items, item)
+		}
 		pending = append(pending, item)
 		if err := s.persistItem(taskID, item, itemPayload(item)); err != nil {
 			s.mu.Unlock()

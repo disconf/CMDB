@@ -20,22 +20,25 @@ import (
 type NodeExporterScanInput struct {
 	CIDRs           []string `json:"cidrs"`
 	Port            int      `json:"port"`
+	Ports           []int    `json:"ports"`
 	DefaultType     string   `json:"defaultType"`
 	RequireApproval bool     `json:"requireApproval"`
 }
 
 type NodeExporterHost struct {
-	IP           string           `json:"ip"`
-	Name         string           `json:"name"`
-	OS           string           `json:"os"`
-	Kernel       string           `json:"kernel"`
-	Architecture string           `json:"architecture"`
-	CPUCount     int              `json:"cpuCount"`
-	MemoryBytes  uint64           `json:"memoryBytes"`
-	DiskBytes    uint64           `json:"diskBytes"`
-	BootTime     string           `json:"bootTime"`
-	Virtual      bool             `json:"virtual"`
-	Attributes   []cmdb.Attribute `json:"attributes"`
+	IP              string           `json:"ip"`
+	Name            string           `json:"name"`
+	OS              string           `json:"os"`
+	Kernel          string           `json:"kernel"`
+	Architecture    string           `json:"architecture"`
+	CPUCount        int              `json:"cpuCount"`
+	MemoryBytes     uint64           `json:"memoryBytes"`
+	DiskBytes       uint64           `json:"diskBytes"`
+	BootTime        string           `json:"bootTime"`
+	Virtual         bool             `json:"virtual"`
+	ExporterPort    int              `json:"exporterPort,omitempty"`
+	ExporterVersion string           `json:"version,omitempty"`
+	Attributes      []cmdb.Attribute `json:"attributes"`
 }
 
 type NodeExporterScanResult struct {
@@ -91,6 +94,8 @@ func parseNodeExporter(ip string, body string) *NodeExporterHost {
 			host.Name = labels["nodename"]
 			host.Kernel = labels["release"]
 			host.Architecture = labels["machine"]
+		case strings.HasPrefix(line, "node_exporter_build_info"):
+			host.ExporterVersion = labels["version"]
 		case strings.HasPrefix(line, "node_os_info"):
 			host.OS = labels["pretty_name"]
 			if host.OS == "" {
@@ -165,7 +170,45 @@ func probeNodeExporter(client *http.Client, ip string, port int) *NodeExporterHo
 	if err != nil || !strings.Contains(string(bodyBytes), "node_uname_info") {
 		return nil
 	}
-	return parseNodeExporter(ip, string(bodyBytes))
+	host := parseNodeExporter(ip, string(bodyBytes))
+	applyNodeExporterMetadata(host, port)
+	return host
+}
+
+func applyNodeExporterMetadata(host *NodeExporterHost, port int) {
+	if host == nil {
+		return
+	}
+	host.ExporterPort = port
+	host.Attributes = append(host.Attributes,
+		cmdb.Attribute{Name: "node_exporter_status", Label: "Exporter 状态", Value: "active"},
+		cmdb.Attribute{Name: "node_exporter_port", Label: "Exporter 端口", Value: strconv.Itoa(port)},
+	)
+	if host.ExporterVersion != "" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "node_exporter_version", Label: "Exporter 版本", Value: host.ExporterVersion})
+	}
+}
+
+func normalizeNodeExporterPorts(in NodeExporterScanInput) ([]int, error) {
+	candidates := append([]int(nil), in.Ports...)
+	if len(candidates) == 0 && in.Port != 0 {
+		candidates = append(candidates, in.Port)
+	}
+	if len(candidates) == 0 {
+		candidates = []int{9100}
+	}
+	seen := map[int]bool{}
+	ports := make([]int, 0, len(candidates))
+	for _, port := range candidates {
+		if port < 1 || port > 65535 {
+			return nil, errors.New("invalid port")
+		}
+		if !seen[port] {
+			seen[port] = true
+			ports = append(ports, port)
+		}
+	}
+	return ports, nil
 }
 
 // ScanNodeExporter scans CIDRs for node_exporter and adopts found hosts into CMDB.
@@ -174,12 +217,9 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 	if len(in.CIDRs) == 0 {
 		return result, errors.New("validation")
 	}
-	port := in.Port
-	if port == 0 {
-		port = 9100
-	}
-	if port < 1 || port > 65535 {
-		return result, errors.New("invalid port")
+	ports, err := normalizeNodeExporterPorts(in)
+	if err != nil {
+		return result, err
 	}
 	defaultType := strings.TrimSpace(in.DefaultType)
 	if defaultType == "" {
@@ -218,10 +258,13 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 				return
 			default:
 			}
-			if host := probeNodeExporter(client, address, port); host != nil {
-				mu.Lock()
-				found = append(found, host)
-				mu.Unlock()
+			for _, port := range ports {
+				if host := probeNodeExporter(client, address, port); host != nil {
+					mu.Lock()
+					found = append(found, host)
+					mu.Unlock()
+					break
+				}
 			}
 		}(ip)
 	}

@@ -59,8 +59,8 @@ func TestIngestAutoImportsToCMDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ingest2: %v", err)
 	}
-	if res2.Conflicts != 1 || res2.Imported != 0 {
-		t.Fatalf("expected same-day duplicate as conflict, got %+v", res2)
+	if res2.Conflicts != 0 || res2.Merged != 1 {
+		t.Fatalf("expected same-day duplicate refresh as merge, got %+v", res2)
 	}
 }
 
