@@ -15,10 +15,11 @@ import (
 )
 
 type SNMPScanInput struct {
-	CIDRs       []string `json:"cidrs"`
-	Community   string   `json:"community"`
-	Port        int      `json:"port"`
-	DefaultType string   `json:"defaultType"` // network-device / physical-server / ""(自动)
+	CIDRs        []string `json:"cidrs"`
+	Community    string   `json:"community"`
+	Port         int      `json:"port"`
+	DefaultType  string   `json:"defaultType"` // network-device / physical-server / ""(自动)
+	CredentialID string   `json:"credentialId"`
 }
 
 type SNMPScanResult struct {
@@ -196,6 +197,11 @@ func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResul
 		return result, errors.New("validation")
 	}
 	community := in.Community
+	if in.CredentialID != "" {
+		if _, sec, err := s.resolveCredential(in.CredentialID); err == nil && sec != "" {
+			community = sec
+		}
+	}
 	if community == "" {
 		community = os.Getenv("CMDB_SNMP_COMMUNITY")
 	}

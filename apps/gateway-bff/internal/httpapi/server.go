@@ -14,6 +14,7 @@ import (
 	"cmdb/gateway-bff/internal/aiops"
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/credentials"
 	"cmdb/gateway-bff/internal/dashboard"
 	"cmdb/gateway-bff/internal/discovery"
 	"cmdb/gateway-bff/internal/idc"
@@ -48,6 +49,11 @@ func NewServer() *Server {
 	topologyService := topology.NewService()
 	authService := auth.NewService()
 	idcService := idc.NewService()
+	credentialsService := credentials.NewService()
+	discoveryService.SetCredentialResolver(func(id string) (string, string, error) {
+		m, err := credentialsService.Resolve(id)
+		return m.Username, m.Secret, err
+	})
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -471,6 +477,48 @@ func NewServer() *Server {
 		}
 		if err := idcService.DeleteRoom(r.PathValue("roomId")); err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/credentials", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		list, err := credentialsService.List()
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "VAULT_UNAVAILABLE", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+	mux.HandleFunc("POST /api/v1/credentials", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in struct {
+			Name     string `json:"name"`
+			Kind     string `json:"kind"`
+			Username string `json:"username"`
+			Secret   string `json:"secret"`
+		}
+		if err := decodeJSON(r, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		cred, err := credentialsService.Create(in.Name, in.Kind, in.Username, in.Secret)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, cred)
+	})
+	mux.HandleFunc("DELETE /api/v1/credentials/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		if err := credentialsService.Delete(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "DELETE_FAILED", "message": err.Error()})
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

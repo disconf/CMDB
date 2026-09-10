@@ -28,3 +28,8 @@ export const addIdcRack=(token:string,moduleId:string,payload:{name:string;uTota
 export const createModel=(token:string,input:Omit<CiModel,'count'|'enabled'>)=>send<CiModel>('/api/v1/cmdb/models',token,'POST',input)
 export const updateModel=(token:string,code:string,input:Omit<CiModel,'count'|'enabled'>)=>send<CiModel>(`/api/v1/cmdb/models/${encodeURIComponent(code)}`,token,'PUT',input)
 export const toggleModel=(token:string,code:string)=>send<CiModel>(`/api/v1/cmdb/models/${encodeURIComponent(code)}/toggle`,token,'POST',{})
+
+export interface Credential { id:string;name:string;kind:string;username:string }
+export const listCredentials=(token:string)=>get<Credential[]>('/api/v1/credentials',token)
+export const createCredential=(token:string,input:{name:string;kind:string;username:string;secret:string})=>send<Credential>('/api/v1/credentials',token,'POST',input)
+export const deleteCredential=(token:string,id:string)=>del<void>(`/api/v1/credentials/${encodeURIComponent(id)}`,token)

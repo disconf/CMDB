@@ -18,9 +18,10 @@ import (
 // SSHScanInput lists CIDRs to scan over SSH. Credentials come from server env
 // CMDB_SSH_USERNAME / CMDB_SSH_PASSWORD (kept in a k8s Secret), never in payload.
 type SSHScanInput struct {
-	CIDRs       []string `json:"cidrs"`
-	Port        int      `json:"port"`
-	DefaultType string   `json:"defaultType"`
+	CIDRs        []string `json:"cidrs"`
+	Port         int      `json:"port"`
+	DefaultType  string   `json:"defaultType"`
+	CredentialID string   `json:"credentialId"`
 }
 
 type SSHScanResult struct {
@@ -90,10 +91,11 @@ func runSSHRaw(ip string, port int, username, password, command string, timeout 
 }
 
 type AgentInstallInput struct {
-	Hosts      []string `json:"hosts"`
-	Port       int      `json:"port"`
-	AssetType  string   `json:"assetType"`
-	GatewayURL string   `json:"gatewayUrl"`
+	Hosts        []string `json:"hosts"`
+	Port         int      `json:"port"`
+	AssetType    string   `json:"assetType"`
+	GatewayURL   string   `json:"gatewayUrl"`
+	CredentialID string   `json:"credentialId"`
 }
 type AgentInstallResult struct {
 	Host string `json:"host"`
@@ -106,6 +108,11 @@ type AgentInstallResult struct {
 func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult, error) {
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")
+	if in.CredentialID != "" {
+		if u, sec, err := s.resolveCredential(in.CredentialID); err == nil && sec != "" {
+			username, password = u, sec
+		}
+	}
 	gatewayURL := strings.TrimRight(in.GatewayURL, "/")
 	if gatewayURL == "" {
 		gatewayURL = strings.TrimRight(os.Getenv("CMDB_AGENT_GATEWAY_URL"), "/")
@@ -212,6 +219,11 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 	}
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")
+	if in.CredentialID != "" {
+		if u, sec, err := s.resolveCredential(in.CredentialID); err == nil && sec != "" {
+			username, password = u, sec
+		}
+	}
 	if username == "" || password == "" {
 		return result, errors.New("CMDB_SSH_USERNAME/CMDB_SSH_PASSWORD not configured")
 	}

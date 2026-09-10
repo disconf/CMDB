@@ -106,6 +106,7 @@ type Service struct {
 	agentToken   string
 	agentSeen    map[string]time.Time
 	offlineAfter time.Duration
+	credResolver func(id string) (string, string, error)
 }
 
 func NewService() *Service {
@@ -135,6 +136,17 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	}
 	return s
 }
+func (s *Service) SetCredentialResolver(fn func(id string) (string, string, error)) {
+	s.credResolver = fn
+}
+
+func (s *Service) resolveCredential(id string) (string, string, error) {
+	if id == "" || s.credResolver == nil {
+		return "", "", nil
+	}
+	return s.credResolver(id)
+}
+
 func (s *Service) AuthorizeAgentToken(token string) bool {
 	if s.agentToken == "" {
 		return false
