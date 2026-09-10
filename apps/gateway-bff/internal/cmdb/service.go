@@ -47,7 +47,7 @@ func NewService() *Service {
 		asset("redis-prod-01", "session-redis", "middleware", "中间件", "online", "10.23.3.41", "生产", "核心系统组", "吴涛", "Redis Cluster / session", "Agent", []string{"Redis", "会话"}),
 		asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
 	}
-	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
 	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry)}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
@@ -60,13 +60,9 @@ func NewService() *Service {
 		if modelErr != nil {
 			panic(fmt.Sprintf("load CMDB models: %v", modelErr))
 		}
-		if len(persistedModels) == 0 {
-			for _, model := range models {
-				if err := upsertModel(context.Background(), db, model); err != nil {
-					panic(fmt.Sprintf("seed CMDB model: %v", err))
-				}
-			}
-			persistedModels = models
+		persistedModels, modelErr = ensureDefaultModels(context.Background(), db, models, persistedModels)
+		if modelErr != nil {
+			panic(fmt.Sprintf("seed missing CMDB models: %v", modelErr))
 		}
 		if err := ensureModelFieldPresets(context.Background(), service.db, persistedModels); err != nil {
 			panic(fmt.Sprintf("seed CMDB model fields: %v", err))
@@ -107,6 +103,55 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "disk", Label: "磁盘", Type: "text"},
 		{Name: "mac_addresses", Label: "MAC地址", Type: "text"},
 	},
+	"k8s-cluster": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "api_server", Label: "API Server", Type: "text"},
+		{Name: "k8s_version", Label: "Kubernetes 版本", Type: "text"},
+	},
+	"k8s-node": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "k8s_uid", Label: "K8s UID", Type: "text"},
+		{Name: "kubelet_version", Label: "Kubelet 版本", Type: "text"},
+		{Name: "os_image", Label: "节点操作系统", Type: "text"},
+		{Name: "architecture", Label: "架构", Type: "text"},
+		{Name: "cpu_capacity", Label: "CPU 容量", Type: "text"},
+		{Name: "memory_capacity", Label: "内存容量", Type: "text"},
+		{Name: "provider_id", Label: "Provider ID", Type: "text"},
+	},
+	"k8s-namespace": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "k8s_uid", Label: "K8s UID", Type: "text"},
+		{Name: "namespace_status", Label: "命名空间状态", Type: "text"},
+	},
+	"k8s-workload": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "namespace", Label: "命名空间", Type: "text"},
+		{Name: "workload_kind", Label: "工作负载类型", Type: "text"},
+		{Name: "replicas", Label: "副本数", Type: "text"},
+		{Name: "ready_replicas", Label: "就绪副本", Type: "text"},
+		{Name: "images", Label: "镜像", Type: "text"},
+	},
+	"k8s-pod": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "namespace", Label: "命名空间", Type: "text"},
+		{Name: "node_name", Label: "所在节点", Type: "text"},
+		{Name: "pod_phase", Label: "Pod 阶段", Type: "text"},
+		{Name: "restart_count", Label: "重启次数", Type: "text"},
+		{Name: "images", Label: "镜像", Type: "text"},
+	},
+	"k8s-service": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "namespace", Label: "命名空间", Type: "text"},
+		{Name: "service_type", Label: "Service 类型", Type: "text"},
+		{Name: "cluster_ip", Label: "Cluster IP", Type: "text"},
+		{Name: "ports", Label: "端口", Type: "text"},
+	},
+	"k8s-ingress": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "namespace", Label: "命名空间", Type: "text"},
+		{Name: "hosts", Label: "访问域名", Type: "text"},
+		{Name: "load_balancer", Label: "负载均衡地址", Type: "text"},
+	},
 	"network-device": {
 		{Name: "serial", Label: "序列号", Type: "text"},
 		{Name: "vendor", Label: "厂商", Type: "text"},
@@ -125,6 +170,23 @@ func applyModelFieldPresets(models []Model) []Model {
 		}
 	}
 	return models
+}
+
+func ensureDefaultModels(ctx context.Context, db *sql.DB, defaults, persisted []Model) ([]Model, error) {
+	seen := make(map[string]bool, len(persisted))
+	for _, model := range persisted {
+		seen[model.Code] = true
+	}
+	for _, model := range defaults {
+		if seen[model.Code] {
+			continue
+		}
+		if err := upsertModel(ctx, db, model); err != nil {
+			return nil, err
+		}
+		persisted = append(persisted, model)
+	}
+	return persisted, nil
 }
 
 func ensureModelFieldPresets(ctx context.Context, db *sql.DB, models []Model) error {

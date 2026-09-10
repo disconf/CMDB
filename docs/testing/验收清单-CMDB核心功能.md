@@ -66,5 +66,13 @@
 - [ ] 输入包含 `;`、管道、重定向等 shell 注入字符时被拒绝
 - [ ] 提交和审批均出现在审计日志
 
+## 11. Kubernetes 资源采集
+- [ ] “Agent 与自动发现 → K8s 资源”显示采集器可用、集群名称和 Kubernetes 版本
+- [ ] 点击“立即同步到 CMDB”返回总数、新增、更新、未变化和失败数量
+- [ ] CMDB 中可筛选 K8s 集群、Namespace、Workload、Pod、Service、Ingress 模型
+- [ ] Kubernetes Node 按 IP 与已有 Agent/SSH 主机资产合并，不产生重复资产
+- [ ] Pod、Workload、Namespace、Service、Ingress 之间存在关系数据
+- [ ] 采集器只使用 get/list 权限，不具备创建、修改、删除 K8s 资源权限
+
 ## 备注
 - 各项验收如有失败，记录：步骤/期望/实际/控制台报错。

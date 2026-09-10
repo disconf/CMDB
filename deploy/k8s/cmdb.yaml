@@ -12,6 +12,7 @@ spec:
   template:
     metadata: {labels: {app: gateway}}
     spec:
+      serviceAccountName: cmdb-k8s-reader
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: gateway

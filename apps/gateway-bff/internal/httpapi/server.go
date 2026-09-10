@@ -20,6 +20,7 @@ import (
 	"cmdb/gateway-bff/internal/discovery"
 	"cmdb/gateway-bff/internal/idc"
 	"cmdb/gateway-bff/internal/jobs"
+	"cmdb/gateway-bff/internal/k8s"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/system"
@@ -51,6 +52,7 @@ func NewServer() *Server {
 	authService := auth.NewService()
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
+	k8sService := k8s.NewService(cmdbService)
 	auditService := audit.NewService()
 	discoveryService.SetCredentialResolver(func(id string) (string, string, error) {
 		m, err := credentialsService.Resolve(id)
@@ -1143,6 +1145,24 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, agent)
+	})
+	mux.HandleFunc("GET /api/v1/k8s/status", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, k8sService.Status(r.Context()))
+	})
+	mux.HandleFunc("POST /api/v1/k8s/sync", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		result, err := k8sService.Sync(r.Context(), user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "K8S_SYNC_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-operations", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {

@@ -95,6 +95,8 @@ func auditAction(method, path string) string {
 		return "cmdb.model.update"
 	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/cmdb/models/"):
 		return "cmdb.model.toggle"
+	case method == http.MethodPost && path == "/api/v1/k8s/sync":
+		return "k8s.sync"
 	case method == http.MethodPost && path == "/api/v1/discovery/scan-node-exporter":
 		return "discovery.scan.node_exporter"
 	case method == http.MethodPost && path == "/api/v1/discovery/scan-ssh":
