@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: CMDB Monitors
+    orgId: 1
+    folder: CMDB
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards

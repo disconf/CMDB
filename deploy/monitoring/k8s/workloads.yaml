@@ -109,14 +109,19 @@ spec:
         - {name: GF_SECURITY_ADMIN_USER, valueFrom: {secretKeyRef: {name: grafana-admin, key: admin-user}}}
         - {name: GF_SECURITY_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: grafana-admin, key: admin-password}}}
         - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+        - {name: GF_SERVER_ROOT_URL, value: "https://cmdb.jzq.com:31443/grafana/"}
+        - {name: GF_SERVER_DOMAIN, value: "cmdb.jzq.com"}
+        - {name: GF_SERVER_SERVE_FROM_SUB_PATH, value: "true"}
         ports: [{name: http, containerPort: 3000}]
         volumeMounts:
         - {name: data, mountPath: /var/lib/grafana}
         - {name: datasources, mountPath: /etc/grafana/provisioning/datasources}
+        - {name: dashboards, mountPath: /etc/grafana/provisioning/dashboards}
         resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
       volumes:
       - {name: data, persistentVolumeClaim: {claimName: grafana-data}}
       - {name: datasources, configMap: {name: grafana-datasources}}
+      - {name: dashboards, configMap: {name: grafana-dashboards}}
 ---
 apiVersion: v1
 kind: Service

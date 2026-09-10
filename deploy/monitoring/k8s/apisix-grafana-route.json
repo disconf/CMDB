@@ -1,0 +1,27 @@
+{
+  "name": "grafana",
+  "desc": "Grafana monitoring UI",
+  "host": "cmdb.jzq.com",
+  "uri": "/grafana/*",
+  "priority": 100,
+  "methods": ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"],
+  "enable_websocket": true,
+  "plugins": {
+    "proxy-rewrite": {
+      "scheme": "http",
+      "headers": {
+        "X-Forwarded-For": "$remote_addr",
+        "X-Forwarded-Proto": "$scheme",
+        "X-Forwarded-Host": "$host",
+        "X-Real-IP": "$remote_addr"
+      }
+    }
+  },
+  "upstream": {
+    "scheme": "http",
+    "type": "roundrobin",
+    "nodes": {
+      "grafana.monitoring.svc.cluster.local:3000": 1
+    }
+  }
+}

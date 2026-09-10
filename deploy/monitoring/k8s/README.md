@@ -33,6 +33,9 @@ kubectl -n monitoring create configmap alertmanager-config `
   --from-file=alertmanager.yml=alertmanager.yml --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n monitoring create configmap grafana-datasources `
   --from-file=grafana-datasource.yml=grafana-datasource.yml --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n monitoring create configmap grafana-dashboards `
+  --from-file=grafana-dashboards.yml=grafana-dashboards.yml `
+  --from-file=cmdb-host-overview.json=grafana-host-dashboard.json --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n monitoring rollout status deployment/prometheus
 kubectl -n monitoring rollout status deployment/alertmanager
@@ -53,3 +56,12 @@ kubectl -n monitoring port-forward svc/grafana 13000:3000
 - Prometheus `up{job="cmdb-node-exporter"}` 用于确认主机采集状态。
 - Alertmanager 触发和恢复通知会调用 `/api/v1/monitor/alerts/webhook`。
 - Grafana 默认数据源 `Prometheus` 指向 `http://prometheus.monitoring.svc.cluster.local:9090`。
+## Grafana 访问入口
+
+Grafana 通过现有 APISIX 域名暴露在：
+
+```text
+https://cmdb.jzq.com:31443/grafana/
+```
+
+APISIX 路由定义保存在 `apisix-grafana-route.json`。系统会通过 `grafana-dashboards` ConfigMap 自动加载“CMDB 主机监控”大盘，包含主机总数、在线数、离线数、CPU、内存、根分区和采集状态。

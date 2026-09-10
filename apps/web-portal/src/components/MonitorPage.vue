@@ -140,7 +140,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
   <section class="monitor-page">
     <header class="monitor-heading">
       <div><span>OBSERVABILITY & ALERT OPERATIONS</span><h1>监控告警中心</h1><p>实时指标、事件关联与告警闭环处置</p></div>
-      <div class="monitor-actions"><small v-if="lastUpdated">更新于 {{ lastUpdated }}</small><button @click="showRules=!showRules;showSilences=false;showRoutes=false;showChannels=false;showEscalations=false">{{showRules?'返回告警':'规则中心'}}</button><button @click="showSilences=!showSilences;showRules=false;showRoutes=false;showChannels=false;showEscalations=false">{{showSilences?'返回告警':'静默策略'}}</button><button @click="showRoutes=!showRoutes;showRules=false;showSilences=false;showChannels=false;showEscalations=false">{{showRoutes?'返回告警':'分派路由'}}</button><button @click="showChannels=!showChannels;showRules=false;showSilences=false;showRoutes=false;showEscalations=false">{{showChannels?'返回告警':'通知渠道'}}</button><button @click="showEscalations=!showEscalations;showRules=false;showSilences=false;showRoutes=false;showChannels=false">{{showEscalations?'返回告警':'升级策略'}}</button><button :disabled="loading" @click="load"><RefreshCw :class="{ spin: loading }" />刷新数据</button></div>
+      <div class="monitor-actions"><small v-if="lastUpdated">更新于 {{ lastUpdated }}</small><a class="monitor-link" href="https://cmdb.jzq.com:31443/grafana/" target="_blank" rel="noopener"><ExternalLink/>Grafana 大盘</a><button @click="showRules=!showRules;showSilences=false;showRoutes=false;showChannels=false;showEscalations=false">{{showRules?'返回告警':'规则中心'}}</button><button @click="showSilences=!showSilences;showRules=false;showRoutes=false;showChannels=false;showEscalations=false">{{showSilences?'返回告警':'静默策略'}}</button><button @click="showRoutes=!showRoutes;showRules=false;showSilences=false;showChannels=false;showEscalations=false">{{showRoutes?'返回告警':'分派路由'}}</button><button @click="showChannels=!showChannels;showRules=false;showSilences=false;showRoutes=false;showEscalations=false">{{showChannels?'返回告警':'通知渠道'}}</button><button @click="showEscalations=!showEscalations;showRules=false;showSilences=false;showRoutes=false;showChannels=false">{{showEscalations?'返回告警':'升级策略'}}</button><button :disabled="loading" @click="load"><RefreshCw :class="{ spin: loading }" />刷新数据</button></div>
     </header>
     <div v-if="error" class="monitor-error"><TriangleAlert />{{ error }}<button @click="load">重试</button></div>
     <div class="monitor-summary">
@@ -188,6 +188,9 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 <style scoped>
 .monitor-actions { display: flex; align-items: center; gap: 12px; color: #668198; }
 .monitor-actions small { white-space: nowrap; }
+.monitor-link { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid #26778f; color: #7ce7f4; text-decoration: none; white-space: nowrap; }
+.monitor-link:hover { border-color: #39bcd5; background: #102d3c; }
+.monitor-link svg { width: 15px; height: 15px; }
 .monitor-error { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 10px 12px; border: 1px solid #7c3142; background: #351928; color: #ff9cac; }
 .monitor-error svg { width: 17px; }
 .monitor-error button { margin-left: auto; padding: 5px 10px; }
