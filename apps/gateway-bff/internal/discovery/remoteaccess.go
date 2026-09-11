@@ -1,8 +1,8 @@
 package discovery
 
 import (
-	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -36,6 +36,34 @@ type AccessGrantInput struct {
 	Enabled      *bool    `json:"enabled"`
 }
 
+type RemoteHostKey struct {
+	ID          string `json:"id"`
+	AssetID     string `json:"assetId"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	KeyType     string `json:"keyType"`
+	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"publicKey"`
+	AddedBy     string `json:"addedBy"`
+	CreatedAt   string `json:"createdAt"`
+}
+type RemoteHostKeyInput struct {
+	AssetID     string `json:"assetId"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	KeyType     string `json:"keyType"`
+	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"publicKey"`
+}
+type RemoteHostKeyProbe struct {
+	AssetID     string `json:"assetId"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	KeyType     string `json:"keyType"`
+	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"publicKey"`
+	Trusted     bool   `json:"trusted"`
+}
 type RemoteSessionLog struct {
 	Time    string `json:"time"`
 	Level   string `json:"level"`
@@ -243,7 +271,7 @@ func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, role
 		return RemoteSession{}, err
 	}
 	started := time.Now()
-	output, runErr := sshRemoteRunner(context.Background(), item.IP, item.Port, command, username, secret, 30*time.Second)
+	output, runErr := s.runTrustedSSH(item.AssetID, item.IP, item.Port, command, username, secret, 30*time.Second)
 	message, level := truncateOutput(output), "success"
 	if runErr != nil {
 		message, level = runErr.Error(), "error"
@@ -276,7 +304,7 @@ func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reade
 	if err != nil {
 		return err
 	}
-	client, err := dialRemote(item.IP, item.Port, username, secret)
+	client, err := s.dialTrusted(item.AssetID, item.IP, item.Port, username, secret)
 	if err != nil {
 		return err
 	}
@@ -313,7 +341,7 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	if err != nil {
 		return nil, err
 	}
-	client, err := dialRemote(item.IP, item.Port, username, secret)
+	client, err := s.dialTrusted(item.AssetID, item.IP, item.Port, username, secret)
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +397,23 @@ func (s *Service) appendSessionLog(id, level, message string) {
 			return
 		}
 	}
+}
+func (s *Service) dialTrusted(assetID, ip string, port int, username, secret string) (*ssh.Client, error) {
+	return ssh.Dial("tcp", net.JoinHostPort(ip, strconv.Itoa(port)), &ssh.ClientConfig{User: username, Auth: remoteAuthMethods(secret), HostKeyCallback: s.trustedHostKeyCallback(assetID, ip, port), Timeout: 10 * time.Second})
+}
+func (s *Service) runTrustedSSH(assetID, ip string, port int, command, username, secret string, timeout time.Duration) (string, error) {
+	client, err := s.dialTrusted(assetID, ip, port, username, secret)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	session, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	output, err := session.CombinedOutput(command)
+	return string(output), err
 }
 func cloneRemoteSession(item RemoteSession) RemoteSession {
 	item.Roles = append([]string(nil), item.Roles...)
@@ -441,5 +486,153 @@ func (s *Service) deleteAccessGrantRow(id string) error {
 		return nil
 	}
 	_, err := s.db.Exec(`DELETE FROM remote_access_grants WHERE id=$1`, id)
+	return err
+}
+
+func (s *Service) RemoteHostKeys() []RemoteHostKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]RemoteHostKey(nil), s.hostKeys...)
+}
+func (s *Service) ProbeRemoteHostKey(assetID, credentialID, operator string, roles []string) (RemoteHostKeyProbe, error) {
+	if s.cmdb == nil {
+		return RemoteHostKeyProbe{}, ErrRemoteValidation
+	}
+	asset, err := s.cmdb.GetAsset(strings.TrimSpace(assetID))
+	if err != nil || asset.IP == "" {
+		return RemoteHostKeyProbe{}, ErrRemoteValidation
+	}
+	if !s.authorizeRemoteAccess(operator, roles, asset.ID, asset.ProjectGroup, "terminal") {
+		return RemoteHostKeyProbe{}, ErrRemoteValidation
+	}
+	username, secret, err := s.resolveRemoteCredential(strings.TrimSpace(credentialID))
+	if err != nil {
+		return RemoteHostKeyProbe{}, err
+	}
+	var captured ssh.PublicKey
+	config := &ssh.ClientConfig{User: username, Auth: remoteAuthMethods(secret), HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error { captured = key; return nil }, Timeout: 10 * time.Second}
+	client, err := ssh.Dial("tcp", net.JoinHostPort(asset.IP, "22"), config)
+	if err != nil {
+		return RemoteHostKeyProbe{}, err
+	}
+	_ = client.Close()
+	if captured == nil {
+		return RemoteHostKeyProbe{}, fmt.Errorf("failed to capture SSH host key")
+	}
+	fingerprint := ssh.FingerprintSHA256(captured)
+	probe := RemoteHostKeyProbe{AssetID: asset.ID, Host: asset.IP, Port: 22, KeyType: captured.Type(), Fingerprint: fingerprint, PublicKey: base64.StdEncoding.EncodeToString(captured.Marshal())}
+	s.mu.RLock()
+	probe.Trusted = s.findTrustedHostKeyLocked(asset.ID, asset.IP, 22, fingerprint)
+	s.mu.RUnlock()
+	return probe, nil
+}
+func (s *Service) TrustRemoteHostKey(input RemoteHostKeyInput, addedBy string) (RemoteHostKey, error) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(input.PublicKey))
+	if err != nil {
+		return RemoteHostKey{}, ErrRemoteValidation
+	}
+	key, err := ssh.ParsePublicKey(raw)
+	if err != nil {
+		return RemoteHostKey{}, ErrRemoteValidation
+	}
+	fingerprint := ssh.FingerprintSHA256(key)
+	if strings.TrimSpace(input.Fingerprint) != fingerprint {
+		return RemoteHostKey{}, ErrRemoteValidation
+	}
+	input.AssetID, input.Host = strings.TrimSpace(input.AssetID), strings.TrimSpace(input.Host)
+	if input.AssetID == "" || input.Host == "" {
+		return RemoteHostKey{}, ErrRemoteValidation
+	}
+	if input.Port == 0 {
+		input.Port = 22
+	}
+	item := RemoteHostKey{ID: remoteHostKeyID(), AssetID: input.AssetID, Host: input.Host, Port: input.Port, KeyType: key.Type(), Fingerprint: fingerprint, PublicKey: base64.StdEncoding.EncodeToString(key.Marshal()), AddedBy: addedBy, CreatedAt: time.Now().Format("2006-01-02 15:04:05")}
+	s.mu.Lock()
+	replaced := false
+	for i := range s.hostKeys {
+		if s.hostKeys[i].AssetID == item.AssetID && s.hostKeys[i].Host == item.Host && s.hostKeys[i].Port == item.Port {
+			item.ID, item.CreatedAt = s.hostKeys[i].ID, s.hostKeys[i].CreatedAt
+			s.hostKeys[i] = item
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		s.hostKeys = append([]RemoteHostKey{item}, s.hostKeys...)
+	}
+	s.mu.Unlock()
+	if s.db != nil {
+		_ = s.persistHostKey(item)
+	}
+	return item, nil
+}
+func (s *Service) DeleteRemoteHostKey(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.hostKeys {
+		if s.hostKeys[i].ID == id {
+			s.hostKeys = append(s.hostKeys[:i], s.hostKeys[i+1:]...)
+			if s.db != nil {
+				_ = s.deleteHostKeyRow(id)
+			}
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+func (s *Service) findTrustedHostKeyLocked(assetID, host string, port int, fingerprint string) bool {
+	for _, item := range s.hostKeys {
+		if item.AssetID == assetID && item.Host == host && item.Port == port && item.Fingerprint == fingerprint {
+			return true
+		}
+	}
+	return false
+}
+func (s *Service) trustedHostKeyCallback(assetID, host string, port int) ssh.HostKeyCallback {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		fingerprint := ssh.FingerprintSHA256(key)
+		s.mu.RLock()
+		trusted := s.findTrustedHostKeyLocked(assetID, host, port, fingerprint)
+		s.mu.RUnlock()
+		if !trusted {
+			return fmt.Errorf("SSH 主机指纹未信任，请先在远程运维页面探测并信任指纹")
+		}
+		return nil
+	}
+}
+func (s *Service) loadHostKeys() error {
+	if s.db == nil {
+		return nil
+	}
+	rows, err := s.db.Query(`SELECT id,asset_id,host,port,key_type,fingerprint,public_key,added_by,created_at FROM remote_host_keys ORDER BY updated_at DESC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	out := []RemoteHostKey{}
+	for rows.Next() {
+		var item RemoteHostKey
+		var created time.Time
+		if err = rows.Scan(&item.ID, &item.AssetID, &item.Host, &item.Port, &item.KeyType, &item.Fingerprint, &item.PublicKey, &item.AddedBy, &created); err != nil {
+			return err
+		}
+		item.CreatedAt = created.Local().Format("2006-01-02 15:04:05")
+		out = append(out, item)
+	}
+	s.hostKeys = out
+	return rows.Err()
+}
+func (s *Service) persistHostKey(item RemoteHostKey) error {
+	if s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`INSERT INTO remote_host_keys(id,asset_id,host,port,key_type,fingerprint,public_key,added_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,host=excluded.host,port=excluded.port,key_type=excluded.key_type,fingerprint=excluded.fingerprint,public_key=excluded.public_key,updated_at=now()`, item.ID, item.AssetID, item.Host, item.Port, item.KeyType, item.Fingerprint, item.PublicKey, item.AddedBy)
+	return err
+}
+func (s *Service) deleteHostKeyRow(id string) error {
+	if s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`DELETE FROM remote_host_keys WHERE id=$1`, id)
 	return err
 }

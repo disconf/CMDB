@@ -1514,6 +1514,62 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "remote.session.close", r.PathValue("id"), "")
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-host-keys", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.RemoteHostKeys())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-host-keys/probe", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input struct {
+			AssetID      string `json:"assetId"`
+			CredentialID string `json:"credentialId"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"message": "invalid host key probe"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		probe, err := discoveryService.ProbeRemoteHostKey(input.AssetID, input.CredentialID, user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		writeJSON(w, 200, probe)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-host-keys", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input discovery.RemoteHostKeyInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"message": "invalid host key"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.TrustRemoteHostKey(input, user.Username)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.hostkey.trust", item.AssetID, item.Fingerprint)
+		writeJSON(w, 201, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/discovery/remote-host-keys/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		if err := discoveryService.DeleteRemoteHostKey(r.PathValue("id")); err != nil {
+			writeJSON(w, 404, map[string]string{"message": "host key not found"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "remote.hostkey.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
