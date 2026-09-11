@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strings"
@@ -1349,4 +1350,125 @@ func cloneAsset(a Asset) Asset {
 	a.Attributes = append([]Attribute{}, a.Attributes...)
 	a.Relations = append([]Relation{}, a.Relations...)
 	return a
+}
+
+type RemoteTargetOptions struct {
+	ProjectGroups []string `json:"projectGroups"`
+	Tags          []string `json:"tags"`
+}
+
+func (s *Service) RemoteTargetOptions() RemoteTargetOptions {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groups := map[string]bool{}
+	tags := map[string]bool{}
+	for _, asset := range s.assets {
+		if !remoteEligibleAsset(asset) {
+			continue
+		}
+		if asset.ProjectGroup != "" {
+			groups[asset.ProjectGroup] = true
+		}
+		for _, tag := range asset.Tags {
+			if tag = strings.TrimSpace(tag); tag != "" {
+				tags[tag] = true
+			}
+		}
+	}
+	return RemoteTargetOptions{ProjectGroups: remoteSortedKeys(groups), Tags: remoteSortedKeys(tags)}
+}
+
+func (s *Service) ResolveRemoteTargets(projectGroups, tags, assetIDs, ips []string) []Asset {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groupSet := stringSet(projectGroups)
+	tagSet := stringSet(tags)
+	idSet := stringSet(assetIDs)
+	ipPatterns := trimmedStrings(ips)
+	result := []Asset{}
+	for _, asset := range s.assets {
+		if !remoteEligibleAsset(asset) {
+			continue
+		}
+		if len(groupSet) > 0 && !groupSet[asset.ProjectGroup] {
+			continue
+		}
+		if len(tagSet) > 0 && !hasRemoteTag(asset.Tags, tagSet) {
+			continue
+		}
+		if len(idSet) > 0 && !idSet[asset.ID] {
+			continue
+		}
+		if len(ipPatterns) > 0 && !remoteIPMatches(asset.IP, ipPatterns) {
+			continue
+		}
+		result = append(result, cloneAsset(asset))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+func remoteEligibleAsset(asset Asset) bool {
+	if asset.IP == "" || asset.Status == "offline" {
+		return false
+	}
+	switch asset.Type {
+	case "physical-server", "virtual-machine", "k8s-node":
+		return true
+	default:
+		return false
+	}
+}
+
+func remoteIPMatches(ip string, patterns []string) bool {
+	parsed := net.ParseIP(ip)
+	for _, pattern := range patterns {
+		if pattern == ip {
+			return true
+		}
+		if parsed != nil {
+			if _, network, err := net.ParseCIDR(pattern); err == nil && network.Contains(parsed) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasRemoteTag(tags []string, wanted map[string]bool) bool {
+	for _, tag := range tags {
+		if wanted[strings.TrimSpace(tag)] {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSet(values []string) map[string]bool {
+	result := map[string]bool{}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result[value] = true
+		}
+	}
+	return result
+}
+
+func trimmedStrings(values []string) []string {
+	result := []string{}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func remoteSortedKeys(values map[string]bool) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }

@@ -33,13 +33,15 @@ CREATE TABLE IF NOT EXISTS discovery_task_events (
 );
 CREATE INDEX IF NOT EXISTS idx_discovery_task_events_task_time ON discovery_task_events(task_id,created_at);
 CREATE TABLE IF NOT EXISTS remote_executions (
- id text PRIMARY KEY, operation_id text NOT NULL, operation_name text NOT NULL,
+ id text PRIMARY KEY, operation_id text NOT NULL, operation_name text NOT NULL, command text NOT NULL DEFAULT '', risk text NOT NULL DEFAULT 'high',
  targets jsonb NOT NULL DEFAULT '[]', port integer NOT NULL DEFAULT 22, credential_id text NOT NULL DEFAULT '', status text NOT NULL,
  requested_by text NOT NULL, approved_by text NOT NULL DEFAULT '', created_at text NOT NULL,
  approved_at text NOT NULL DEFAULT '', started_at text NOT NULL DEFAULT '', finished_at text NOT NULL DEFAULT '',
  results jsonb NOT NULL DEFAULT '[]', updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS port integer NOT NULL DEFAULT 22;
+ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS command text NOT NULL DEFAULT '';
+ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS risk text NOT NULL DEFAULT 'high';
 CREATE INDEX IF NOT EXISTS idx_remote_executions_updated ON remote_executions(updated_at DESC);
 `
 

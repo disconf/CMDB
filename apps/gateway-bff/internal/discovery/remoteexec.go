@@ -27,6 +27,7 @@ type RemoteOperation struct {
 
 type RemoteExecutionInput struct {
 	OperationID  string   `json:"operationId"`
+	Command      string   `json:"command"`
 	Targets      []string `json:"targets"`
 	Port         int      `json:"port"`
 	CredentialID string   `json:"credentialId"`
@@ -45,6 +46,8 @@ type RemoteExecution struct {
 	ID            string               `json:"id"`
 	OperationID   string               `json:"operationId"`
 	OperationName string               `json:"operationName"`
+	Command       string               `json:"command"`
+	Risk          string               `json:"risk"`
 	Targets       []string             `json:"targets"`
 	Port          int                  `json:"port"`
 	CredentialID  string               `json:"credentialId,omitempty"`
@@ -84,6 +87,19 @@ func remoteOperation(id string) (RemoteOperation, bool) {
 	return RemoteOperation{}, false
 }
 
+func validateRemoteCommand(command string) error {
+	if command == "" || len(command) > 4000 {
+		return ErrRemoteValidation
+	}
+	lower := strings.ToLower(command)
+	blocked := []string{"rm -rf /", "mkfs", "dd if=/dev/zero of=/dev/", "shutdown -h", "reboot", "format c:"}
+	for _, item := range blocked {
+		if strings.Contains(lower, item) {
+			return ErrRemoteValidation
+		}
+	}
+	return nil
+}
 func normalizeTargets(values []string) ([]string, error) {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(values))
@@ -108,8 +124,23 @@ func normalizeTargets(values []string) ([]string, error) {
 }
 
 func (s *Service) CreateRemoteExecution(in RemoteExecutionInput) (RemoteExecution, error) {
-	operation, ok := remoteOperation(strings.TrimSpace(in.OperationID))
-	if !ok || strings.TrimSpace(in.RequestedBy) == "" {
+	operationID := strings.TrimSpace(in.OperationID)
+	command := strings.TrimSpace(in.Command)
+	operationName := ""
+	risk := "high"
+	if operationID != "" {
+		operation, ok := remoteOperation(operationID)
+		if !ok {
+			return RemoteExecution{}, ErrRemoteValidation
+		}
+		operationName, command, risk = operation.Name, operation.Command, operation.Risk
+	} else {
+		if err := validateRemoteCommand(command); err != nil {
+			return RemoteExecution{}, err
+		}
+		operationName = "自定义命令"
+	}
+	if strings.TrimSpace(in.RequestedBy) == "" || command == "" {
 		return RemoteExecution{}, ErrRemoteValidation
 	}
 	targets, err := normalizeTargets(in.Targets)
@@ -124,7 +155,7 @@ func (s *Service) CreateRemoteExecution(in RemoteExecutionInput) (RemoteExecutio
 	}
 	now := time.Now()
 	execution := RemoteExecution{
-		ID: fmt.Sprintf("rexec-%d", now.UnixNano()), OperationID: operation.ID, OperationName: operation.Name,
+		ID: fmt.Sprintf("rexec-%d", now.UnixNano()), OperationID: operationID, OperationName: operationName, Command: command, Risk: risk,
 		Targets: targets, Port: in.Port, CredentialID: strings.TrimSpace(in.CredentialID), Status: "awaiting_approval",
 		RequestedBy: in.RequestedBy, CreatedAt: now.Format("2006-01-02 15:04:05"), Results: make([]RemoteTargetResult, 0, len(targets)),
 	}
@@ -208,10 +239,14 @@ func (s *Service) runRemoteExecution(id string) {
 	if err != nil {
 		return
 	}
-	operation, ok := remoteOperation(execution.OperationID)
-	if !ok {
-		s.finishRemoteExecution(id, "failed", "operation is no longer available")
-		return
+	command := execution.Command
+	if command == "" {
+		operation, ok := remoteOperation(execution.OperationID)
+		if !ok {
+			s.finishRemoteExecution(id, "failed", "operation is no longer available")
+			return
+		}
+		command = operation.Command
 	}
 	username, secret, err := s.resolveRemoteCredential(execution.CredentialID)
 	if err != nil {
@@ -225,7 +260,7 @@ func (s *Service) runRemoteExecution(id string) {
 	for index, target := range execution.Targets {
 		started := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		output, runErr := runner(ctx, target, execution.Port, operation.Command, username, secret, 15*time.Second)
+		output, runErr := runner(ctx, target, execution.Port, command, username, secret, 15*time.Second)
 		cancel()
 		result := RemoteTargetResult{Target: target, Status: "success", Output: truncateOutput(output), Duration: time.Since(started).Round(time.Millisecond).String()}
 		if runErr != nil {
@@ -366,7 +401,7 @@ func (s *Service) loadRemoteExecutions() error {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT id,operation_id,operation_name,targets,port,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results FROM remote_executions ORDER BY created_at DESC LIMIT 200`)
+	rows, err := s.db.Query(`SELECT id,operation_id,operation_name,command,risk,targets,port,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results FROM remote_executions ORDER BY created_at DESC LIMIT 200`)
 	if err != nil {
 		return err
 	}
@@ -375,11 +410,17 @@ func (s *Service) loadRemoteExecutions() error {
 	for rows.Next() {
 		var execution RemoteExecution
 		var targets, results []byte
-		if err := rows.Scan(&execution.ID, &execution.OperationID, &execution.OperationName, &targets, &execution.Port, &execution.CredentialID, &execution.Status, &execution.RequestedBy, &execution.ApprovedBy, &execution.CreatedAt, &execution.ApprovedAt, &execution.StartedAt, &execution.FinishedAt, &results); err != nil {
+		if err := rows.Scan(&execution.ID, &execution.OperationID, &execution.OperationName, &execution.Command, &execution.Risk, &targets, &execution.Port, &execution.CredentialID, &execution.Status, &execution.RequestedBy, &execution.ApprovedBy, &execution.CreatedAt, &execution.ApprovedAt, &execution.StartedAt, &execution.FinishedAt, &results); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(targets, &execution.Targets)
 		_ = json.Unmarshal(results, &execution.Results)
+		if execution.Command == "" {
+			if operation, ok := remoteOperation(execution.OperationID); ok {
+				execution.Command = operation.Command
+				execution.Risk = operation.Risk
+			}
+		}
 		if execution.Status == "running" {
 			execution.Status = "failed"
 			for i := range execution.Results {
@@ -401,6 +442,6 @@ func (s *Service) persistRemoteExecution(execution RemoteExecution) error {
 	}
 	targets, _ := json.Marshal(execution.Targets)
 	results, _ := json.Marshal(execution.Results)
-	_, err := s.db.Exec(`INSERT INTO remote_executions(id,operation_id,operation_name,targets,port,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now()) ON CONFLICT(id) DO UPDATE SET port=excluded.port,status=excluded.status,approved_by=excluded.approved_by,approved_at=excluded.approved_at,started_at=excluded.started_at,finished_at=excluded.finished_at,results=excluded.results,updated_at=now()`, execution.ID, execution.OperationID, execution.OperationName, targets, execution.Port, execution.CredentialID, execution.Status, execution.RequestedBy, execution.ApprovedBy, execution.CreatedAt, execution.ApprovedAt, execution.StartedAt, execution.FinishedAt, results)
+	_, err := s.db.Exec(`INSERT INTO remote_executions(id,operation_id,operation_name,command,risk,targets,port,credential_id,status,requested_by,approved_by,created_at,approved_at,started_at,finished_at,results,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()) ON CONFLICT(id) DO UPDATE SET port=excluded.port,status=excluded.status,approved_by=excluded.approved_by,approved_at=excluded.approved_at,started_at=excluded.started_at,finished_at=excluded.finished_at,results=excluded.results,updated_at=now()`, execution.ID, execution.OperationID, execution.OperationName, execution.Command, execution.Risk, targets, execution.Port, execution.CredentialID, execution.Status, execution.RequestedBy, execution.ApprovedBy, execution.CreatedAt, execution.ApprovedAt, execution.StartedAt, execution.FinishedAt, results)
 	return err
 }

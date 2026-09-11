@@ -1334,6 +1334,41 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, discoveryService.RemoteOperations())
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-target-options", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.RemoteTargetOptions())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-targets/resolve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		var input struct {
+			ProjectGroups []string `json:"projectGroups"`
+			Tags          []string `json:"tags"`
+			AssetIDs      []string `json:"assetIds"`
+			IPs           []string `json:"ips"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid target selectors"})
+			return
+		}
+		assets := cmdbService.ResolveRemoteTargets(input.ProjectGroups, input.Tags, input.AssetIDs, input.IPs)
+		targets := make([]string, 0, len(assets))
+		seen := map[string]bool{}
+		for _, asset := range assets {
+			if asset.IP != "" && !seen[asset.IP] {
+				seen[asset.IP] = true
+				targets = append(targets, asset.IP)
+			}
+		}
+		if len(targets) == 0 {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "没有匹配到可执行目标主机"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"targets": targets, "assets": assets})
+	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
