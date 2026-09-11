@@ -19,6 +19,8 @@
 - CMDB 设备 `172.31.42.124` 已验证通过 `host_resources` 采集 CPU、内存、磁盘、运行时长和接口状态。
 - Alertmanager 回写已升级为资产健康闭环：严重告警将资产置为 `offline`、警告告警置为 `warning`、全部恢复后自动回到 `online`，拓扑中心同步更新颜色。
 - `NetworkInterfaceDown` 只统计管理状态 Up 且链路状态 Down 的真实接口，排除 `sit0`、`ip6tnl0` 等虚拟接口误报。
+- PostgreSQL CNPG 原生指标和 Keycloak Metrics 已接入 Prometheus，并配置连接数、复制延迟、WAL 归档、Keycloak 可用性和 JVM 堆内存告警。
+- Alertmanager 路由已按 critical/warning 分级：critical 每 30 分钟重复通知，warning 每 4 小时重复通知。
 
 ## 1. 核心结论（先记住三条）
 

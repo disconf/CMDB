@@ -30,6 +30,16 @@ scrape_configs:
       - targets: ["gateway.ops-qa.svc.cluster.local:8080"]
         labels: {service: gateway-bff}
 
+  - job_name: postgresql
+    static_configs:
+      - targets: ["postgres-metrics.ops-qa.svc.cluster.local:9187"]
+        labels: {service: postgresql}
+
+  - job_name: keycloak
+    static_configs:
+      - targets: ["keycloak-metrics.ops-qa.svc.cluster.local:9000"]
+        labels: {service: keycloak}
+
   - job_name: cmdb-node-exporter
     http_sd_configs:
       - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/node-exporter

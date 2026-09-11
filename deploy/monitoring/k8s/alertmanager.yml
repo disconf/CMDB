@@ -2,10 +2,17 @@ global:
   resolve_timeout: 5m
 route:
   receiver: cmdb-webhook
-  group_by: [alertname, cluster, service]
+  group_by: [alertname, cluster, service, cmdb_asset_id]
   group_wait: 15s
   group_interval: 1m
   repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: cmdb-webhook
+      repeat_interval: 30m
+    - matchers: [severity="warning"]
+      receiver: cmdb-webhook
+      repeat_interval: 4h
 receivers:
   - name: cmdb-webhook
     webhook_configs:

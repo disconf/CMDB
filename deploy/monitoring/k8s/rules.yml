@@ -50,3 +50,52 @@ groups:
         annotations:
           summary: "网络设备接口 Down"
           description: "设备 {{ $labels.asset_name }} 接口 {{ $labels.ifName }} 已 Down 超过 5 分钟。"
+      - alert: PostgreSQLDown
+        expr: up{job="postgresql"} == 0
+        for: 2m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "PostgreSQL 监控目标不可用"
+          description: "PostgreSQL 主节点指标目标 {{ $labels.instance }} 已不可用超过 2 分钟。"
+      - alert: PostgreSQLConnectionsHigh
+        expr: sum(cnpg_backends_total) > 500
+        for: 10m
+        labels: {severity: warning, category: capacity}
+        annotations:
+          summary: "PostgreSQL 连接数过高"
+          description: "PostgreSQL 当前连接数 {{ $value }}，已超过 500。"
+      - alert: PostgreSQLReplicationLagHigh
+        expr: max(cnpg_pg_replication_lag) > 30
+        for: 5m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "PostgreSQL 复制延迟过高"
+          description: "PostgreSQL 最大复制延迟为 {{ $value }} 秒，已超过 30 秒。"
+      - alert: PostgreSQLArchiverFailing
+        expr: max(increase(cnpg_pg_stat_archiver_failed_count[10m])) > 0
+        for: 10m
+        labels: {severity: warning, category: availability}
+        annotations:
+          summary: "PostgreSQL WAL 归档失败"
+          description: "PostgreSQL 最近 10 分钟出现 WAL 归档失败。"
+      - alert: KeycloakDown
+        expr: up{job="keycloak"} == 0
+        for: 2m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "Keycloak 监控目标不可用"
+          description: "Keycloak 指标目标 {{ $labels.instance }} 已不可用超过 2 分钟。"
+      - alert: KeycloakHeapMemoryHigh
+        expr: base_memory_usedHeap_bytes{job="keycloak"} / clamp_min(base_memory_maxHeap_bytes{job="keycloak"}, 1) * 100 > 90
+        for: 10m
+        labels: {severity: warning, category: capacity}
+        annotations:
+          summary: "Keycloak JVM 堆内存过高"
+          description: "Keycloak 实例 {{ $labels.instance }} 堆内存使用率已超过 90%。"
+      - alert: PlatformDependencyDown
+        expr: cmdb_dependency_up{job="cmdb-gateway"} == 0
+        for: 2m
+        labels: {severity: critical, category: availability}
+        annotations:
+          summary: "平台依赖不可用"
+          description: "依赖服务 {{ $labels.name }} 已不可用超过 2 分钟。"
