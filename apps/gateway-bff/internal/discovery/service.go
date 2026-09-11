@@ -152,6 +152,8 @@ type Service struct {
 	nextEvent        int64
 	remoteExecutions []RemoteExecution
 	remoteRunner     RemoteRunner
+	accessGrants     []AccessGrant
+	remoteSessions   []RemoteSession
 }
 
 func NewService() *Service {
@@ -183,6 +185,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		s.tasks = tasks
 		if err := s.loadRemoteExecutions(); err != nil {
 			panic(fmt.Sprintf("load remote executions: %v", err))
+		}
+		if err := s.loadAccessGrants(); err != nil {
+			panic(fmt.Sprintf("load remote access grants: %v", err))
 		}
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}

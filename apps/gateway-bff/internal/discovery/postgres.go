@@ -45,6 +45,22 @@ ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS risk text NOT NULL DEFAUL
 CREATE INDEX IF NOT EXISTS idx_remote_executions_updated ON remote_executions(updated_at DESC);
 `
 
+const remoteAccessSchema = `
+CREATE TABLE IF NOT EXISTS remote_access_grants(
+ id text PRIMARY KEY,
+ subject_type text NOT NULL,
+ subject text NOT NULL,
+ asset_id text NOT NULL DEFAULT '',
+ project_group text NOT NULL DEFAULT '',
+ permissions jsonb NOT NULL DEFAULT '[]',
+ enabled boolean NOT NULL DEFAULT true,
+ created_by text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_remote_access_grants_subject ON remote_access_grants(subject_type,subject);
+`
+
 func openPostgres(databaseURL string) (*sql.DB, []Task, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -59,6 +75,10 @@ func openPostgres(databaseURL string) (*sql.DB, []Task, error) {
 	if _, err = db.ExecContext(ctx, discoverySchema); err != nil {
 		db.Close()
 		return nil, nil, fmt.Errorf("migrate discovery schema: %w", err)
+	}
+	if _, err = db.ExecContext(ctx, remoteAccessSchema); err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("migrate remote access schema: %w", err)
 	}
 	if _, err = db.ExecContext(ctx, `UPDATE discovery_items SET state='pending' WHERE state='approving'`); err != nil {
 		db.Close()

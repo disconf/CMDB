@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -1368,6 +1369,150 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"targets": targets, "assets": assets})
+	})
+	mux.HandleFunc("GET /api/v1/discovery/access-grants", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.AccessGrants())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/access-grants", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input discovery.AccessGrantInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"message": "invalid access grant"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.CreateAccessGrant(input, user.Username)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.grant.create", item.ID, item.Subject+"/"+item.ProjectGroup)
+		writeJSON(w, 201, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/access-grants/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		item, err := discoveryService.ToggleAccessGrant(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"message": "access grant not found"})
+			return
+		}
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/discovery/access-grants/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		if err := discoveryService.DeleteAccessGrant(r.PathValue("id")); err != nil {
+			writeJSON(w, 404, map[string]string{"message": "access grant not found"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, discoveryService.RemoteSessions(user.Username, user.Roles))
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-sessions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input struct {
+			AssetID      string `json:"assetId"`
+			CredentialID string `json:"credentialId"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"message": "invalid remote session"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.CreateRemoteSession(input.AssetID, input.CredentialID, user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.create", item.ID, item.AssetName)
+		writeJSON(w, 201, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-sessions/{id}/command", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input struct {
+			Command string `json:"command"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"message": "invalid command"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.ExecuteRemoteSession(r.PathValue("id"), input.Command, user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.command", r.PathValue("id"), input.Command)
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-sessions/{id}/upload", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		if err := r.ParseMultipartForm(52 << 20); err != nil {
+			writeJSON(w, 400, map[string]string{"message": "invalid upload"})
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"message": "file is required"})
+			return
+		}
+		defer file.Close()
+		remotePath := r.FormValue("path")
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err = discoveryService.UploadRemoteFile(r.PathValue("id"), remotePath, file, header.Size, user.Username, user.Roles); err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.upload", r.PathValue("id"), remotePath)
+		writeJSON(w, 200, map[string]string{"status": "ok", "path": remotePath})
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/download", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		remotePath := r.URL.Query().Get("path")
+		content, err := discoveryService.DownloadRemoteFile(r.PathValue("id"), remotePath, user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.download", r.PathValue("id"), remotePath)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(remotePath)))
+		_, _ = w.Write(content)
+	})
+	mux.HandleFunc("DELETE /api/v1/discovery/remote-sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := discoveryService.CloseRemoteSession(r.PathValue("id"), user.Username, user.Roles); err != nil {
+			writeJSON(w, 422, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.close", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
