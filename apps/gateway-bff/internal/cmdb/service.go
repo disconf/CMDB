@@ -23,6 +23,7 @@ var runtimeAutoAttrs = map[string]bool{
 	"snmp_discovered": true, "sys_descr": true, "sys_name": true, "sys_object_id": true,
 	"management_ip": true, "vendor": true, "model": true, "serial": true, "entity_desc": true,
 	"if_number": true, "bmc_ip": true, "oob": true, "lldp_neighbors": true,
+	"snmp_vendor": true, "snmp_module": true,
 }
 var ErrValidation = errors.New("validation failed")
 var ErrSlotTaken = errors.New("机柜U位已被占用")
@@ -516,15 +517,21 @@ func (s *Service) PrometheusSNMPTargetGroups() []PrometheusTargetGroup {
 		if !snmpDiscovered && !hasSNMPInventory {
 			continue
 		}
+		module := attrValue(a.Attributes, "snmp_module")
+		if module == "" {
+			module = "if_mib"
+		}
 		groups = append(groups, PrometheusTargetGroup{
 			Targets: []string{a.IP},
 			Labels: map[string]string{
-				"asset_id":      a.ID,
-				"asset_name":    a.Name,
-				"environment":   a.Environment,
-				"project_group": a.ProjectGroup,
-				"service":       "network-device",
-				"device_type":   a.TypeName,
+				"asset_id":       a.ID,
+				"asset_name":     a.Name,
+				"environment":    a.Environment,
+				"project_group":  a.ProjectGroup,
+				"service":        "network-device",
+				"device_type":    a.TypeName,
+				"snmp_module":    module,
+				"__param_module": module,
 			},
 		})
 	}

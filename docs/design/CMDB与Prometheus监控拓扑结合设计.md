@@ -14,6 +14,7 @@
 - 已部署 `snmp_exporter:0.30.1`，CMDB 新增 `/api/v1/monitor/service-discovery/snmp`；真实 SNMP 设备 `172.31.42.124` 已作为 Prometheus 动态目标，设备和接口指标采集正常。
 - 拓扑中心已改为读取 CMDB 真实资产与关系；SNMP 扫描支持采集 LLDP 邻居并生成设备链路，未识别的邻居会作为待完善节点展示。
 - Grafana 已增加“CMDB 网络设备监控”大盘，展示设备状态、接口流量、错误、丢弃和接口 Up/Down。
+- SNMP 采集模块已支持华为、华三、Cisco、锐捷常见 CPU/内存/温度 OID；模块选择由 CMDB 根据厂商和 OID 探测结果动态下发，接口指标始终保留。
 
 ## 1. 核心结论（先记住三条）
 

@@ -71,3 +71,18 @@ func TestNormalizeNodeExporterPorts(t *testing.T) {
 		t.Fatal("expected invalid port error")
 	}
 }
+
+func TestSNMPModuleForVendor(t *testing.T) {
+	cases := map[string]string{
+		"Huawei": "huawei",
+		"H3C":    "h3c",
+		"Cisco":  "cisco_device",
+		"Ruijie": "ruijie",
+		"Other":  "if_mib",
+	}
+	for vendor, expected := range cases {
+		if got := snmpModuleForVendor(vendor); got != expected {
+			t.Fatalf("vendor %s: got %s want %s", vendor, got, expected)
+		}
+	}
+}

@@ -180,6 +180,10 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 	if ifNumber != "" {
 		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "if_number", Label: "接口数", Value: ifNumber})
 	}
+	if vendor != "" {
+		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "snmp_vendor", Label: "SNMP厂商", Value: vendor})
+	}
+	host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "snmp_module", Label: "SNMP采集模块", Value: detectSNMPModule(g, vendor)})
 	if oob {
 		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "bmc_ip", Label: "带外管理IP(BMC)", Value: ip})
 		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "oob", Label: "带外管理口", Value: "true"})
@@ -196,6 +200,48 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 	return host
 }
 
+var snmpVendorModuleOIDs = map[string]string{
+	"huawei":       ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5",
+	"h3c":          ".1.3.6.1.4.1.25506.2.6.1.1.1.1.6",
+	"cisco_device": ".1.3.6.1.4.1.9.9.109.1.1.1.1.8",
+	"ruijie":       ".1.3.6.1.4.1.4881.1.1.10.2.36.1.1.4",
+}
+
+func snmpModuleForVendor(vendor string) string {
+	switch strings.ToLower(strings.TrimSpace(vendor)) {
+	case "huawei":
+		return "huawei"
+	case "h3c":
+		return "h3c"
+	case "cisco":
+		return "cisco_device"
+	case "ruijie":
+		return "ruijie"
+	default:
+		return "if_mib"
+	}
+}
+
+func detectSNMPModule(g *gosnmp.GoSNMP, vendor string) string {
+	module := snmpModuleForVendor(vendor)
+	if module == "if_mib" {
+		return module
+	}
+	oid := snmpVendorModuleOIDs[module]
+	if oid == "" {
+		return "if_mib"
+	}
+	response, err := g.Get([]string{oid})
+	if err != nil || response == nil || len(response.Variables) == 0 {
+		return "if_mib"
+	}
+	for _, variable := range response.Variables {
+		if variable.Type != gosnmp.NoSuchObject && variable.Type != gosnmp.NoSuchInstance && variable.Type != gosnmp.Null {
+			return module
+		}
+	}
+	return "if_mib"
+}
 func collectLLDP(g *gosnmp.GoSNMP, limit int) []LLDPNeighbor {
 	byKey := map[string]*LLDPNeighbor{}
 	count := 0
