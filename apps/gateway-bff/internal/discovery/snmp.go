@@ -203,7 +203,7 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 var snmpVendorModuleOIDs = map[string]string{
 	"huawei":       ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5",
 	"h3c":          ".1.3.6.1.4.1.25506.2.6.1.1.1.1.6",
-	"cisco_device": ".1.3.6.1.4.1.9.9.109.1.1.1.1.8",
+	"cisco_device": ".1.3.6.1.4.1.9.9.109.1.1.1.1",
 	"ruijie":       ".1.3.6.1.4.1.4881.1.1.10.2.36.1.1.4",
 }
 
@@ -222,23 +222,30 @@ func snmpModuleForVendor(vendor string) string {
 	}
 }
 
+func oidHasSubtree(g *gosnmp.GoSNMP, oid string) bool {
+	response, err := g.GetNext([]string{oid})
+	if err != nil || response == nil {
+		return false
+	}
+	prefix := strings.TrimPrefix(oid, ".")
+	for _, variable := range response.Variables {
+		name := strings.TrimPrefix(variable.Name, ".")
+		if variable.Type != gosnmp.NoSuchObject && variable.Type != gosnmp.NoSuchInstance && variable.Type != gosnmp.Null && strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func detectSNMPModule(g *gosnmp.GoSNMP, vendor string) string {
 	module := snmpModuleForVendor(vendor)
-	if module == "if_mib" {
-		return module
-	}
-	oid := snmpVendorModuleOIDs[module]
-	if oid == "" {
-		return "if_mib"
-	}
-	response, err := g.Get([]string{oid})
-	if err != nil || response == nil || len(response.Variables) == 0 {
-		return "if_mib"
-	}
-	for _, variable := range response.Variables {
-		if variable.Type != gosnmp.NoSuchObject && variable.Type != gosnmp.NoSuchInstance && variable.Type != gosnmp.Null {
+	if module != "if_mib" {
+		if oid := snmpVendorModuleOIDs[module]; oid != "" && oidHasSubtree(g, oid) {
 			return module
 		}
+	}
+	if oidHasSubtree(g, ".1.3.6.1.2.1.25.3.3.1.2") {
+		return "host_resources"
 	}
 	return "if_mib"
 }

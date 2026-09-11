@@ -362,7 +362,7 @@
       },
       "targets": [
         {
-          "expr": "hwEntityCpuUsage or hh3cEntityExtCpuUsage or cpmCPUTotal5minRev or rgCpuUtilization5Min",
+          "expr": "hrProcessorLoad or hwEntityCpuUsage or hh3cEntityExtCpuUsage or cpmCPUTotal5minRev or rgCpuUtilization5Min",
           "legendFormat": "{{asset_name}} {{instance}} {{entPhysicalName}}",
           "refId": "A"
         }
@@ -400,8 +400,8 @@
       },
       "targets": [
         {
-          "expr": "hwEntityMemUsage or hh3cEntityExtMemUsage or (ciscoMemoryPoolUsed / clamp_min(ciscoMemoryPoolUsed + ciscoMemoryPoolFree, 1) * 100)",
-          "legendFormat": "{{asset_name}} {{instance}} {{entPhysicalName}} {{ciscoMemoryPoolName}}",
+          "expr": "(hrStorageUsed{hrStorageDescr=~\"Physical memory|.*[Mm]emory.*\"} * hrStorageAllocationUnits{hrStorageDescr=~\"Physical memory|.*[Mm]emory.*\"}) / clamp_min(hrStorageSize{hrStorageDescr=~\"Physical memory|.*[Mm]emory.*\"} * hrStorageAllocationUnits{hrStorageDescr=~\"Physical memory|.*[Mm]emory.*\"}, 1) * 100 or hwEntityMemUsage or hh3cEntityExtMemUsage or (ciscoMemoryPoolUsed / clamp_min(ciscoMemoryPoolUsed + ciscoMemoryPoolFree, 1) * 100)",
+          "legendFormat": "{{asset_name}} {{instance}} {{entPhysicalName}} {{hrStorageDescr}} {{ciscoMemoryPoolName}}",
           "refId": "A"
         }
       ],
