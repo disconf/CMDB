@@ -10,6 +10,26 @@ import (
 
 const jobsSchema = `CREATE TABLE IF NOT EXISTS job_executions(id text PRIMARY KEY,template_id text NOT NULL,name text NOT NULL,targets jsonb NOT NULL,status text NOT NULL,progress integer NOT NULL,operator_name text NOT NULL,started_at text NOT NULL,duration text NOT NULL DEFAULT '',logs jsonb NOT NULL DEFAULT '[]',timeout_seconds integer NOT NULL DEFAULT 300,attempt integer NOT NULL DEFAULT 0,approved_by text NOT NULL DEFAULT '',updated_at timestamptz NOT NULL DEFAULT now());ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';CREATE INDEX IF NOT EXISTS idx_job_executions_updated ON job_executions(updated_at DESC);CREATE TABLE IF NOT EXISTS job_templates(id text PRIMARY KEY,name text NOT NULL,category text NOT NULL,description text NOT NULL,command_text text NOT NULL,risk text NOT NULL,enabled boolean NOT NULL DEFAULT true,updated_at timestamptz NOT NULL DEFAULT now());`
 
+const jobSchedulesSchema = `
+CREATE TABLE IF NOT EXISTS job_schedules(
+ id text PRIMARY KEY,
+ name text NOT NULL,
+ template_id text NOT NULL,
+ targets jsonb NOT NULL DEFAULT '[]'::jsonb,
+ cron text NOT NULL,
+ timeout_seconds integer NOT NULL DEFAULT 300,
+ enabled boolean NOT NULL DEFAULT true,
+ created_by text NOT NULL DEFAULT '',
+ next_run timestamptz,
+ last_run timestamptz,
+ last_status text NOT NULL DEFAULT '',
+ last_job_id text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_job_schedules_next_run ON job_schedules(enabled,next_run);
+`
+
 func openPostgres(url string) (*sql.DB, []Job, error) {
 	db, err := sql.Open("pgx", url)
 	if err != nil {
@@ -22,6 +42,10 @@ func openPostgres(url string) (*sql.DB, []Job, error) {
 		return nil, nil, err
 	}
 	if _, err = db.ExecContext(ctx, jobsSchema); err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	if _, err = db.ExecContext(ctx, jobSchedulesSchema); err != nil {
 		db.Close()
 		return nil, nil, err
 	}
@@ -73,4 +97,48 @@ func loadTemplates(ctx context.Context, db *sql.DB) ([]Template, error) {
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+func loadSchedules(ctx context.Context, db *sql.DB) ([]Schedule, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id,name,template_id,targets,cron,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id FROM job_schedules ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Schedule{}
+	for rows.Next() {
+		var item Schedule
+		var targets []byte
+		var nextRun, lastRun sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.TemplateID, &targets, &item.Cron, &item.TimeoutSeconds, &item.Enabled, &item.CreatedBy, &nextRun, &lastRun, &item.LastStatus, &item.LastJobID); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(targets, &item.Targets)
+		if nextRun.Valid {
+			item.NextRun = nextRun.Time.In(scheduleLocation()).Format(scheduleTimeLayout)
+		}
+		if lastRun.Valid {
+			item.LastRun = lastRun.Time.In(scheduleLocation()).Format(scheduleTimeLayout)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func upsertSchedule(ctx context.Context, db *sql.DB, schedule Schedule) error {
+	targets, _ := json.Marshal(schedule.Targets)
+	var nextRun, lastRun any
+	if value, err := parseScheduleTime(schedule.NextRun); err == nil && !value.IsZero() {
+		nextRun = value
+	}
+	if value, err := parseScheduleTime(schedule.LastRun); err == nil && !value.IsZero() {
+		lastRun = value
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO job_schedules(id,name,template_id,targets,cron,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,template_id=excluded.template_id,targets=excluded.targets,cron=excluded.cron,timeout_seconds=excluded.timeout_seconds,enabled=excluded.enabled,next_run=excluded.next_run,last_run=excluded.last_run,last_status=excluded.last_status,last_job_id=excluded.last_job_id,updated_at=now()`, schedule.ID, schedule.Name, schedule.TemplateID, targets, schedule.Cron, schedule.TimeoutSeconds, schedule.Enabled, schedule.CreatedBy, nextRun, lastRun, schedule.LastStatus, schedule.LastJobID)
+	return err
+}
+
+func deleteScheduleRow(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM job_schedules WHERE id=$1`, id)
+	return err
 }

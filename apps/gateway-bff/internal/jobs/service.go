@@ -55,11 +55,27 @@ type Job struct {
 	ApprovedBy     string   `json:"approvedBy"`
 }
 type Schedule struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Cron    string `json:"cron"`
-	NextRun string `json:"nextRun"`
-	Enabled bool   `json:"enabled"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	TemplateID     string   `json:"templateId"`
+	TemplateName   string   `json:"templateName"`
+	Targets        []string `json:"targets"`
+	Cron           string   `json:"cron"`
+	TimeoutSeconds int      `json:"timeoutSeconds"`
+	Enabled        bool     `json:"enabled"`
+	NextRun        string   `json:"nextRun"`
+	LastRun        string   `json:"lastRun"`
+	LastStatus     string   `json:"lastStatus"`
+	LastJobID      string   `json:"lastJobId"`
+	CreatedBy      string   `json:"createdBy"`
+}
+type ScheduleInput struct {
+	Name           string   `json:"name"`
+	TemplateID     string   `json:"templateId"`
+	Targets        []string `json:"targets"`
+	Cron           string   `json:"cron"`
+	TimeoutSeconds int      `json:"timeoutSeconds"`
+	Enabled        *bool    `json:"enabled"`
 }
 type CreateInput struct {
 	TemplateID     string   `json:"templateId"`
@@ -84,11 +100,12 @@ type Service struct {
 	db        *sql.DB
 	cancels   map[string]context.CancelFunc
 	executor  Executor
+	location  *time.Location
 }
 
 func NewService() *Service {
 	nodeExporterTemplate := Template{"tpl-node-exporter", "安装 Node Exporter", "监控", "为CMDB主机安装并启动标准主机指标采集器", "install-node-exporter", "medium", "--", true}
-	s := &Service{templates: []Template{{"tpl-health", "主机健康巡检", "巡检", "检查 CPU、内存、磁盘与关键进程", "health-check --full", "low", "--", true}, nodeExporterTemplate, {"tpl-restart", "应用滚动重启", "变更", "按实例顺序执行优雅重启", "rolling-restart --wait", "medium", "--", true}, {"tpl-clean", "日志空间清理", "维护", "清理超过保留周期的归档日志", "log-cleanup --days 14", "low", "--", true}, {"tpl-patch", "安全补丁安装", "安全", "安装已审批的系统安全更新", "patch-install --approved", "high", "--", true}}, schedules: []Schedule{{"sch-01", "每日主机巡检", "0 2 * * *", "明天 02:00", true}, {"sch-02", "每周日志清理", "0 3 * * 0", "周日 03:00", true}}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv()}
+	s := &Service{templates: []Template{{"tpl-health", "主机健康巡检", "巡检", "检查 CPU、内存、磁盘与关键进程", "health-check --full", "low", "--", true}, nodeExporterTemplate, {"tpl-restart", "应用滚动重启", "变更", "按实例顺序执行优雅重启", "rolling-restart --wait", "medium", "--", true}, {"tpl-clean", "日志空间清理", "维护", "清理超过保留周期的归档日志", "log-cleanup --days 14", "low", "--", true}, {"tpl-patch", "安全补丁安装", "安全", "安装已审批的系统安全更新", "patch-install --approved", "high", "--", true}}, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation()}
 	if !demo.Enabled() {
 		s.schedules = []Schedule{}
 	}
@@ -105,6 +122,11 @@ func NewService() *Service {
 				_ = upsertTemplate(context.Background(), db, item)
 			}
 		}
+		persistedSchedules, scheduleErr := loadSchedules(context.Background(), db)
+		if scheduleErr != nil {
+			panic(fmt.Sprintf("load job schedules: %v", scheduleErr))
+		}
+		s.schedules = persistedSchedules
 		s.next = len(jobs) + 1
 	}
 	foundNodeExporter := false
@@ -165,7 +187,11 @@ func validateTemplate(in TemplateInput) error {
 	}
 	return nil
 }
-func (s *Service) Schedules() []Schedule      { return append([]Schedule(nil), s.schedules...) }
+func (s *Service) Schedules() []Schedule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneSchedules(s.schedules)
+}
 func (s *Service) ExecutorInfo() ExecutorInfo { return s.executor.Info() }
 func (s *Service) Jobs() []Job                { s.mu.RLock(); defer s.mu.RUnlock(); return cloneJobs(s.jobs) }
 func (s *Service) Get(id string) (Job, error) {

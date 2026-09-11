@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -43,6 +44,7 @@ func NewServer() *Server {
 	service := dashboard.NewServiceWithRuntime(cmdbService, discoveryService, monitorService)
 	platformMetrics := newMetrics(cmdbService, discoveryService, monitorService)
 	jobsService := jobs.NewService()
+	go jobsService.RunScheduler(context.Background())
 	ticketsService := tickets.NewService()
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()
@@ -1521,6 +1523,103 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, 200, jobsService.Schedules())
+	})
+	mux.HandleFunc("POST /api/v1/jobs/schedules", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		var input jobs.ScheduleInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := jobsService.CreateSchedule(input, user.Username)
+		if errors.Is(err, jobs.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "SCHEDULE_CREATE_FAILED"})
+			return
+		}
+		auditService.Record(user.Username, "job.schedule.create", item.ID, item.Name)
+		writeJSON(w, 201, item)
+	})
+	mux.HandleFunc("PUT /api/v1/jobs/schedules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		var input jobs.ScheduleInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := jobsService.UpdateSchedule(r.PathValue("id"), input)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "SCHEDULE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, jobs.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.schedule.update", item.ID, item.Name)
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("POST /api/v1/jobs/schedules/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		item, err := jobsService.ToggleSchedule(r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "SCHEDULE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"code": "SCHEDULE_UPDATE_FAILED"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.schedule.toggle", item.ID, "enabled="+strconv.FormatBool(item.Enabled))
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("POST /api/v1/jobs/schedules/{id}/run", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		job, err := jobsService.RunSchedule(r.PathValue("id"), user.Username, false)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "SCHEDULE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, jobs.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "SCHEDULE_RUN_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "job.schedule.run", r.PathValue("id"), job.ID)
+		writeJSON(w, 200, job)
+	})
+	mux.HandleFunc("DELETE /api/v1/jobs/schedules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		if err := jobsService.DeleteSchedule(r.PathValue("id")); errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "SCHEDULE_NOT_FOUND"})
+			return
+		} else if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "SCHEDULE_DELETE_FAILED"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.schedule.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /api/v1/jobs/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:manage") {

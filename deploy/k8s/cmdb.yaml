@@ -23,6 +23,7 @@ spec:
         - {name: CMDB_ENABLE_DEMO_DATA, value: "false"}
         - {name: PROMETHEUS_RULES_NAMESPACE, value: "monitoring"}
         - {name: PROMETHEUS_RULES_CONFIGMAP, value: "prometheus-rules"}
+        - {name: CMDB_SCHEDULE_TIMEZONE, value: "Asia/Shanghai"}
         readinessProbe: {httpGet: {path: /api/v1/ready, port: 8080}, initialDelaySeconds: 2, periodSeconds: 5}
         livenessProbe: {httpGet: {path: /api/v1/health, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
         resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}

@@ -3,7 +3,8 @@ import type { AssetPage } from '@/features/cmdb/types'
 export type Template={id:string;name:string;category:string;description:string;command:string;risk:'low'|'medium'|'high';lastRun:string;enabled:boolean}
 export type JobLog={time:string;level:string;message:string}
 export type Job={id:string;templateId:string;name:string;targets:string[];status:string;progress:number;operator:string;startedAt:string;duration:string;logs:JobLog[];timeoutSeconds:number;attempt:number;approvedBy:string}
-export type Schedule={id:string;name:string;cron:string;nextRun:string;enabled:boolean}
+export type Schedule={id:string;name:string;templateId:string;templateName:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;nextRun:string;lastRun:string;lastStatus:string;lastJobId:string;createdBy:string}
+export type ScheduleInput={name:string;templateId:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean}
 export type Summary={templates:number;running:number;successToday:number;failedToday:number;schedules:number}
 
 async function request<T>(path:string,token:string,init?:RequestInit):Promise<T>{const response=await fetch(path,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init?.headers||{})}});const data=await response.json().catch(()=>({message:'请求失败'}));if(!response.ok)throw new Error((data as {message?:string}).message||`请求失败 (${response.status})`);return data as T}
@@ -13,3 +14,8 @@ export const createTemplate=(token:string,input:Omit<Template,'id'|'lastRun'|'en
 export const toggleTemplate=(token:string,id:string)=>request<Template>(`/api/v1/jobs/templates/${id}/toggle`,token,{method:'POST'})
 export const createExecution=(token:string,input:{templateId:string;targets:string[];timeoutSeconds:number})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
 export const jobAction=(token:string,id:string,action:'run'|'retry'|'cancel'|'approve')=>request<Job>(`/api/v1/jobs/executions/${id}/${action}`,token,{method:'POST'})
+export const createSchedule=(token:string,input:ScheduleInput)=>request<Schedule>('/api/v1/jobs/schedules',token,{method:'POST',body:JSON.stringify(input)})
+export const updateSchedule=(token:string,id:string,input:ScheduleInput)=>request<Schedule>(`/api/v1/jobs/schedules/${id}`,token,{method:'PUT',body:JSON.stringify(input)})
+export const toggleSchedule=(token:string,id:string)=>request<Schedule>(`/api/v1/jobs/schedules/${id}/toggle`,token,{method:'POST'})
+export const runSchedule=(token:string,id:string)=>request<Job>(`/api/v1/jobs/schedules/${id}/run`,token,{method:'POST'})
+export const deleteSchedule=(token:string,id:string)=>request<void>(`/api/v1/jobs/schedules/${id}`,token,{method:'DELETE'})
