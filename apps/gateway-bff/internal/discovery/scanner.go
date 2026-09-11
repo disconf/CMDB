@@ -273,12 +273,13 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 	items := make([]DiscoveredItem, 0, len(found))
 	for _, host := range found {
 		item := DiscoveredItem{
-			ID:         "node-exporter-" + strings.ReplaceAll(host.IP, ".", "-"),
-			Name:       host.Name,
-			IP:         host.IP,
-			Type:       defaultType,
-			Confidence: 90,
-			Attributes: host.Attributes,
+			ID:           "node-exporter-" + strings.ReplaceAll(host.IP, ".", "-"),
+			Name:         host.Name,
+			IP:           host.IP,
+			Type:         defaultType,
+			Confidence:   90,
+			Attributes:   host.Attributes,
+			PreserveType: strings.TrimSpace(in.DefaultType) == "",
 		}
 		if item.Name == "" {
 			item.Name = host.IP

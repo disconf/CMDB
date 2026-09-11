@@ -67,6 +67,7 @@ kubectl -n monitoring port-forward svc/grafana 13000:3000
 - Grafana 默认数据源 `Prometheus` 指向 `http://prometheus.monitoring.svc.cluster.local:9090`。
 - `cmdb-snmp` 任务通过 `snmp-exporter.monitoring.svc.cluster.local:9116` 抓取 CMDB 中真实 SNMP 发现的设备。
 - SNMP 模块支持 `if_mib`、`host_resources`、`huawei`、`h3c`、`cisco_device`、`ruijie`；CMDB 根据厂商和 OID 探测结果自动选择模块，未识别厂商私有 OID 时回退 `host_resources` 或 `if_mib`。
+- Agent 与发现可通过 `CMDB_AUTO_SCAN_NODE_CIDRS`、`CMDB_AUTO_SCAN_NODE_PORTS`、`CMDB_AUTO_SCAN_INTERVAL_MIN` 定期扫描 node_exporter；探测到的实际端口会写回资产的 `node_exporter_port`，Prometheus 直接使用该端口。
 - 当前 CMDB 设备 `172.31.42.124` 使用 `host_resources` 模块，已采集 CPU、内存、磁盘、运行时长和接口指标。
 - Grafana 自动加载“CMDB 主机监控”和“CMDB 网络设备监控”大盘。
 ## Grafana 访问入口

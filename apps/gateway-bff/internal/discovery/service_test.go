@@ -64,6 +64,24 @@ func TestIngestAutoImportsToCMDB(t *testing.T) {
 	}
 }
 
+func TestIngestCanPreserveExistingAssetType(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	s := NewServiceWithCMDB(cmdbService)
+	res, err := s.Ingest(IngestInput{Source: "node-exporter", Items: []DiscoveredItem{{ID: "node-exporter-existing-vm", Name: "order-service-vm", IP: "10.21.4.41", Type: "physical-server", PreserveType: true}}})
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if res.Merged != 1 {
+		t.Fatalf("expected merge, got %+v", res)
+	}
+	asset, err := cmdbService.GetAsset("vm-prod-041")
+	if err != nil {
+		t.Fatalf("get asset: %v", err)
+	}
+	if asset.Type != "virtual-machine" {
+		t.Fatalf("asset type changed to %s", asset.Type)
+	}
+}
 func TestIngestDedupesByIP(t *testing.T) {
 	cmdbService := cmdb.NewService()
 	s := NewServiceWithCMDB(cmdbService)

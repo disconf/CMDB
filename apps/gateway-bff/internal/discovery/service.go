@@ -110,16 +110,17 @@ type IngestResult struct {
 	Failed    int    `json:"failed"`
 }
 type DiscoveredItem struct {
-	ID         string           `json:"id"`
-	Name       string           `json:"name"`
-	IP         string           `json:"ip"`
-	Type       string           `json:"type"`
-	Confidence int              `json:"confidence"`
-	State      string           `json:"state"`
-	Result     string           `json:"result,omitempty"`
-	Message    string           `json:"message,omitempty"`
-	UpdatedAt  string           `json:"updatedAt,omitempty"`
-	Attributes []cmdb.Attribute `json:"attributes"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	IP           string           `json:"ip"`
+	Type         string           `json:"type"`
+	Confidence   int              `json:"confidence"`
+	State        string           `json:"state"`
+	Result       string           `json:"result,omitempty"`
+	Message      string           `json:"message,omitempty"`
+	UpdatedAt    string           `json:"updatedAt,omitempty"`
+	Attributes   []cmdb.Attribute `json:"attributes"`
+	PreserveType bool             `json:"preserveType,omitempty"`
 }
 type AgentReport struct {
 	AgentID        string `json:"agentId"`
@@ -459,8 +460,10 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			if _, err := s.cmdb.MergeHostInventory(existingID, src, item.Attributes); err != nil {
 				return "", err
 			}
-			if err := s.cmdb.ReclassifyHost(existingID, item.Type, src); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
-				return "", err
+			if !item.PreserveType {
+				if err := s.cmdb.ReclassifyHost(existingID, item.Type, src); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
+					return "", err
+				}
 			}
 			if err := s.markImported(item); err != nil {
 				return "", err
@@ -475,8 +478,10 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			if _, err2 := s.cmdb.MergeHostInventory(item.ID, src, item.Attributes); err2 != nil {
 				return "", err2
 			}
-			if err := s.cmdb.ReclassifyHost(item.ID, item.Type, src); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
-				return "", err
+			if !item.PreserveType {
+				if err := s.cmdb.ReclassifyHost(item.ID, item.Type, src); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
+					return "", err
+				}
 			}
 			if err := s.markImported(item); err != nil {
 				return "", err

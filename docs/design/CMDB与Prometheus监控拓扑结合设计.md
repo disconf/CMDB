@@ -7,6 +7,7 @@
 - 已在 Kubernetes `monitoring` 命名空间部署 Prometheus、Alertmanager、Grafana，并配置持久化存储。
 - Prometheus 已通过 CMDB HTTP 服务发现自动获取主机目标；当前 8 台 K8s 主机（`172.28.69.161-168`）的 `node_exporter:9100` 全部为 `up`。
 - Agent 与发现支持一次扫描多个候选端口（如 `9100,19100`），按每台主机实际监听的端口写入 `node_exporter_port`；Prometheus 使用该资产端口抓取，不要求所有主机统一端口。
+- 当前已对 `172.28.68.0/24`、`172.28.69.0/24` 执行校准：133 台资产全部标记 exporter 为 active，其中 124 台使用 `19100`、9 台使用 `9100`，Prometheus 的 133 个主机目标全部为 up。
 - CMDB 资产扩展属性会保留 `node_exporter_status`、`node_exporter_port`、`node_exporter_version`，Agent 周期上报不会覆盖 exporter 信息。
 - Alertmanager 告警触发与恢复事件均已通过网关 Webhook 回写 CMDB，告警中心可查询 `firing/resolved` 状态。
 - Grafana 的 Prometheus 数据源已创建，并可通过数据源代理查询 `up` 指标。
