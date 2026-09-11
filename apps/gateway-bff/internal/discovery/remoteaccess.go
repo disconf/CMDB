@@ -56,13 +56,15 @@ type RemoteHostKeyInput struct {
 	PublicKey   string `json:"publicKey"`
 }
 type RemoteHostKeyProbe struct {
-	AssetID     string `json:"assetId"`
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	KeyType     string `json:"keyType"`
-	Fingerprint string `json:"fingerprint"`
-	PublicKey   string `json:"publicKey"`
-	Trusted     bool   `json:"trusted"`
+	AssetID            string `json:"assetId"`
+	Host               string `json:"host"`
+	Port               int    `json:"port"`
+	KeyType            string `json:"keyType"`
+	Fingerprint        string `json:"fingerprint"`
+	PublicKey          string `json:"publicKey"`
+	Trusted            bool   `json:"trusted"`
+	Changed            bool   `json:"changed"`
+	TrustedFingerprint string `json:"trustedFingerprint"`
 }
 type RemoteSessionLog struct {
 	Time    string `json:"time"`
@@ -522,7 +524,14 @@ func (s *Service) ProbeRemoteHostKey(assetID, credentialID, operator string, rol
 	fingerprint := ssh.FingerprintSHA256(captured)
 	probe := RemoteHostKeyProbe{AssetID: asset.ID, Host: asset.IP, Port: 22, KeyType: captured.Type(), Fingerprint: fingerprint, PublicKey: base64.StdEncoding.EncodeToString(captured.Marshal())}
 	s.mu.RLock()
-	probe.Trusted = s.findTrustedHostKeyLocked(asset.ID, asset.IP, 22, fingerprint)
+	for _, item := range s.hostKeys {
+		if item.AssetID == asset.ID && item.Host == asset.IP && item.Port == 22 {
+			probe.TrustedFingerprint = item.Fingerprint
+			probe.Trusted = item.Fingerprint == fingerprint
+			probe.Changed = !probe.Trusted
+			break
+		}
+	}
 	s.mu.RUnlock()
 	return probe, nil
 }
