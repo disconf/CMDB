@@ -1422,6 +1422,25 @@ func NewServer() *Server {
 		user, _ := authService.CurrentUser(bearerToken(r))
 		writeJSON(w, http.StatusOK, discoveryService.RemoteSessions(user.Username, user.Roles))
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/history", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, discoveryService.RemoteSessionHistory(user.Username, user.Roles))
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/replay", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RemoteSessionReplay(r.PathValue("id"), user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "remote session not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/remote-sessions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return

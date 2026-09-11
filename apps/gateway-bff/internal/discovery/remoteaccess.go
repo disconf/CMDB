@@ -67,9 +67,11 @@ type RemoteHostKeyProbe struct {
 	TrustedFingerprint string `json:"trustedFingerprint"`
 }
 type RemoteSessionLog struct {
-	Time    string `json:"time"`
-	Level   string `json:"level"`
-	Message string `json:"message"`
+	Time       string `json:"time"`
+	Level      string `json:"level"`
+	Kind       string `json:"kind,omitempty"`
+	Message    string `json:"message"`
+	DurationMS int64  `json:"durationMs,omitempty"`
 }
 
 type RemoteSession struct {
@@ -253,10 +255,13 @@ func (s *Service) CreateRemoteSession(assetID, credentialID, operator string, ro
 		return RemoteSession{}, err
 	}
 	now := time.Now()
-	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(30 * time.Minute).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Message: "远程会话已建立"}}}
+	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(30 * time.Minute).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
 	s.mu.Lock()
 	s.remoteSessions = append([]RemoteSession{item}, s.remoteSessions...)
 	s.mu.Unlock()
+	if s.db != nil {
+		_ = s.persistRemoteSession(item)
+	}
 	return cloneRemoteSession(item), nil
 }
 func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, roles []string) (RemoteSession, error) {
@@ -264,7 +269,7 @@ func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, role
 	if command == "" || len(command) > 4000 {
 		return RemoteSession{}, ErrRemoteValidation
 	}
-	item, index, err := s.sessionForOperator(sessionID, operator, roles)
+	item, _, err := s.sessionForOperator(sessionID, operator, roles)
 	if err != nil {
 		return RemoteSession{}, err
 	}
@@ -276,18 +281,21 @@ func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, role
 	output, runErr := s.runTrustedSSH(item.AssetID, item.IP, item.Port, command, username, secret, 30*time.Second)
 	message, level := truncateOutput(output), "success"
 	if runErr != nil {
-		message, level = runErr.Error(), "error"
+		level = "error"
+		if message != "" {
+			message += "\n" + runErr.Error()
+		} else {
+			message = runErr.Error()
+		}
 	}
-	s.mu.Lock()
-	if index < 0 || index >= len(s.remoteSessions) {
-		s.mu.Unlock()
+	duration := time.Since(started)
+	result, ok := s.appendSessionLog(item.ID, level, "command", "$ "+command+"\n"+message+"\n("+duration.Round(time.Millisecond).String()+")", duration)
+	if !ok {
 		return RemoteSession{}, ErrNotFound
 	}
-	s.remoteSessions[index].Logs = append(s.remoteSessions[index].Logs, RemoteSessionLog{Time: started.Format("15:04:05"), Level: level, Message: "$ " + command + "\n" + message + "\n(" + time.Since(started).Round(time.Millisecond).String() + ")"})
-	result := cloneRemoteSession(s.remoteSessions[index])
-	s.mu.Unlock()
 	return result, runErr
 }
+
 func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reader, size int64, operator string, roles []string) error {
 	if size <= 0 || size > 50<<20 {
 		return ErrRemoteValidation
@@ -325,7 +333,7 @@ func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reade
 	if _, err = session.CombinedOutput(command); err != nil {
 		return err
 	}
-	s.appendSessionLog(sessionID, "success", "上传文件: "+remotePath)
+	s.appendSessionLog(sessionID, "success", "file-upload", "上传文件: "+remotePath, 0)
 	return nil
 }
 func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, roles []string) ([]byte, error) {
@@ -360,20 +368,38 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	if len(output) > 25<<20 {
 		return nil, fmt.Errorf("remote file exceeds 25MB")
 	}
-	s.appendSessionLog(sessionID, "success", "下载文件: "+remotePath)
+	s.appendSessionLog(sessionID, "success", "file-download", "下载文件: "+remotePath, 0)
 	return output, nil
 }
 func (s *Service) CloseRemoteSession(sessionID, operator string, roles []string) error {
-	_, index, err := s.sessionForOperator(sessionID, operator, roles)
-	if err != nil {
+	if _, _, err := s.sessionForOperator(sessionID, operator, roles); err != nil {
 		return err
 	}
+	now := time.Now()
 	s.mu.Lock()
-	s.remoteSessions[index].Status = "closed"
-	s.remoteSessions[index].ClosedAt = time.Now().Format("2006-01-02 15:04:05")
+	var closed RemoteSession
+	found := false
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID != sessionID || s.remoteSessions[i].Status != "active" {
+			continue
+		}
+		s.remoteSessions[i].Status = "closed"
+		s.remoteSessions[i].ClosedAt = now.Format("2006-01-02 15:04:05")
+		s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, RemoteSessionLog{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已关闭"})
+		closed = cloneRemoteSession(s.remoteSessions[i])
+		found = true
+		break
+	}
 	s.mu.Unlock()
+	if !found {
+		return ErrNotFound
+	}
+	if s.db != nil {
+		_ = s.persistRemoteSession(closed)
+	}
 	return nil
 }
+
 func (s *Service) sessionForOperator(id, operator string, roles []string) (RemoteSession, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -390,16 +416,34 @@ func (s *Service) sessionForOperator(id, operator string, roles []string) (Remot
 	}
 	return RemoteSession{}, -1, ErrNotFound
 }
-func (s *Service) appendSessionLog(id, level, message string) {
+func (s *Service) appendSessionLog(id, level, kind, message string, duration time.Duration) (RemoteSession, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var updated RemoteSession
+	found := false
 	for i := range s.remoteSessions {
-		if s.remoteSessions[i].ID == id {
-			s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, RemoteSessionLog{Time: time.Now().Format("15:04:05"), Level: level, Message: message})
-			return
+		if s.remoteSessions[i].ID != id {
+			continue
 		}
+		entry := RemoteSessionLog{Time: time.Now().Format("15:04:05"), Level: level, Kind: kind, Message: message, DurationMS: duration.Milliseconds()}
+		if len(s.remoteSessions[i].Logs) >= 1000 {
+			s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs[len(s.remoteSessions[i].Logs)-999:], entry)
+		} else {
+			s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, entry)
+		}
+		updated = cloneRemoteSession(s.remoteSessions[i])
+		found = true
+		break
 	}
+	s.mu.Unlock()
+	if !found {
+		return RemoteSession{}, false
+	}
+	if s.db != nil {
+		_ = s.persistRemoteSession(updated)
+	}
+	return updated, true
 }
+
 func (s *Service) dialTrusted(assetID, ip string, port int, username, secret string) (*ssh.Client, error) {
 	return ssh.Dial("tcp", net.JoinHostPort(ip, strconv.Itoa(port)), &ssh.ClientConfig{User: username, Auth: remoteAuthMethods(secret), HostKeyCallback: s.trustedHostKeyCallback(assetID, ip, port), Timeout: 10 * time.Second})
 }
@@ -647,5 +691,77 @@ func (s *Service) deleteHostKeyRow(id string) error {
 		return nil
 	}
 	_, err := s.db.Exec(`DELETE FROM remote_host_keys WHERE id=$1`, id)
+	return err
+}
+
+func (s *Service) RemoteSessionHistory(username string, roles []string) []RemoteSession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	admin := remoteContainsString(roles, "admin") || remoteContainsString(roles, "platform-admin")
+	out := []RemoteSession{}
+	for i := 0; i < len(s.remoteSessions) && len(out) < 200; i++ {
+		if !admin && s.remoteSessions[i].Operator != username {
+			continue
+		}
+		out = append(out, cloneRemoteSession(s.remoteSessions[i]))
+	}
+	return out
+}
+
+func (s *Service) RemoteSessionReplay(id, username string, roles []string) (RemoteSession, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	admin := remoteContainsString(roles, "admin") || remoteContainsString(roles, "platform-admin")
+	for i := range s.remoteSessions {
+		item := s.remoteSessions[i]
+		if item.ID != id || (!admin && item.Operator != username) {
+			continue
+		}
+		return cloneRemoteSession(item), nil
+	}
+	return RemoteSession{}, ErrNotFound
+}
+
+func (s *Service) loadRemoteSessions() error {
+	if s.db == nil {
+		return nil
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted', closed_at=CASE WHEN closed_at='' THEN $1 ELSE closed_at END, updated_at=now() WHERE status='active'`, now); err != nil {
+		return err
+	}
+	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,status,created_at,expires_at,closed_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	out := []RemoteSession{}
+	for rows.Next() {
+		var item RemoteSession
+		var roles, logs []byte
+		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.ClosedAt, &logs); err != nil {
+			return err
+		}
+		_ = json.Unmarshal(roles, &item.Roles)
+		_ = json.Unmarshal(logs, &item.Logs)
+		if item.Roles == nil {
+			item.Roles = []string{}
+		}
+		if item.Logs == nil {
+			item.Logs = []RemoteSessionLog{}
+		}
+		out = append(out, item)
+	}
+	s.remoteSessions = out
+	return rows.Err()
+}
+
+func (s *Service) persistRemoteSession(item RemoteSession) error {
+	if s.db == nil {
+		return nil
+	}
+	roles, _ := json.Marshal(item.Roles)
+	logs, _ := json.Marshal(item.Logs)
+	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,status,created_at,expires_at,closed_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,closed_at=excluded.closed_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, item.Status, item.CreatedAt, item.ExpiresAt, item.ClosedAt, logs)
 	return err
 }

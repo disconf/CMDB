@@ -1,6 +1,9 @@
 package discovery
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAccessGrantNormalization(t *testing.T) {
 	enabled := true
@@ -37,5 +40,37 @@ func TestRemotePathValidation(t *testing.T) {
 		if err := validateRemotePath(value); err == nil {
 			t.Fatalf("invalid path accepted: %s", value)
 		}
+	}
+}
+
+func TestRemoteSessionHistoryAndReplayAuthorization(t *testing.T) {
+	service := NewService()
+	service.remoteSessions = []RemoteSession{
+		{ID: "new", Operator: "alice", AssetName: "new-host", Status: "closed", Logs: []RemoteSessionLog{{Time: "10:00:01", Level: "success", Kind: "session", Message: "closed"}}},
+		{ID: "old", Operator: "alice", AssetName: "old-host", Status: "closed", Logs: []RemoteSessionLog{{Time: "09:00:01", Level: "success", Kind: "session", Message: "closed"}}},
+		{ID: "bob", Operator: "bob", AssetName: "bob-host", Status: "closed"},
+	}
+	history := service.RemoteSessionHistory("alice", []string{"viewer"})
+	if len(history) != 2 || history[0].ID != "new" || history[1].ID != "old" {
+		t.Fatalf("unexpected user history order: %+v", history)
+	}
+	if _, err := service.RemoteSessionReplay("bob", "alice", []string{"viewer"}); err != ErrNotFound {
+		t.Fatalf("expected replay authorization to hide another user's session, got %v", err)
+	}
+	replay, err := service.RemoteSessionReplay("bob", "alice", []string{"platform-admin"})
+	if err != nil || replay.ID != "bob" {
+		t.Fatalf("admin replay failed: %+v err=%v", replay, err)
+	}
+}
+
+func TestAppendRemoteSessionLogPersistsStructuredEntry(t *testing.T) {
+	service := NewService()
+	service.remoteSessions = []RemoteSession{{ID: "session-1", Operator: "alice", Status: "active"}}
+	updated, ok := service.appendSessionLog("session-1", "success", "command", "hello", 1250*time.Millisecond)
+	if !ok {
+		t.Fatal("session log was not appended")
+	}
+	if len(updated.Logs) != 1 || updated.Logs[0].Kind != "command" || updated.Logs[0].DurationMS != 1250 {
+		t.Fatalf("unexpected structured log: %+v", updated.Logs)
 	}
 }

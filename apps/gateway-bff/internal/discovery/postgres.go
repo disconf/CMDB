@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS remote_access_grants(
 CREATE INDEX IF NOT EXISTS idx_remote_access_grants_subject ON remote_access_grants(subject_type,subject);
 CREATE TABLE IF NOT EXISTS remote_host_keys(id text PRIMARY KEY,asset_id text NOT NULL,host text NOT NULL,port integer NOT NULL DEFAULT 22,key_type text NOT NULL,fingerprint text NOT NULL,public_key text NOT NULL,added_by text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
 CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_host_keys_asset ON remote_host_keys(asset_id,host,port);
+CREATE TABLE IF NOT EXISTS remote_access_sessions(
+ id text PRIMARY KEY,
+ asset_id text NOT NULL,
+ asset_name text NOT NULL,
+ host text NOT NULL,
+ port integer NOT NULL DEFAULT 22,
+ credential_id text NOT NULL DEFAULT '',
+ operator_name text NOT NULL,
+ roles jsonb NOT NULL DEFAULT '[]',
+ status text NOT NULL,
+ created_at text NOT NULL,
+ expires_at text NOT NULL,
+ closed_at text NOT NULL DEFAULT '',
+ logs jsonb NOT NULL DEFAULT '[]',
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_remote_access_sessions_time ON remote_access_sessions(updated_at DESC);
 `
 
 func openPostgres(databaseURL string) (*sql.DB, []Task, error) {

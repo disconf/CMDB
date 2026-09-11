@@ -193,6 +193,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		if err := s.loadHostKeys(); err != nil {
 			panic(fmt.Sprintf("load remote host keys: %v", err))
 		}
+		if err := s.loadRemoteSessions(); err != nil {
+			panic(fmt.Sprintf("load remote sessions: %v", err))
+		}
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}
 	if s.db == nil && demo.Enabled() {
