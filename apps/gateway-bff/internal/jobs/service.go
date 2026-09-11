@@ -34,25 +34,46 @@ type TemplateInput struct {
 	Command     string `json:"command"`
 	Risk        string `json:"risk"`
 }
+type Playbook struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Content     string            `json:"content"`
+	Constants   map[string]string `json:"constants"`
+	Variables   map[string]string `json:"variables"`
+	Enabled     bool              `json:"enabled"`
+	CreatedBy   string            `json:"createdBy"`
+}
+type PlaybookInput struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Content     string            `json:"content"`
+	Constants   map[string]string `json:"constants"`
+	Variables   map[string]string `json:"variables"`
+	Enabled     *bool             `json:"enabled"`
+}
 type Log struct {
 	Time    string `json:"time"`
 	Level   string `json:"level"`
 	Message string `json:"message"`
 }
 type Job struct {
-	ID             string   `json:"id"`
-	TemplateID     string   `json:"templateId"`
-	Name           string   `json:"name"`
-	Targets        []string `json:"targets"`
-	Status         string   `json:"status"`
-	Progress       int      `json:"progress"`
-	Operator       string   `json:"operator"`
-	StartedAt      string   `json:"startedAt"`
-	Duration       string   `json:"duration"`
-	Logs           []Log    `json:"logs"`
-	TimeoutSeconds int      `json:"timeoutSeconds"`
-	Attempt        int      `json:"attempt"`
-	ApprovedBy     string   `json:"approvedBy"`
+	ID             string            `json:"id"`
+	TemplateID     string            `json:"templateId"`
+	Name           string            `json:"name"`
+	Targets        []string          `json:"targets"`
+	Status         string            `json:"status"`
+	Progress       int               `json:"progress"`
+	Operator       string            `json:"operator"`
+	StartedAt      string            `json:"startedAt"`
+	Duration       string            `json:"duration"`
+	Logs           []Log             `json:"logs"`
+	TimeoutSeconds int               `json:"timeoutSeconds"`
+	Attempt        int               `json:"attempt"`
+	ApprovedBy     string            `json:"approvedBy"`
+	PlaybookID     string            `json:"playbookId"`
+	Variables      map[string]string `json:"variables"`
 }
 type Schedule struct {
 	ID             string   `json:"id"`
@@ -78,10 +99,12 @@ type ScheduleInput struct {
 	Enabled        *bool    `json:"enabled"`
 }
 type CreateInput struct {
-	TemplateID     string   `json:"templateId"`
-	Targets        []string `json:"targets"`
-	Operator       string   `json:"operator"`
-	TimeoutSeconds int      `json:"timeoutSeconds"`
+	TemplateID     string            `json:"templateId"`
+	PlaybookID     string            `json:"playbookId"`
+	Variables      map[string]string `json:"variables"`
+	Targets        []string          `json:"targets"`
+	Operator       string            `json:"operator"`
+	TimeoutSeconds int               `json:"timeoutSeconds"`
 }
 type Summary struct {
 	Templates    int `json:"templates"`
@@ -89,11 +112,13 @@ type Summary struct {
 	SuccessToday int `json:"successToday"`
 	FailedToday  int `json:"failedToday"`
 	Schedules    int `json:"schedules"`
+	Playbooks    int `json:"playbooks"`
 }
 
 type Service struct {
 	mu        sync.RWMutex
 	templates []Template
+	playbooks []Playbook
 	jobs      []Job
 	schedules []Schedule
 	next      int
@@ -105,7 +130,7 @@ type Service struct {
 
 func NewService() *Service {
 	nodeExporterTemplate := Template{"tpl-node-exporter", "安装 Node Exporter", "监控", "为CMDB主机安装并启动标准主机指标采集器", "install-node-exporter", "medium", "--", true}
-	s := &Service{templates: []Template{{"tpl-health", "主机健康巡检", "巡检", "检查 CPU、内存、磁盘与关键进程", "health-check --full", "low", "--", true}, nodeExporterTemplate, {"tpl-restart", "应用滚动重启", "变更", "按实例顺序执行优雅重启", "rolling-restart --wait", "medium", "--", true}, {"tpl-clean", "日志空间清理", "维护", "清理超过保留周期的归档日志", "log-cleanup --days 14", "low", "--", true}, {"tpl-patch", "安全补丁安装", "安全", "安装已审批的系统安全更新", "patch-install --approved", "high", "--", true}}, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation()}
+	s := &Service{playbooks: []Playbook{}, templates: []Template{{"tpl-health", "主机健康巡检", "巡检", "检查 CPU、内存、磁盘与关键进程", "health-check --full", "low", "--", true}, nodeExporterTemplate, {"tpl-restart", "应用滚动重启", "变更", "按实例顺序执行优雅重启", "rolling-restart --wait", "medium", "--", true}, {"tpl-clean", "日志空间清理", "维护", "清理超过保留周期的归档日志", "log-cleanup --days 14", "low", "--", true}, {"tpl-patch", "安全补丁安装", "安全", "安装已审批的系统安全更新", "patch-install --approved", "high", "--", true}}, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation()}
 	if !demo.Enabled() {
 		s.schedules = []Schedule{}
 	}
@@ -127,6 +152,11 @@ func NewService() *Service {
 			panic(fmt.Sprintf("load job schedules: %v", scheduleErr))
 		}
 		s.schedules = persistedSchedules
+		persistedPlaybooks, playbookErr := loadPlaybooks(context.Background(), db)
+		if playbookErr != nil {
+			panic(fmt.Sprintf("load job playbooks: %v", playbookErr))
+		}
+		s.playbooks = persistedPlaybooks
 		s.next = len(jobs) + 1
 	}
 	foundNodeExporter := false
@@ -207,7 +237,7 @@ func (s *Service) Get(id string) (Job, error) {
 func (s *Service) Summary() Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r := Summary{Templates: len(s.templates), Schedules: len(s.schedules)}
+	r := Summary{Templates: len(s.templates), Schedules: len(s.schedules), Playbooks: len(s.playbooks)}
 	for _, j := range s.jobs {
 		switch j.Status {
 		case "running":
@@ -222,6 +252,9 @@ func (s *Service) Summary() Summary {
 }
 
 func (s *Service) Create(in CreateInput) (Job, error) {
+	if in.PlaybookID != "" {
+		return s.createPlaybookExecution(in)
+	}
 	var tpl *Template
 	for i := range s.templates {
 		if s.templates[i].ID == in.TemplateID {
@@ -252,6 +285,29 @@ func (s *Service) Create(in CreateInput) (Job, error) {
 	return cloneJob(j), nil
 }
 
+func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
+	playbook, err := s.playbookByID(in.PlaybookID)
+	if err != nil || !playbook.Enabled || len(in.Targets) == 0 {
+		return Job{}, ErrValidation
+	}
+	if _, err = compilePlaybook(playbook, in.Variables); err != nil {
+		return Job{}, ErrValidation
+	}
+	if in.TimeoutSeconds <= 0 {
+		in.TimeoutSeconds = 300
+	}
+	if in.TimeoutSeconds > 86400 {
+		return Job{}, ErrValidation
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, Attempt: 0}
+	s.next++
+	s.jobs = append([]Job{j}, s.jobs...)
+	s.persistLocked(j)
+	return cloneJob(j), nil
+}
 func (s *Service) Run(id string) (Job, error)   { return s.start(id, false) }
 func (s *Service) Retry(id string) (Job, error) { return s.start(id, true) }
 func (s *Service) Approve(id, approver string) (Job, error) {
@@ -298,13 +354,7 @@ func (s *Service) start(id string, retry bool) (Job, error) {
 	j.Logs = append(j.Logs, Log{time.Now().Format("15:04:05"), "info", fmt.Sprintf("第 %d 次执行已进入队列", j.Attempt)})
 	s.persistLocked(*j)
 	attempt := j.Attempt
-	command := ""
-	for _, template := range s.templates {
-		if template.ID == j.TemplateID {
-			command = template.Command
-			break
-		}
-	}
+	command := s.commandForJobLocked(*j)
 	request := ExecutionRequest{JobID: j.ID, Command: command, Targets: append([]string(nil), j.Targets...), Operator: j.Operator, Attempt: attempt, TimeoutSeconds: j.TimeoutSeconds}
 	out := cloneJob(*j)
 	s.mu.Unlock()

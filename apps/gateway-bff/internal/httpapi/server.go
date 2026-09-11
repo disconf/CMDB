@@ -1505,6 +1505,80 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, jobsService.Templates())
 	})
+	mux.HandleFunc("GET /api/v1/jobs/playbooks", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		writeJSON(w, 200, jobsService.Playbooks())
+	})
+	mux.HandleFunc("POST /api/v1/jobs/playbooks", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		var input jobs.PlaybookInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := jobsService.CreatePlaybook(input, user.Username)
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "Playbook 内容或变量无效"})
+			return
+		}
+		auditService.Record(user.Username, "job.playbook.create", item.ID, item.Name)
+		writeJSON(w, 201, item)
+	})
+	mux.HandleFunc("PUT /api/v1/jobs/playbooks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		var input jobs.PlaybookInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := jobsService.UpdatePlaybook(r.PathValue("id"), input)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "PLAYBOOK_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "Playbook 内容或变量无效"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.playbook.update", item.ID, item.Name)
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("POST /api/v1/jobs/playbooks/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		item, err := jobsService.TogglePlaybook(r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "PLAYBOOK_NOT_FOUND"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.playbook.toggle", item.ID, strconv.FormatBool(item.Enabled))
+		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/jobs/playbooks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		if err := jobsService.DeletePlaybook(r.PathValue("id")); errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "PLAYBOOK_NOT_FOUND"})
+			return
+		} else if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "PLAYBOOK_DELETE_FAILED"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.playbook.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /api/v1/jobs/templates", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:manage") {
 			return

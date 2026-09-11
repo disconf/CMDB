@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const jobsSchema = `CREATE TABLE IF NOT EXISTS job_executions(id text PRIMARY KEY,template_id text NOT NULL,name text NOT NULL,targets jsonb NOT NULL,status text NOT NULL,progress integer NOT NULL,operator_name text NOT NULL,started_at text NOT NULL,duration text NOT NULL DEFAULT '',logs jsonb NOT NULL DEFAULT '[]',timeout_seconds integer NOT NULL DEFAULT 300,attempt integer NOT NULL DEFAULT 0,approved_by text NOT NULL DEFAULT '',updated_at timestamptz NOT NULL DEFAULT now());ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';CREATE INDEX IF NOT EXISTS idx_job_executions_updated ON job_executions(updated_at DESC);CREATE TABLE IF NOT EXISTS job_templates(id text PRIMARY KEY,name text NOT NULL,category text NOT NULL,description text NOT NULL,command_text text NOT NULL,risk text NOT NULL,enabled boolean NOT NULL DEFAULT true,updated_at timestamptz NOT NULL DEFAULT now());`
+const jobsSchema = `CREATE TABLE IF NOT EXISTS job_executions(id text PRIMARY KEY,template_id text NOT NULL,name text NOT NULL,targets jsonb NOT NULL,status text NOT NULL,progress integer NOT NULL,operator_name text NOT NULL,started_at text NOT NULL,duration text NOT NULL DEFAULT '',logs jsonb NOT NULL DEFAULT '[]',timeout_seconds integer NOT NULL DEFAULT 300,attempt integer NOT NULL DEFAULT 0,approved_by text NOT NULL DEFAULT '',playbook_id text NOT NULL DEFAULT '',variables jsonb NOT NULL DEFAULT '{}',updated_at timestamptz NOT NULL DEFAULT now());ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS playbook_id text NOT NULL DEFAULT '';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS variables jsonb NOT NULL DEFAULT '{}';CREATE INDEX IF NOT EXISTS idx_job_executions_updated ON job_executions(updated_at DESC);CREATE TABLE IF NOT EXISTS job_templates(id text PRIMARY KEY,name text NOT NULL,category text NOT NULL,description text NOT NULL,command_text text NOT NULL,risk text NOT NULL,enabled boolean NOT NULL DEFAULT true,updated_at timestamptz NOT NULL DEFAULT now());`
 
 const jobSchedulesSchema = `
 CREATE TABLE IF NOT EXISTS job_schedules(
@@ -30,6 +30,22 @@ CREATE TABLE IF NOT EXISTS job_schedules(
 CREATE INDEX IF NOT EXISTS idx_job_schedules_next_run ON job_schedules(enabled,next_run);
 `
 
+const playbooksSchema = `
+CREATE TABLE IF NOT EXISTS job_playbooks(
+ id text PRIMARY KEY,
+ name text NOT NULL,
+ description text NOT NULL DEFAULT '',
+ content text NOT NULL,
+ constants jsonb NOT NULL DEFAULT '{}',
+ variables jsonb NOT NULL DEFAULT '{}',
+ enabled boolean NOT NULL DEFAULT true,
+ created_by text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_job_playbooks_updated ON job_playbooks(updated_at DESC);
+`
+
 func openPostgres(url string) (*sql.DB, []Job, error) {
 	db, err := sql.Open("pgx", url)
 	if err != nil {
@@ -49,7 +65,11 @@ func openPostgres(url string) (*sql.DB, []Job, error) {
 		db.Close()
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by FROM job_executions ORDER BY updated_at DESC LIMIT 500`)
+	if _, err = db.ExecContext(ctx, playbooksSchema); err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,variables FROM job_executions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,12 +77,13 @@ func openPostgres(url string) (*sql.DB, []Job, error) {
 	var out []Job
 	for rows.Next() {
 		var j Job
-		var targets, logs []byte
-		if err = rows.Scan(&j.ID, &j.TemplateID, &j.Name, &targets, &j.Status, &j.Progress, &j.Operator, &j.StartedAt, &j.Duration, &logs, &j.TimeoutSeconds, &j.Attempt, &j.ApprovedBy); err != nil {
+		var targets, logs, variables []byte
+		if err = rows.Scan(&j.ID, &j.TemplateID, &j.Name, &targets, &j.Status, &j.Progress, &j.Operator, &j.StartedAt, &j.Duration, &logs, &j.TimeoutSeconds, &j.Attempt, &j.ApprovedBy, &j.PlaybookID, &variables); err != nil {
 			return nil, nil, err
 		}
 		_ = json.Unmarshal(targets, &j.Targets)
 		_ = json.Unmarshal(logs, &j.Logs)
+		_ = json.Unmarshal(variables, &j.Variables)
 		if j.Status == "running" {
 			j.Status = "failed"
 			j.Logs = append(j.Logs, Log{time.Now().Format("15:04:05"), "error", "网关重启导致执行中断，可手动重试"})
@@ -74,7 +95,8 @@ func openPostgres(url string) (*sql.DB, []Job, error) {
 func upsertJob(ctx context.Context, db *sql.DB, j Job) error {
 	targets, _ := json.Marshal(j.Targets)
 	logs, _ := json.Marshal(j.Logs)
-	_, err := db.ExecContext(ctx, `INSERT INTO job_executions(id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,progress=excluded.progress,duration=excluded.duration,logs=excluded.logs,attempt=excluded.attempt,approved_by=excluded.approved_by,updated_at=now()`, j.ID, j.TemplateID, j.Name, targets, j.Status, j.Progress, j.Operator, j.StartedAt, j.Duration, logs, j.TimeoutSeconds, j.Attempt, j.ApprovedBy)
+	variables, _ := json.Marshal(j.Variables)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_executions(id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,variables,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,progress=excluded.progress,duration=excluded.duration,logs=excluded.logs,attempt=excluded.attempt,approved_by=excluded.approved_by,playbook_id=excluded.playbook_id,variables=excluded.variables,updated_at=now()`, j.ID, j.TemplateID, j.Name, targets, j.Status, j.Progress, j.Operator, j.StartedAt, j.Duration, logs, j.TimeoutSeconds, j.Attempt, j.ApprovedBy, j.PlaybookID, variables)
 	return err
 }
 func upsertTemplate(ctx context.Context, db *sql.DB, t Template) error {
@@ -140,5 +162,37 @@ func upsertSchedule(ctx context.Context, db *sql.DB, schedule Schedule) error {
 
 func deleteScheduleRow(ctx context.Context, db *sql.DB, id string) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM job_schedules WHERE id=$1`, id)
+	return err
+}
+
+func loadPlaybooks(ctx context.Context, db *sql.DB) ([]Playbook, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id,name,description,content,constants,variables,enabled,created_by FROM job_playbooks ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Playbook{}
+	for rows.Next() {
+		var item Playbook
+		var constants, variables []byte
+		if err := rows.Scan(&item.ID, &item.Name, &item.Description, &item.Content, &constants, &variables, &item.Enabled, &item.CreatedBy); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(constants, &item.Constants)
+		_ = json.Unmarshal(variables, &item.Variables)
+		out = append(out, clonePlaybook(item))
+	}
+	return out, rows.Err()
+}
+
+func upsertPlaybook(ctx context.Context, db *sql.DB, item Playbook) error {
+	constants, _ := json.Marshal(item.Constants)
+	variables, _ := json.Marshal(item.Variables)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_playbooks(id,name,description,content,constants,variables,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,constants=excluded.constants,variables=excluded.variables,enabled=excluded.enabled,updated_at=now()`, item.ID, item.Name, item.Description, item.Content, constants, variables, item.Enabled, item.CreatedBy)
+	return err
+}
+
+func deletePlaybookRow(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM job_playbooks WHERE id=$1`, id)
 	return err
 }
