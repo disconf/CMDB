@@ -64,6 +64,7 @@ kubectl -n monitoring port-forward svc/grafana 13000:3000
 - Prometheus Targets 中 `cmdb-node-exporter` 应只包含 CMDB 中标记为已启用 exporter 的主机。
 - Prometheus `up{job="cmdb-node-exporter"}` 用于确认主机采集状态。
 - Alertmanager 触发和恢复通知会调用 `/api/v1/monitor/alerts/webhook`。
+- 告警 Webhook 会同步 CMDB 资产健康：critical=firing 置 offline、warning=firing 置 warning、全部恢复后置 online。
 - Grafana 默认数据源 `Prometheus` 指向 `http://prometheus.monitoring.svc.cluster.local:9090`。
 - `cmdb-snmp` 任务通过 `snmp-exporter.monitoring.svc.cluster.local:9116` 抓取 CMDB 中真实 SNMP 发现的设备。
 - SNMP 模块支持 `if_mib`、`host_resources`、`huawei`、`h3c`、`cisco_device`、`ruijie`；CMDB 根据厂商和 OID 探测结果自动选择模块，未识别厂商私有 OID 时回退 `host_resources` 或 `if_mib`。

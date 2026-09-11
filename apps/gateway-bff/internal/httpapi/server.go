@@ -92,6 +92,7 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ALERT_PERSISTENCE_FAILED"})
 			return
 		}
+		syncAssetHealthFromAlerts(cmdbService, monitorService, payload)
 		writeJSON(w, http.StatusAccepted, map[string]int{"accepted": accepted})
 	})
 	mux.HandleFunc("POST /api/v1/agent/report", func(w http.ResponseWriter, r *http.Request) {
@@ -1775,6 +1776,44 @@ func NewServer() *Server {
 	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService}
 }
 
+func syncAssetHealthFromAlerts(cmdbService *cmdb.Service, monitorService *monitor.Service, payload monitor.WebhookPayload) {
+	affected := map[string]bool{}
+	for _, incoming := range payload.Alerts {
+		if assetID := incoming.Labels["cmdb_asset_id"]; assetID != "" {
+			affected[assetID] = true
+		}
+	}
+	if len(affected) == 0 {
+		return
+	}
+	active := monitorService.Alerts()
+	for assetID := range affected {
+		status := "online"
+		score := 0
+		for _, alert := range active {
+			if alert.TargetID != assetID || alert.Status != "firing" {
+				continue
+			}
+			alertScore := 1
+			if alert.Severity == "warning" {
+				alertScore = 2
+			} else if alert.Severity == "critical" {
+				alertScore = 3
+			}
+			if alertScore > score {
+				score = alertScore
+			}
+		}
+		if score == 3 {
+			status = "offline"
+		} else if score == 2 {
+			status = "warning"
+		}
+		if err := cmdbService.ApplyMonitoringState(assetID, status, "alertmanager"); err != nil && !errors.Is(err, cmdb.ErrNotFound) {
+			slog.Error("sync asset monitoring state", "asset_id", assetID, "status", status, "error", err)
+		}
+	}
+}
 func bearerToken(r *http.Request) string {
 	const prefix = "Bearer "
 	value := r.Header.Get("Authorization")

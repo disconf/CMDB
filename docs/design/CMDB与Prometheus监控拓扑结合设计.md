@@ -17,6 +17,8 @@
 - Grafana 已增加“CMDB 网络设备监控”大盘，展示设备状态、接口流量、错误、丢弃和接口 Up/Down。
 - SNMP 采集模块已支持 `host_resources` 以及华为、华三、Cisco、锐捷常见 CPU/内存/温度 OID；模块选择由 CMDB 根据厂商和 OID 探测结果动态下发，接口指标始终保留。
 - CMDB 设备 `172.31.42.124` 已验证通过 `host_resources` 采集 CPU、内存、磁盘、运行时长和接口状态。
+- Alertmanager 回写已升级为资产健康闭环：严重告警将资产置为 `offline`、警告告警置为 `warning`、全部恢复后自动回到 `online`，拓扑中心同步更新颜色。
+- `NetworkInterfaceDown` 只统计管理状态 Up 且链路状态 Down 的真实接口，排除 `sit0`、`ip6tnl0` 等虚拟接口误报。
 
 ## 1. 核心结论（先记住三条）
 

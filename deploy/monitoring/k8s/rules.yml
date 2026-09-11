@@ -44,7 +44,7 @@ groups:
           summary: "CMDB 纳管网络设备不可用"
           description: "设备 {{ $labels.asset_name }}（{{ $labels.instance }}）已不可用超过 2 分钟。"
       - alert: NetworkInterfaceDown
-        expr: ifOperStatus{job="cmdb-snmp"} != 1
+        expr: ifOperStatus{job="cmdb-snmp"} == 2 and on(instance, ifIndex) (ifAdminStatus{job="cmdb-snmp"} == 1)
         for: 5m
         labels: {severity: warning, category: availability}
         annotations:

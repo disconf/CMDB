@@ -801,6 +801,55 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 	return cloneAsset(asset), nil
 }
 
+func (s *Service) ApplyMonitoringState(id, status, source string) error {
+	if id == "" || (status != "online" && status != "warning" && status != "offline") {
+		return nil
+	}
+	if source == "" {
+		source = "alertmanager"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.assets {
+		if s.assets[i].ID != id {
+			continue
+		}
+		if s.assets[i].Status == status {
+			return nil
+		}
+		before := s.assets[i]
+		s.assets[i].Status = status
+		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "monitor-" + status, Operator: source, OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: []Change{{Field: "status", Before: before.Status, After: status}}}
+		if s.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				s.assets[i] = before
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET status=$2,updated_at=now() WHERE id=$1`, id, status)
+			if err == nil {
+				err = insertHistory(ctx, tx, entry)
+			}
+			if err == nil {
+				err = insertAssetEvents(ctx, tx, s.assets[i], entry)
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				s.assets[i] = before
+				return err
+			}
+			if err = tx.Commit(); err != nil {
+				s.assets[i] = before
+				return err
+			}
+		}
+		s.history[id] = append(s.history[id], entry)
+		return nil
+	}
+	return ErrNotFound
+}
 func (s *Service) MarkAgentAssetOffline(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
