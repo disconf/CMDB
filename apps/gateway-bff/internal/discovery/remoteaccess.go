@@ -589,15 +589,19 @@ func (s *Service) findTrustedHostKeyLocked(assetID, host string, port int, finge
 	return false
 }
 func (s *Service) trustedHostKeyCallback(assetID, host string, port int) ssh.HostKeyCallback {
-	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		fingerprint := ssh.FingerprintSHA256(key)
 		s.mu.RLock()
 		trusted := s.findTrustedHostKeyLocked(assetID, host, port, fingerprint)
 		s.mu.RUnlock()
-		if !trusted {
-			return fmt.Errorf("SSH 主机指纹未信任，请先在远程运维页面探测并信任指纹")
+		if trusted {
+			return nil
 		}
-		return nil
+		callback, err := sshHostKeyCallback()
+		if err == nil {
+			return callback(hostname, remote, key)
+		}
+		return fmt.Errorf("SSH 主机指纹未信任，请先在远程运维页面探测并信任指纹")
 	}
 }
 func (s *Service) loadHostKeys() error {
