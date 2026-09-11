@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 var ErrRemoteValidation = errors.New("remote execution validation failed")
@@ -361,11 +362,22 @@ func truncateOutput(output string) string {
 	return output
 }
 
+func sshHostKeyCallback() (ssh.HostKeyCallback, error) {
+	path := strings.TrimSpace(os.Getenv("SSH_KNOWN_HOSTS_FILE"))
+	if path == "" {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	return knownhosts.New(path)
+}
 func sshRemoteRunner(ctx context.Context, target string, port int, command, username, secret string, timeout time.Duration) (string, error) {
+	callback, err := sshHostKeyCallback()
+	if err != nil {
+		return "", err
+	}
 	config := &ssh.ClientConfig{
 		User:            username,
 		Auth:            []ssh.AuthMethod{ssh.Password(secret)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: callback,
 		Timeout:         timeout,
 	}
 	address := net.JoinHostPort(target, strconv.Itoa(port))

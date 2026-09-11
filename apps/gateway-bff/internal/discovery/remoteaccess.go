@@ -63,6 +63,11 @@ func remoteGrantID() string {
 	_, _ = rand.Read(data)
 	return "grant-" + hex.EncodeToString(data)
 }
+func remoteHostKeyID() string {
+	data := make([]byte, 8)
+	_, _ = rand.Read(data)
+	return "hostkey-" + hex.EncodeToString(data)
+}
 func remoteSessionID() string {
 	data := make([]byte, 10)
 	_, _ = rand.Read(data)
@@ -375,7 +380,20 @@ func parseRemoteTime(value string) time.Time {
 	return parsed
 }
 func dialRemote(ip string, port int, username, secret string) (*ssh.Client, error) {
-	return ssh.Dial("tcp", net.JoinHostPort(ip, strconv.Itoa(port)), &ssh.ClientConfig{User: username, Auth: []ssh.AuthMethod{ssh.Password(secret)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 10 * time.Second})
+	callback, err := sshHostKeyCallback()
+	if err != nil {
+		return nil, err
+	}
+	return ssh.Dial("tcp", net.JoinHostPort(ip, strconv.Itoa(port)), &ssh.ClientConfig{User: username, Auth: remoteAuthMethods(secret), HostKeyCallback: callback, Timeout: 10 * time.Second})
+}
+
+func remoteAuthMethods(secret string) []ssh.AuthMethod {
+	if strings.Contains(secret, "PRIVATE KEY") {
+		if signer, err := ssh.ParsePrivateKey([]byte(secret)); err == nil {
+			return []ssh.AuthMethod{ssh.PublicKeys(signer)}
+		}
+	}
+	return []ssh.AuthMethod{ssh.Password(secret)}
 }
 func validateRemotePath(value string) error {
 	value = strings.TrimSpace(value)
