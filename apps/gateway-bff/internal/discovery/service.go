@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/demo"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -157,7 +158,10 @@ func NewService() *Service {
 	return NewServiceWithCMDB(nil)
 }
 func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
-	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}}
+	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{}}
+	if demo.Enabled() {
+		s.tasks = []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}
+	}
 	s.agentToken = os.Getenv("AGENT_SHARED_TOKEN")
 	s.agentSeen = map[string]time.Time{}
 	s.events = map[string][]TaskEvent{}
@@ -182,7 +186,7 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		}
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}
-	if s.db == nil {
+	if s.db == nil && demo.Enabled() {
 		s.agents = demoAgents
 	}
 	return s
@@ -834,6 +838,9 @@ func (s *Service) RunTask(id string) (Task, error) {
 	defer s.mu.Unlock()
 	for i := range s.tasks {
 		if s.tasks[i].ID == id {
+			if !demo.Enabled() {
+				return Task{}, errors.New("task execution requires a configured discovery collector")
+			}
 			s.tasks[i].Status = "completed"
 			s.tasks[i].Items = sampleItems()
 			s.tasks[i].Discovered = len(s.tasks[i].Items)

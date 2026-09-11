@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"cmdb/gateway-bff/internal/demo"
 	"context"
 	"database/sql"
 	"errors"
@@ -88,6 +89,9 @@ type Service struct {
 func NewService() *Service {
 	nodeExporterTemplate := Template{"tpl-node-exporter", "安装 Node Exporter", "监控", "为CMDB主机安装并启动标准主机指标采集器", "install-node-exporter", "medium", "--", true}
 	s := &Service{templates: []Template{{"tpl-health", "主机健康巡检", "巡检", "检查 CPU、内存、磁盘与关键进程", "health-check --full", "low", "--", true}, nodeExporterTemplate, {"tpl-restart", "应用滚动重启", "变更", "按实例顺序执行优雅重启", "rolling-restart --wait", "medium", "--", true}, {"tpl-clean", "日志空间清理", "维护", "清理超过保留周期的归档日志", "log-cleanup --days 14", "low", "--", true}, {"tpl-patch", "安全补丁安装", "安全", "安装已审批的系统安全更新", "patch-install --approved", "high", "--", true}}, schedules: []Schedule{{"sch-01", "每日主机巡检", "0 2 * * *", "明天 02:00", true}, {"sch-02", "每周日志清理", "0 3 * * 0", "周日 03:00", true}}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv()}
+	if !demo.Enabled() {
+		s.schedules = []Schedule{}
+	}
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		db, jobs, err := openPostgres(url)
 		if err != nil {

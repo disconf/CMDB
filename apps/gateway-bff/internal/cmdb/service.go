@@ -1,6 +1,7 @@
 package cmdb
 
 import (
+	"cmdb/gateway-bff/internal/demo"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -38,19 +39,22 @@ type Service struct {
 }
 
 func NewService() *Service {
-	assets := []Asset{
-		asset("srv-prod-001", "prod-api-01", "physical-server", "物理服务器", "online", "10.20.1.11", "生产", "核心系统组", "张伟", "上海一号机房 / A03-12", "Agent", []string{"核心", "Linux", "API"}),
-		asset("srv-prod-002", "prod-api-02", "physical-server", "物理服务器", "online", "10.20.1.12", "生产", "核心系统组", "张伟", "上海一号机房 / A03-13", "Agent", []string{"核心", "Linux", "API"}),
-		asset("srv-test-001", "test-runner-01", "physical-server", "物理服务器", "offline", "10.30.2.8", "测试", "研发效能组", "李娜", "上海二号机房 / B01-04", "Agent", []string{"测试", "Runner"}),
-		asset("vm-prod-041", "order-service-vm", "virtual-machine", "虚拟机", "online", "10.21.4.41", "生产", "电商业务组", "王强", "VMware / cluster-a", "vCenter", []string{"订单", "Java"}),
-		asset("vm-prod-052", "payment-gateway-vm", "virtual-machine", "虚拟机", "warning", "10.21.5.52", "生产", "核心系统组", "周敏", "VMware / cluster-a", "vCenter", []string{"支付", "核心"}),
-		asset("cloud-ecs-018", "analytics-worker", "cloud-host", "云主机", "online", "172.18.3.18", "生产", "数据平台组", "陈明", "阿里云 / 华东2 / 可用区B", "Cloud API", []string{"数据", "弹性"}),
-		asset("k8s-node-01", "prod-k8s-worker-01", "k8s-node", "K8s 节点", "online", "10.22.1.21", "生产", "容器平台组", "赵峰", "prod-k8s / worker", "Kubernetes API", []string{"K8s", "Worker"}),
-		asset("k8s-node-02", "prod-k8s-worker-02", "k8s-node", "K8s 节点", "warning", "10.22.1.22", "生产", "容器平台组", "赵峰", "prod-k8s / worker", "Kubernetes API", []string{"K8s", "Worker"}),
-		asset("net-sw-001", "core-switch-01", "network-device", "网络设备", "online", "10.10.0.2", "生产", "基础设施组", "孙磊", "上海一号机房 / 核心区", "SNMP", []string{"核心交换", "Cisco"}),
-		asset("db-prod-001", "order-mysql-primary", "database", "数据库", "warning", "10.23.2.31", "生产", "电商业务组", "吴涛", "DB Cluster / order-mysql", "Agent", []string{"MySQL", "主库", "订单"}),
-		asset("redis-prod-01", "session-redis", "middleware", "中间件", "online", "10.23.3.41", "生产", "核心系统组", "吴涛", "Redis Cluster / session", "Agent", []string{"Redis", "会话"}),
-		asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
+	assets := []Asset{}
+	if demo.Enabled() {
+		assets = []Asset{
+			asset("srv-prod-001", "prod-api-01", "physical-server", "物理服务器", "online", "10.20.1.11", "生产", "核心系统组", "张伟", "上海一号机房 / A03-12", "Agent", []string{"核心", "Linux", "API"}),
+			asset("srv-prod-002", "prod-api-02", "physical-server", "物理服务器", "online", "10.20.1.12", "生产", "核心系统组", "张伟", "上海一号机房 / A03-13", "Agent", []string{"核心", "Linux", "API"}),
+			asset("srv-test-001", "test-runner-01", "physical-server", "物理服务器", "offline", "10.30.2.8", "测试", "研发效能组", "李娜", "上海二号机房 / B01-04", "Agent", []string{"测试", "Runner"}),
+			asset("vm-prod-041", "order-service-vm", "virtual-machine", "虚拟机", "online", "10.21.4.41", "生产", "电商业务组", "王强", "VMware / cluster-a", "vCenter", []string{"订单", "Java"}),
+			asset("vm-prod-052", "payment-gateway-vm", "virtual-machine", "虚拟机", "warning", "10.21.5.52", "生产", "核心系统组", "周敏", "VMware / cluster-a", "vCenter", []string{"支付", "核心"}),
+			asset("cloud-ecs-018", "analytics-worker", "cloud-host", "云主机", "online", "172.18.3.18", "生产", "数据平台组", "陈明", "阿里云 / 华东2 / 可用区B", "Cloud API", []string{"数据", "弹性"}),
+			asset("k8s-node-01", "prod-k8s-worker-01", "k8s-node", "K8s 节点", "online", "10.22.1.21", "生产", "容器平台组", "赵峰", "prod-k8s / worker", "Kubernetes API", []string{"K8s", "Worker"}),
+			asset("k8s-node-02", "prod-k8s-worker-02", "k8s-node", "K8s 节点", "warning", "10.22.1.22", "生产", "容器平台组", "赵峰", "prod-k8s / worker", "Kubernetes API", []string{"K8s", "Worker"}),
+			asset("net-sw-001", "core-switch-01", "network-device", "网络设备", "online", "10.10.0.2", "生产", "基础设施组", "孙磊", "上海一号机房 / 核心区", "SNMP", []string{"核心交换", "Cisco"}),
+			asset("db-prod-001", "order-mysql-primary", "database", "数据库", "warning", "10.23.2.31", "生产", "电商业务组", "吴涛", "DB Cluster / order-mysql", "Agent", []string{"MySQL", "主库", "订单"}),
+			asset("redis-prod-01", "session-redis", "middleware", "中间件", "online", "10.23.3.41", "生产", "核心系统组", "吴涛", "Redis Cluster / session", "Agent", []string{"Redis", "会话"}),
+			asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
+		}
 	}
 	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)

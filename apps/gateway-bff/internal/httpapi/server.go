@@ -37,10 +37,10 @@ type Server struct {
 
 func NewServer() *Server {
 	mux := http.NewServeMux()
-	service := dashboard.NewService()
 	cmdbService := cmdb.NewService()
 	discoveryService := discovery.NewServiceWithCMDB(cmdbService)
 	monitorService := monitor.NewService()
+	service := dashboard.NewServiceWithRuntime(cmdbService, discoveryService, monitorService)
 	platformMetrics := newMetrics(cmdbService, discoveryService, monitorService)
 	jobsService := jobs.NewService()
 	ticketsService := tickets.NewService()

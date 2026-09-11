@@ -1,6 +1,7 @@
 package releases
 
 import (
+	"cmdb/gateway-bff/internal/demo"
 	"errors"
 	"fmt"
 	"sync"
@@ -65,6 +66,9 @@ func stages(running bool) []Stage {
 	return []Stage{{"build", "构建制品", "success", "01:42", "镜像构建完成"}, {"scan", "安全扫描", "success", "00:38", "未发现高危漏洞"}, {"approve", "发布门禁", "success", "00:12", "审批与变更窗口已校验"}, {"deploy", "灰度部署", map[bool]string{true: "running", false: "success"}[running], "02:16", "部署 2/4 实例"}, {"verify", "指标验证", map[bool]string{true: "pending", false: "success"}[running], "", "等待执行"}}
 }
 func NewService() *Service {
+	if !demo.Enabled() {
+		return &Service{next: 1}
+	}
 	return &Service{releases: []Release{{"rel-001", "订单服务", "v2.7.4", "v2.7.3", "production", "running", 72, "王强", "14:26", "灰度发布", "approved", "TKT-20260715-001", stages(true)}, {"rel-002", "数据分析 Worker", "v1.9.2", "v1.9.1", "production", "success", 100, "陈明", "13:18", "滚动发布", "approved", "TKT-20260715-006", stages(false)}, {"rel-003", "支付网关", "v4.1.0", "v4.0.8", "production", "failed", 64, "周敏", "12:35", "蓝绿发布", "approved", "TKT-20260715-003", []Stage{{"build", "构建制品", "success", "01:10", "完成"}, {"scan", "安全扫描", "success", "00:31", "通过"}, {"deploy", "部署新版本", "failed", "01:24", "健康检查失败"}}}}, artifacts: []Artifact{{"art-01", "订单服务", "v2.7.4", "8ac91f2", "286 MB", "14:20", "passed"}, {"art-02", "支付网关", "v4.1.0", "31bd808", "194 MB", "12:30", "passed"}, {"art-03", "数据分析 Worker", "v1.9.2", "fa209cb", "412 MB", "13:10", "passed"}}, next: 4}
 }
 func (s *Service) List() []Release {
@@ -76,7 +80,10 @@ func (s *Service) Artifacts() []Artifact { return append([]Artifact(nil), s.arti
 func (s *Service) Summary() Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r := Summary{Today: len(s.releases), SuccessRate: 96.8}
+	r := Summary{Today: len(s.releases)}
+	if demo.Enabled() {
+		r.SuccessRate = 96.8
+	}
 	for _, x := range s.releases {
 		if x.Status == "running" || x.Status == "rolling-back" {
 			r.Running++

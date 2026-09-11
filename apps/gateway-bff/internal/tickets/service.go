@@ -1,6 +1,7 @@
 package tickets
 
 import (
+	"cmdb/gateway-bff/internal/demo"
 	"errors"
 	"fmt"
 	"sync"
@@ -61,6 +62,9 @@ type Service struct {
 }
 
 func NewService() *Service {
+	if !demo.Enabled() {
+		return &Service{next: 1}
+	}
 	return &Service{tickets: []Ticket{{"TKT-20260715-001", "生产订单服务扩容", "change", "high", "pending", "王强", "周敏", "订单峰值增长，申请扩容两个服务实例", "14:05", "剩余 42 分钟", "medium", "service-order", "tpl-restart", []Step{{"submit", "提交申请", "completed", "王强", "14:05"}, {"owner", "业务负责人审批", "completed", "李明", "14:18"}, {"ops", "运维审批", "current", "周敏", ""}, {"execute", "自动化执行", "pending", "系统", ""}}, []Event{{"14:05", "王强", "提交工单", "容量评估报告已附加"}, {"14:18", "李明", "审批通过", "业务侧确认扩容窗口"}}}, {"TKT-20260715-002", "申请测试环境数据库", "resource", "medium", "processing", "李娟", "吴涛", "为新项目申请 MySQL 测试实例", "13:42", "剩余 3 小时", "low", "", "", []Step{{"submit", "提交申请", "completed", "李娟", "13:42"}, {"ops", "资源审批", "completed", "吴涛", "14:02"}, {"provision", "资源交付", "current", "平台组", ""}}, []Event{{"13:42", "李娟", "提交申请", "规格 4C8G"}, {"14:02", "吴涛", "审批通过", "资源配额充足"}}}, {"TKT-20260715-003", "支付网关紧急回滚", "incident", "critical", "approved", "周敏", "张伟", "新版本出现间歇性超时，需要回滚", "12:20", "已完成", "high", "service-payment", "tpl-restart", []Step{{"submit", "紧急申请", "completed", "周敏", "12:20"}, {"approve", "紧急审批", "completed", "张伟", "12:24"}, {"execute", "回滚执行", "completed", "系统", "12:31"}}, []Event{{"12:20", "周敏", "提交紧急变更", "触发告警 ALERT-001"}, {"12:24", "张伟", "审批通过", "启动应急流程"}, {"12:31", "系统", "执行完成", "服务指标恢复"}}}}, next: 4}
 }
 func (s *Service) List() []Ticket {
@@ -71,7 +75,11 @@ func (s *Service) List() []Ticket {
 func (s *Service) Summary() Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r := Summary{Total: len(s.tickets), ApprovedToday: 1, SLAWarning: 1}
+	r := Summary{Total: len(s.tickets)}
+	if demo.Enabled() {
+		r.ApprovedToday = 1
+		r.SLAWarning = 1
+	}
 	for _, x := range s.tickets {
 		if x.Status == "pending" {
 			r.Pending++

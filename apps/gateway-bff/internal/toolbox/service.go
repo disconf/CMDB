@@ -1,6 +1,7 @@
 package toolbox
 
 import (
+	"cmdb/gateway-bff/internal/demo"
 	"errors"
 	"fmt"
 	"sync"
@@ -55,6 +56,9 @@ type Service struct {
 }
 
 func NewService() *Service {
+	if !demo.Enabled() {
+		return &Service{tools: []Tool{{ID: "ping", Name: "连通性检测", Category: "network", Description: "检测目标网络延迟与丢包率", Icon: "Radio", Placeholder: "IP 或域名", Risk: "low"}, {ID: "tcp", Name: "端口探测", Category: "network", Description: "验证 TCP 服务端口可达性", Icon: "Network", Placeholder: "IP:端口", Risk: "low"}, {ID: "host-health", Name: "主机健康检查", Category: "host", Description: "检查负载、磁盘、内存和进程", Icon: "Server", Placeholder: "资产名称或 IP", Risk: "low"}, {ID: "k8s-pod", Name: "Pod 异常诊断", Category: "kubernetes", Description: "检查事件、重启次数与探针状态", Icon: "Boxes", Placeholder: "命名空间/Pod", Risk: "medium"}, {ID: "log-search", Name: "日志检索", Category: "logs", Description: "按关键字聚合检索应用日志", Icon: "Search", Placeholder: "应用名称", Risk: "low"}}, history: []Result{}, next: 1}
+	}
 	return &Service{tools: []Tool{{"ping", "连通性检测", "network", "检测目标网络延迟与丢包率", "Radio", "IP 或域名", "low"}, {"tcp", "端口探测", "network", "验证 TCP 服务端口可达性", "Network", "IP:端口", "low"}, {"host-health", "主机健康检查", "host", "检查负载、磁盘、内存和进程", "Server", "资产名称或 IP", "low"}, {"k8s-pod", "Pod 异常诊断", "kubernetes", "检查事件、重启次数与探针状态", "Boxes", "命名空间/Pod", "medium"}, {"log-search", "日志检索", "logs", "按关键字聚合检索应用日志", "Search", "应用名称", "low"}}, history: []Result{{"diag-001", "host-health", "主机健康检查", "prod-api-01", "success", "张伟", "14:35", "1.8s", "主机整体健康", []Line{{"14:35:01", "info", "CPU 负载 1.42"}, {"14:35:02", "success", "磁盘与内存状态正常"}}}, {"diag-002", "k8s-pod", "Pod 异常诊断", "prod/order-api-7f9c", "warning", "赵峰", "14:18", "2.4s", "发现 2 次容器重启", []Line{{"14:18:03", "warning", "Last State: OOMKilled"}}}}, next: 3}
 }
 func (s *Service) Tools() []Tool { return append([]Tool(nil), s.tools...) }
@@ -63,7 +67,12 @@ func (s *Service) History() []Result {
 	defer s.mu.RUnlock()
 	return append([]Result(nil), s.history...)
 }
-func (s *Service) Summary() Summary { return Summary{len(s.tools), len(s.history), 96.4, "2.1s"} }
+func (s *Service) Summary() Summary {
+	if !demo.Enabled() {
+		return Summary{Tools: len(s.tools), ExecutionsToday: len(s.history), AvgDuration: "--"}
+	}
+	return Summary{len(s.tools), len(s.history), 96.4, "2.1s"}
+}
 func (s *Service) Run(in RunInput) (Result, error) {
 	var tool *Tool
 	for i := range s.tools {

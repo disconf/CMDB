@@ -1,12 +1,47 @@
 package dashboard
 
-import "time"
+import (
+	"time"
 
-type Service struct{}
+	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/demo"
+	"cmdb/gateway-bff/internal/discovery"
+	"cmdb/gateway-bff/internal/monitor"
+)
+
+type Service struct {
+	cmdb      *cmdb.Service
+	discovery *discovery.Service
+	monitor   *monitor.Service
+}
 
 func NewService() *Service { return &Service{} }
 
+func NewServiceWithRuntime(cmdbService *cmdb.Service, discoveryService *discovery.Service, monitorService *monitor.Service) *Service {
+	return &Service{cmdb: cmdbService, discovery: discoveryService, monitor: monitorService}
+}
+
 func (s *Service) Overview() Overview {
+	if s.cmdb != nil && s.discovery != nil && s.monitor != nil {
+		alerts := make([]Alert, 0, 10)
+		for _, item := range s.monitor.Alerts() {
+			if item.Status != "firing" {
+				continue
+			}
+			alerts = append(alerts, Alert{ID: item.ID, Level: item.Severity, Title: item.Title, Target: item.Target, OccurredAt: item.StartedAt})
+			if len(alerts) >= 10 {
+				break
+			}
+		}
+		return Overview{
+			UpdatedAt: time.Now(),
+			Metrics:   Metrics{AssetTotal: s.cmdb.Summary().Total, OnlineAgents: s.discovery.Summary().Online, ActiveAlerts: s.monitor.ActiveCount()},
+			Capacity:  []CapacityItem{}, Health: []HealthItem{}, Topology: Topology{Layers: []TopologyLayer{}}, AlertTrend: []TrendPoint{}, Alerts: alerts, Jobs: []Job{}, Timeline: []TimelineEvent{}, Deployments: []Deployment{},
+		}
+	}
+	if !demo.Enabled() {
+		return Overview{UpdatedAt: time.Now(), Capacity: []CapacityItem{}, Health: []HealthItem{}, Topology: Topology{Layers: []TopologyLayer{}}, AlertTrend: []TrendPoint{}, Alerts: []Alert{}, Jobs: []Job{}, Timeline: []TimelineEvent{}, Deployments: []Deployment{}}
+	}
 	return Overview{
 		UpdatedAt: time.Now(),
 		Metrics:   Metrics{AssetTotal: 4286, OnlineAgents: 1024, ActiveAlerts: 37, TodayJobs: 186},
