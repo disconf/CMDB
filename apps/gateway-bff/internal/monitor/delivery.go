@@ -35,7 +35,8 @@ func deliveryID() string {
 func (s *Service) NotificationDeliveries() []NotificationDelivery {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]NotificationDelivery(nil), s.deliveries...)
+	result := make([]NotificationDelivery, 0, len(s.deliveries))
+	return append(result, s.deliveries...)
 }
 func (s *Service) NotificationDeliveryStats() DeliveryStats {
 	s.mu.RLock()

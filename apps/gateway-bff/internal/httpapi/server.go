@@ -829,6 +829,93 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, rules)
 	})
+	mux.HandleFunc("GET /api/v1/monitor/rules/managed", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "monitor:view") {
+			return
+		}
+		rules, err := monitorService.ManagedAlertRules()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, rules)
+	})
+	mux.HandleFunc("POST /api/v1/monitor/rules/managed", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "monitor:manage") {
+			return
+		}
+		var input monitor.CreateManagedAlertRuleInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid alert rule"})
+			return
+		}
+		item, err := monitorService.CreateManagedAlertRule(r.Context(), input)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		if user, err := authService.CurrentUser(bearerToken(r)); err == nil {
+			auditService.Record(user.Username, "monitor.rule.create", item.ID, item.Group+"/"+item.Name)
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/monitor/rules/managed/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "monitor:manage") {
+			return
+		}
+		var input monitor.CreateManagedAlertRuleInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid alert rule"})
+			return
+		}
+		item, err := monitorService.UpdateManagedAlertRule(r.Context(), r.PathValue("id"), input)
+		if errors.Is(err, monitor.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "alert rule not found"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		if user, err := authService.CurrentUser(bearerToken(r)); err == nil {
+			auditService.Record(user.Username, "monitor.rule.update", item.ID, item.Group+"/"+item.Name)
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/monitor/rules/managed/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "monitor:manage") {
+			return
+		}
+		item, err := monitorService.ToggleManagedAlertRule(r.Context(), r.PathValue("id"))
+		if errors.Is(err, monitor.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "alert rule not found"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		if user, err := authService.CurrentUser(bearerToken(r)); err == nil {
+			auditService.Record(user.Username, "monitor.rule.toggle", item.ID, "enabled="+strconv.FormatBool(item.Enabled))
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/monitor/rules/managed/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "monitor:manage") {
+			return
+		}
+		if err := monitorService.DeleteManagedAlertRule(r.Context(), r.PathValue("id")); errors.Is(err, monitor.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "alert rule not found"})
+			return
+		} else if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		if user, err := authService.CurrentUser(bearerToken(r)); err == nil {
+			auditService.Record(user.Username, "monitor.rule.delete", r.PathValue("id"), "")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /api/v1/monitor/silences", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "monitor:view") {
 			return

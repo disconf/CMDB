@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Activity, CheckCircle2, Clock3, ExternalLink, RefreshCw, ShieldCheck, TriangleAlert } from 'lucide-vue-next'
 import { assignAlert, bulkDeadLetters, bulkUpdateAlerts, createEscalationPolicy, createNotificationChannel, createRoutingRule, createSilence, deleteDeadLetter, deleteEscalationPolicy, deleteNotificationChannel, deleteRoutingRule, expireSilence, fetchAlertEvents, fetchAlertRules, fetchDeliveryStats, fetchEscalationPolicies, fetchMonitorData, fetchNotificationChannels, fetchNotificationDeadLetters, fetchNotificationDeliveries, fetchNotificationQueueStatus, fetchRoutingRules, fetchSilences, replayDeadLetter, silenceAlert, testNotificationChannel, toggleEscalationPolicy, toggleNotificationChannel, toggleRoutingRule, updateAlert, updateNotificationTemplate, type AlertEvent, type AlertRule, type AlertSilence, type DeliveryStats, type EscalationPolicy, type MonitorAlert, type MonitorCoverage, type MonitorMetric, type MonitorSummary, type NotificationChannel, type NotificationDeadLetter, type NotificationDelivery, type NotificationQueueStatus, type RoutingRule } from '@/api/monitor'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { metricDirection, metricTone, severityLabel, trendPoints } from '@/features/monitor/monitorModel'
 import MonitoringCoverage from './MonitoringCoverage.vue'
+import { createManagedAlertRule, deleteManagedAlertRule, fetchManagedAlertRules, toggleManagedAlertRule, updateManagedAlertRule, type ManagedAlertRule, type ManagedAlertRuleInput } from '@/api/monitor'
 
 const auth = useAuthStore()
 const summary = ref<MonitorSummary>()
@@ -18,6 +19,13 @@ const assignee = ref('')
 const rules = ref<AlertRule[]>([])
 const showRules = ref(false)
 const rulesError = ref('')
+const managedRules = ref<ManagedAlertRule[]>([])
+const showRuleForm = ref(false)
+const ruleSaving = ref(false)
+const ruleForm = ref<ManagedAlertRuleInput & { id: string }>({ id: '', group: 'cmdb-custom', name: '', query: '', duration: '5m', severity: 'warning', summary: '', description: '', enabled: true })
+const builtInRules = computed(() => rules.value.filter(rule => !rule.managed && !managedRules.value.some(managed => managed.group === rule.group && managed.name === rule.name)))
+const totalRuleCount = computed(() => builtInRules.value.length + managedRules.value.length)
+const firingRuleCount = computed(() => rules.value.filter(rule => rule.state === 'firing').length)
 const silences = ref<AlertSilence[]>([])
 const showSilences = ref(false)
 const silenceError = ref('')
@@ -41,6 +49,22 @@ const error = ref('')
 const lastUpdated = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
 
+async function refreshRuleData() {
+  let prometheusError = ''
+  try {
+    rules.value = await fetchAlertRules(auth.token)
+  } catch {
+    prometheusError = 'Prometheus 运行态规则暂时不可用'
+  }
+  try {
+    managedRules.value = await fetchManagedAlertRules(auth.token)
+  } catch (reason) {
+    rulesError.value = reason instanceof Error ? reason.message : '自定义规则管理服务暂时不可用'
+    return
+  }
+  rulesError.value = prometheusError
+}
+
 async function load() {
   if (loading.value) return
   loading.value = true
@@ -51,19 +75,17 @@ async function load() {
     metrics.value = data.metrics
     alerts.value = data.alerts
     coverage.value = data.coverage
-	try { rules.value = await fetchAlertRules(auth.token); rulesError.value = '' }
-	catch { rulesError.value = 'Prometheus 规则暂时不可用' }
-	try { silences.value = await fetchSilences(auth.token); silenceError.value = '' }
-	catch { silenceError.value = 'Alertmanager 静默服务暂时不可用' }
-	routes.value = await fetchRoutingRules(auth.token)
-	;[channels.value, deliveries.value, deliveryStats.value, queueStatus.value, deadLetters.value] = await Promise.all([fetchNotificationChannels(auth.token),fetchNotificationDeliveries(auth.token),fetchDeliveryStats(auth.token),fetchNotificationQueueStatus(auth.token),fetchNotificationDeadLetters(auth.token)])
-	escalations.value=await fetchEscalationPolicies(auth.token)
+    await refreshRuleData()
+    try { silences.value = await fetchSilences(auth.token); silenceError.value = '' }
+    catch { silenceError.value = 'Alertmanager 静默服务暂时不可用' }
+    routes.value = await fetchRoutingRules(auth.token)
+    ;[channels.value, deliveries.value, deliveryStats.value, queueStatus.value, deadLetters.value] = await Promise.all([fetchNotificationChannels(auth.token),fetchNotificationDeliveries(auth.token),fetchDeliveryStats(auth.token),fetchNotificationQueueStatus(auth.token),fetchNotificationDeadLetters(auth.token)])
+    escalations.value = await fetchEscalationPolicies(auth.token)
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '监控数据加载失败'
   } finally { loading.value = false }
 }
-
 async function action(type: 'acknowledge' | 'resolve') {
   if (!selected.value) return
   try {
@@ -113,6 +135,76 @@ async function removeSilence(id: string) {
   catch (reason) { silenceError.value = reason instanceof Error ? reason.message : '静默失效操作失败' }
 }
 
+function resetRuleForm() {
+  showRuleForm.value = false
+  ruleSaving.value = false
+  ruleForm.value = { id: '', group: 'cmdb-custom', name: '', query: '', duration: '5m', severity: 'warning', summary: '', description: '', enabled: true }
+}
+
+function openCreateRule() {
+  resetRuleForm()
+  showRuleForm.value = true
+  rulesError.value = ''
+}
+
+function editManagedRule(rule: ManagedAlertRule) {
+  ruleForm.value = { ...rule }
+  showRuleForm.value = true
+  rulesError.value = ''
+}
+
+function runtimeForManagedRule(rule: ManagedAlertRule) {
+  return rules.value.find(item => item.group === rule.group && item.name === rule.name)
+}
+
+async function saveManagedRule() {
+  const form = ruleForm.value
+  if (!form.name.trim() || !form.query.trim() || !form.duration.trim()) {
+    rulesError.value = '规则名称、PromQL 表达式和持续时间不能为空'
+    return
+  }
+  ruleSaving.value = true
+  rulesError.value = ''
+  const input: ManagedAlertRuleInput = {
+    group: form.group.trim() || 'cmdb-custom',
+    name: form.name.trim(),
+    query: form.query.trim(),
+    duration: form.duration.trim(),
+    severity: form.severity,
+    summary: form.summary.trim() || form.name.trim(),
+    description: form.description.trim(),
+    enabled: form.enabled,
+  }
+  try {
+    if (form.id) await updateManagedAlertRule(auth.token, form.id, input)
+    else await createManagedAlertRule(auth.token, input)
+    await refreshRuleData()
+    resetRuleForm()
+  } catch (reason) {
+    rulesError.value = reason instanceof Error ? reason.message : '规则保存失败'
+  } finally {
+    ruleSaving.value = false
+  }
+}
+
+async function toggleManagedRule(id: string) {
+  try {
+    await toggleManagedAlertRule(auth.token, id)
+    await refreshRuleData()
+  } catch (reason) {
+    rulesError.value = reason instanceof Error ? reason.message : '规则状态更新失败'
+  }
+}
+
+async function removeManagedRule(rule: ManagedAlertRule) {
+  if (!window.confirm(`确定删除规则“${rule.name}”吗？`)) return
+  try {
+    await deleteManagedAlertRule(auth.token, rule.id)
+    await refreshRuleData()
+  } catch (reason) {
+    rulesError.value = reason instanceof Error ? reason.message : '规则删除失败'
+  }
+}
 async function submitRoute() {
   try { await createRoutingRule(auth.token, routeForm.value); routes.value = await fetchRoutingRules(auth.token); routeForm.value = { name:'', matcherName:'severity', matcherValue:'critical', team:'', owner:'', channelId:'' } }
   catch (reason) { error.value = reason instanceof Error ? reason.message : '创建路由失败' }
@@ -150,7 +242,50 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
       <article><ShieldCheck/><div><span>可用性</span><strong>{{summary ? summary.availability + '%' : '--'}}</strong><small>当前采集目标</small></div></article>
     </div>
     <MonitoringCoverage :coverage="coverage"/>
-    <section v-if="showRules" class="rule-center"><header><div><span>PROMETHEUS ALERT RULES</span><h2>告警规则中心</h2></div><b>{{rules.length}} 条规则 · {{rules.filter(rule=>rule.state==='firing').length}} 条触发中</b></header><div v-if="rulesError" class="rule-error">{{rulesError}}</div><div class="rule-table"><div class="rule-head"><span>规则 / 规则组</span><span>级别</span><span>持续时间</span><span>健康</span><span>状态</span></div><article v-for="rule in rules" :key="`${rule.group}-${rule.name}`"><div><strong>{{rule.name}}</strong><small>{{rule.group}}</small><code>{{rule.query}}</code><em v-if="rule.lastError">{{rule.lastError}}</em></div><b :data-severity="rule.severity">{{rule.severity || 'warning'}}</b><span>{{rule.duration}} 秒</span><span :data-health="rule.health">{{rule.health}}</span><span :data-state="rule.state">{{rule.state==='firing'?`${rule.firingCount} 个触发`:'正常'}}</span></article><div v-if="!rules.length && !rulesError" class="rule-empty">Prometheus 当前没有加载告警规则</div></div></section>
+    <section v-if="showRules" class="rule-center">
+      <header>
+        <div><span>PROMETHEUS ALERT RULES</span><h2>告警规则中心</h2></div>
+        <div class="rule-header-actions">
+          <b>{{ totalRuleCount }} 条规则 · {{ firingRuleCount }} 条触发中</b>
+          <button @click="showRuleForm ? resetRuleForm() : openCreateRule()">{{ showRuleForm ? '取消编辑' : '新建规则' }}</button>
+        </div>
+      </header>
+      <div v-if="rulesError" class="rule-error">{{ rulesError }}</div>
+      <div v-if="showRuleForm" class="managed-rule-form">
+        <div class="rule-form-heading"><strong>{{ ruleForm.id ? '编辑自定义规则' : '新建自定义规则' }}</strong><span>保存后自动更新 ConfigMap 并触发 Prometheus 热加载</span></div>
+        <input v-model="ruleForm.group" placeholder="规则分组，例如 cmdb-business">
+        <input v-model="ruleForm.name" placeholder="规则名称，例如 BusinessServiceDown">
+        <input v-model="ruleForm.duration" placeholder="持续时间，例如 5m">
+        <select v-model="ruleForm.severity"><option value="critical">严重</option><option value="warning">警告</option><option value="info">提示</option></select>
+        <textarea v-model="ruleForm.query" rows="3" placeholder="PromQL 表达式，例如 up{job=&quot;cmdb-node-exporter&quot;} == 0"></textarea>
+        <input v-model="ruleForm.summary" placeholder="告警摘要">
+        <textarea v-model="ruleForm.description" rows="2" placeholder="告警详细说明，可选"></textarea>
+        <label><input v-model="ruleForm.enabled" type="checkbox"> 启用规则</label>
+        <div class="rule-form-actions"><button class="primary" :disabled="ruleSaving" @click="saveManagedRule">{{ ruleSaving ? '保存中' : '保存并热加载' }}</button><button @click="resetRuleForm">取消</button></div>
+      </div>
+      <div class="rule-table">
+        <div class="rule-head"><span>规则 / 规则组</span><span>来源</span><span>级别</span><span>持续时间</span><span>健康</span><span>状态</span><span>操作</span></div>
+        <article v-for="rule in managedRules" :key="rule.id" :class="{ disabled: !rule.enabled }">
+          <div><strong>{{ rule.name }}</strong><small>{{ rule.group }} · {{ rule.summary }}</small><code>{{ rule.query }}</code><em v-if="rule.description">{{ rule.description }}</em></div>
+          <span class="rule-source">自定义</span>
+          <b :data-severity="rule.severity">{{ rule.severity }}</b>
+          <span>{{ rule.duration }}</span>
+          <span :data-health="runtimeForManagedRule(rule)?.health">{{ !rule.enabled ? '已停用' : (runtimeForManagedRule(rule)?.health || '待加载') }}</span>
+          <span :data-state="runtimeForManagedRule(rule)?.state">{{ !rule.enabled ? '已停用' : (runtimeForManagedRule(rule)?.state === 'firing' ? `${runtimeForManagedRule(rule)?.firingCount ?? 0} 个触发` : '正常') }}</span>
+          <div class="rule-actions"><button @click="editManagedRule(rule)">编辑</button><button @click="toggleManagedRule(rule.id)">{{ rule.enabled ? '停用' : '启用' }}</button><button @click="removeManagedRule(rule)">删除</button></div>
+        </article>
+        <article v-for="rule in builtInRules" :key="`${rule.group}-${rule.name}`">
+          <div><strong>{{ rule.name }}</strong><small>{{ rule.group }}</small><code>{{ rule.query }}</code><em v-if="rule.lastError">{{ rule.lastError }}</em></div>
+          <span class="rule-source">内置</span>
+          <b :data-severity="rule.severity">{{ rule.severity || 'warning' }}</b>
+          <span>{{ rule.duration }} 秒</span>
+          <span :data-health="rule.health">{{ rule.health }}</span>
+          <span :data-state="rule.state">{{ rule.state === 'firing' ? `${rule.firingCount} 个触发` : '正常' }}</span>
+          <div class="rule-actions"><span class="readonly">只读</span></div>
+        </article>
+        <div v-if="totalRuleCount === 0 && !rulesError" class="rule-empty">Prometheus 当前没有加载告警规则</div>
+      </div>
+    </section>
     <section v-else-if="showSilences" class="silence-center"><header><div><span>ALERTMANAGER SILENCES</span><h2>静默策略中心</h2></div><b>{{silences.filter(item=>item.status.state==='active').length}} 条生效中</b></header><div class="silence-create"><input v-model="silenceForm.matcherName" placeholder="标签名，例如 instance"><input v-model="silenceForm.matcherValue" placeholder="标签值，例如 host-01"><input v-model.number="silenceForm.hours" type="number" min="1" max="720" title="静默小时数"><input v-model="silenceForm.comment" placeholder="静默原因（必填）"><button @click="submitSilence">创建静默</button></div><div v-if="silenceError" class="rule-error">{{silenceError}}</div><div class="silence-list"><article v-for="item in silences" :key="item.id"><div><strong>{{item.matchers.map(m=>`${m.name}${m.isRegex?'=~':'='}${m.value}`).join(', ')}}</strong><span>{{item.comment}}</span></div><div><small>创建人</small><b>{{item.createdBy}}</b></div><div><small>失效时间</small><b>{{new Date(item.endsAt).toLocaleString('zh-CN',{hour12:false})}}</b></div><em :data-state="item.status.state">{{item.status.state}}</em><button v-if="item.status.state==='active' || item.status.state==='pending'" @click="removeSilence(item.id)">立即失效</button></article><div v-if="!silences.length && !silenceError" class="rule-empty">当前没有静默策略</div></div></section>
     <section v-else-if="showRoutes" class="routing-center"><header><div><span>ON-CALL ROUTING</span><h2>值班分派路由</h2></div><b>{{routes.filter(route=>route.enabled).length}} 条启用</b></header><div class="route-create"><input v-model="routeForm.name" placeholder="规则名称"><input v-model="routeForm.matcherName" placeholder="标签名"><input v-model="routeForm.matcherValue" placeholder="标签值"><input v-model="routeForm.team" placeholder="值班组"><input v-model="routeForm.owner" placeholder="负责人账号"><select v-model="routeForm.channelId"><option value="">全部启用渠道</option><option v-for="channel in channels" :key="channel.id" :value="channel.id">{{channel.name}}</option></select><button @click="submitRoute">新增路由</button></div><div class="route-table"><article v-for="route in routes" :key="route.id" :class="{disabled:!route.enabled}"><div><strong>{{route.name}}</strong><code>{{route.matcherName}}={{route.matcherValue}}</code></div><div><small>值班组</small><b>{{route.team}}</b></div><div><small>负责人</small><b>{{route.owner}}</b></div><div><small>通知渠道</small><b>{{channels.find(channel=>channel.id===route.channelId)?.name||'全部渠道'}}</b></div><em>{{route.enabled?'已启用':'已停用'}}</em><button @click="toggleRoute(route.id)">{{route.enabled?'停用':'启用'}}</button><button @click="removeRoute(route.id)">删除</button></article><div v-if="!routes.length" class="rule-empty">暂无自动分派路由</div></div></section>
     <section v-else-if="showChannels" class="channel-center"><header><div><span>OUTBOUND WEBHOOKS</span><h2>通知渠道</h2></div><b>{{channels.filter(channel=>channel.enabled).length}} 个已启用</b></header><div class="channel-create"><input v-model="channelForm.name" placeholder="渠道名称"><input v-model="channelForm.endpoint" placeholder="Webhook URL"><button @click="submitChannel">新增渠道</button></div><div class="channel-list"><article v-for="channel in channels" :key="channel.id" :class="{disabled:!channel.enabled}"><div><strong>{{channel.name}}</strong><code>{{channel.displayUrl}}</code><small v-if="channel.lastError">{{channel.lastError}}</small></div><span :data-status="channel.lastStatus">{{channel.lastStatus||'未测试'}}</span><time>{{channel.lastSentAt||'--'}}</time><button @click="testChannel(channel.id)">测试</button><button @click="toggleChannel(channel.id)">{{channel.enabled?'停用':'启用'}}</button><button @click="removeChannel(channel.id)">删除</button></article><div v-if="!channels.length" class="rule-empty">暂无通知渠道</div></div></section>
@@ -214,20 +349,38 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .assign-control input { min-width: 0; flex: 1; border: 1px solid #22445f; background: #071b2c; color: #dcecff; padding: 8px; outline: none; }
 .assign-control input:focus { border-color: #21d4ee; }
 .rule-center { margin-top: 18px; border: 1px solid #173b55; background: #081e31; padding: 18px; }
-.rule-center > header { display: flex; justify-content: space-between; align-items: center; }
+.rule-center > header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .rule-center > header span { color: #21d4ee; font-size: 10px; letter-spacing: 2px; }
 .rule-center > header h2 { margin: 5px 0 14px; }
 .rule-center > header b { color: #7894a9; font-size: 12px; }
-.rule-error, .rule-empty { padding: 24px; text-align: center; color: #ff9cac; }
-.rule-head, .rule-table article { display: grid; grid-template-columns: minmax(360px, 1fr) 90px 90px 90px 110px; gap: 12px; align-items: center; }
+.rule-header-actions { display: flex; align-items: center; gap: 10px; }
+.rule-header-actions button { padding: 7px 10px; }
+.rule-error { padding: 12px; text-align: center; border: 1px solid #7c3142; background: #351928; color: #ff9cac; margin-bottom: 12px; }
+.rule-empty { padding: 24px; text-align: center; color: #668198; }
+.managed-rule-form { display: grid; grid-template-columns: 1fr 1fr 120px 120px; gap: 8px; padding: 14px; margin-bottom: 14px; border: 1px solid #1d4b67; background: #0d293f; }
+.managed-rule-form input, .managed-rule-form select, .managed-rule-form textarea { min-width: 0; border: 1px solid #22445f; background: #071b2c; color: #dcecff; padding: 9px; outline: none; }
+.managed-rule-form input:focus, .managed-rule-form select:focus, .managed-rule-form textarea:focus { border-color: #21d4ee; }
+.managed-rule-form textarea { grid-column: 1 / -1; resize: vertical; font-family: monospace; }
+.managed-rule-form label { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; color: #b9d3e4; font-size: 12px; }
+.managed-rule-form label input { width: auto; accent-color: #21d4ee; }
+.rule-form-heading { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.rule-form-heading span { color: #668198; font-size: 10px; }
+.rule-form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+.rule-form-actions button { padding: 8px 12px; }
+.rule-head, .rule-table article { display: grid; grid-template-columns: minmax(300px, 1.8fr) 70px 72px 88px 80px 100px 180px; gap: 10px; align-items: center; }
 .rule-head { padding: 9px 12px; background: #0d293f; color: #668198; font-size: 10px; }
 .rule-table article { padding: 12px; border-bottom: 1px solid #15364e; }
+.rule-table article.disabled { opacity: .5; }
 .rule-table article strong, .rule-table article small, .rule-table article code, .rule-table article em { display: block; }
 .rule-table article small { margin-top: 3px; color: #668198; }
 .rule-table article code { max-width: 650px; margin-top: 7px; overflow: hidden; color: #8ab5ca; text-overflow: ellipsis; white-space: nowrap; }
-.rule-table article em { margin-top: 4px; color: #ff7e91; font-size: 10px; }
+.rule-table article em { margin-top: 4px; overflow: hidden; color: #668198; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .rule-table b[data-severity='critical'], .rule-table span[data-state='firing'] { color: #fa6078; }
 .rule-table span[data-health='ok'] { color: #24d2a2; }
+.rule-source { color: #7ce7f4; font-size: 10px; }
+.rule-actions { display: flex; justify-content: flex-end; gap: 5px; }
+.rule-actions button { padding: 5px 7px; font-size: 10px; }
+.rule-actions .readonly { color: #668198; font-size: 10px; }
 .silence-center { margin-top: 18px; border: 1px solid #173b55; background: #081e31; padding: 18px; }
 .silence-center > header { display: flex; justify-content: space-between; align-items: center; }
 .silence-center > header span { color: #21d4ee; font-size: 10px; letter-spacing: 2px; }

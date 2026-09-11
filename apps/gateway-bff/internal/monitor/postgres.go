@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS monitor_escalation_policies (
  team text NOT NULL,owner text NOT NULL,channel_id text NOT NULL DEFAULT '',enabled boolean NOT NULL DEFAULT true,
  created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS monitor_alert_rule_definitions (
+ id text PRIMARY KEY,group_name text NOT NULL DEFAULT 'cmdb-custom',name text NOT NULL,query text NOT NULL,
+ duration text NOT NULL DEFAULT '5m',severity text NOT NULL DEFAULT 'warning',summary text NOT NULL DEFAULT '',
+ description text NOT NULL DEFAULT '',enabled boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_alert_rule_definitions_group_name ON monitor_alert_rule_definitions(group_name,name);
 CREATE TABLE IF NOT EXISTS monitor_alert_escalations (
  alert_id text NOT NULL,policy_id text NOT NULL,escalated_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(alert_id,policy_id)

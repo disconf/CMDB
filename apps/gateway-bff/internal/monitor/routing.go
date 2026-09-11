@@ -42,7 +42,8 @@ func validateRoute(input CreateRoutingRuleInput) error {
 func (s *Service) RoutingRules() []RoutingRule {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]RoutingRule(nil), s.routes...)
+	result := make([]RoutingRule, 0, len(s.routes))
+	return append(result, s.routes...)
 }
 func (s *Service) routeTargetLocked(labels map[string]string) (string, string) {
 	for _, route := range s.routes {

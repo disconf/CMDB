@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"cmdb/gateway-bff/internal/k8s"
 )
 
 var ErrNotFound = errors.New("alert not found")
@@ -98,6 +100,10 @@ type Service struct {
 	notificationQueue bool
 	consumerStatus    string
 	lastConsumedAt    string
+	ruleConfigMap     ruleConfigMapClient
+	ruleConfigMapNS   string
+	ruleConfigMapName string
+	ruleConfigMapErr  string
 }
 
 type WebhookPayload struct {
@@ -129,6 +135,17 @@ func NewService() *Service {
 	s.routes = []RoutingRule{}
 	s.channels = []NotificationChannel{}
 	s.deliveries = []NotificationDelivery{}
+	s.ruleConfigMapNS = strings.TrimSpace(os.Getenv("PROMETHEUS_RULES_NAMESPACE"))
+	s.ruleConfigMapName = strings.TrimSpace(os.Getenv("PROMETHEUS_RULES_CONFIGMAP"))
+	if s.ruleConfigMapNS != "" && s.ruleConfigMapName != "" {
+		client, err := k8s.NewClientFromEnv()
+		if err != nil {
+			s.ruleConfigMapErr = err.Error()
+		} else {
+			s.ruleConfigMap = client
+		}
+	}
+
 	s.webhookHosts = parseAllowedHosts(os.Getenv("WEBHOOK_ALLOWED_HOSTS"))
 	s.notificationQueue = os.Getenv("KAFKA_BROKERS") != ""
 	if url := os.Getenv("DATABASE_URL"); url != "" {
@@ -168,12 +185,14 @@ func (s *Service) Metrics() []Metric {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Metric(nil), s.metrics...)
+	result := make([]Metric, 0, len(s.metrics))
+	return append(result, s.metrics...)
 }
 func (s *Service) Alerts() []Alert {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Alert(nil), s.alerts...)
+	result := make([]Alert, 0, len(s.alerts))
+	return append(result, s.alerts...)
 }
 func (s *Service) Host(assetID string) HostMonitoring {
 	result := HostMonitoring{AssetID: assetID, Metrics: []Metric{}, Alerts: []Alert{}}

@@ -1,0 +1,24 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cmdb-prometheus-rules-writer
+  namespace: monitoring
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["prometheus-rules"]
+  verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cmdb-prometheus-rules-writer
+  namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cmdb-prometheus-rules-writer
+subjects:
+- kind: ServiceAccount
+  name: cmdb-k8s-reader
+  namespace: ops-qa

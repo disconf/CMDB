@@ -16,6 +16,7 @@ type AlertRule struct {
 	State       string  `json:"state"`
 	Severity    string  `json:"severity"`
 	FiringCount int     `json:"firingCount"`
+	Managed     bool    `json:"managed"`
 }
 
 type prometheusRulesResponse struct {
@@ -67,7 +68,7 @@ func (s *Service) Rules() ([]AlertRule, error) {
 			if rule.Type != "alerting" {
 				continue
 			}
-			rules = append(rules, AlertRule{Group: group.Name, Name: rule.Name, Query: rule.Query, Duration: rule.Duration, Health: rule.Health, LastError: rule.LastError, State: rule.State, Severity: rule.Labels["severity"], FiringCount: len(rule.Alerts)})
+			rules = append(rules, AlertRule{Group: group.Name, Name: rule.Name, Query: rule.Query, Duration: rule.Duration, Health: rule.Health, LastError: rule.LastError, State: rule.State, Severity: rule.Labels["severity"], FiringCount: len(rule.Alerts), Managed: rule.Labels["managed"] == "cmdb"})
 		}
 	}
 	return rules, nil

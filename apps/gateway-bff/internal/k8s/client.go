@@ -1,13 +1,16 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -57,6 +60,45 @@ func NewClientFromEnv() (*Client, error) {
 	return &Client{baseURL: baseURL, token: token, clusterName: clusterName, httpClient: &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}}, nil
 }
 
+func (c *Client) mergePatch(ctx context.Context, path string, body any, out any) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/merge-patch+json")
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var status struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(response.Body).Decode(&status)
+		if status.Message == "" {
+			status.Message = response.Status
+		}
+		return fmt.Errorf("Kubernetes API %s: %s", path, status.Message)
+	}
+	if out == nil {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	return json.NewDecoder(response.Body).Decode(out)
+}
+
+// PatchConfigMapData updates one key in a namespaced ConfigMap using a merge patch.
+func (c *Client) PatchConfigMapData(ctx context.Context, namespace, name, key, value string) error {
+	path := "/api/v1/namespaces/" + url.PathEscape(namespace) + "/configmaps/" + url.PathEscape(name)
+	return c.mergePatch(ctx, path, map[string]any{"data": map[string]string{key: value}}, nil)
+}
 func (c *Client) ClusterName() string { return c.clusterName }
 func (c *Client) BaseURL() string     { return c.baseURL }
 

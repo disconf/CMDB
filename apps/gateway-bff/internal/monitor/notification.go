@@ -72,7 +72,8 @@ func (s *Service) validateEndpoint(endpoint string) error {
 func (s *Service) NotificationChannels() []NotificationChannel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := append([]NotificationChannel(nil), s.channels...)
+	result := make([]NotificationChannel, 0, len(s.channels))
+	result = append(result, s.channels...)
 	for i := range result {
 		result[i].DisplayURL = displayURL(result[i].Endpoint)
 		result[i].Endpoint = ""
