@@ -347,6 +347,12 @@ func NewServer() *Server {
 	mux.HandleFunc("GET /api/v1/agent/install/version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": discovery.AgentBundleVersion()})
 	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-versions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.AgentVersionReport())
+	})
 	mux.HandleFunc("GET /api/v1/agent/install/linux-amd64", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
@@ -407,14 +413,15 @@ func NewServer() *Server {
 			return
 		}
 		var in struct {
-			Hosts []string `json:"hosts"`
-			Port  int      `json:"port"`
+			Hosts        []string `json:"hosts"`
+			Port         int      `json:"port"`
+			CredentialID string   `json:"credentialId"`
 		}
 		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
 			return
 		}
-		result, err := discoveryService.ExporterBatchUninstall(in.Hosts, in.Port)
+		result, err := discoveryService.ExporterBatchUninstall(in.Hosts, in.Port, in.CredentialID)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "EXPORTER_UNINSTALL_FAILED", "message": err.Error()})
 			return
@@ -422,8 +429,7 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/agent-uninstall", func(w http.ResponseWriter, r *http.Request) {
-		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+		if !authorize(w, r, authService, "discovery:manage") {
 			return
 		}
 		var in discovery.AgentInstallInput
@@ -431,16 +437,18 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
 			return
 		}
-		res, err := discoveryService.AgentBatchUninstall(in.Hosts, in.Port)
+		res, err := discoveryService.AgentBatchUninstall(in.Hosts, in.Port, in.CredentialID)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UNINSTALL_FAILED", "message": err.Error()})
 			return
 		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.uninstall", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts)))
+		}
 		writeJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/agent-install", func(w http.ResponseWriter, r *http.Request) {
-		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+		if !authorize(w, r, authService, "discovery:manage") {
 			return
 		}
 		var in discovery.AgentInstallInput
@@ -452,6 +460,28 @@ func NewServer() *Server {
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "INSTALL_FAILED", "message": err.Error()})
 			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.install", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" version="+discovery.AgentBundleVersion())
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in discovery.AgentInstallInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 || strings.TrimSpace(in.TargetVersion) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		res, err := discoveryService.AgentBatchUpgrade(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UPGRADE_FAILED", "message": err.Error()})
+			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.upgrade", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" target="+in.TargetVersion)
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
@@ -633,23 +663,22 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return
 		}
-		var in struct {
-			Name     string `json:"name"`
-			Kind     string `json:"kind"`
-			Username string `json:"username"`
-			Secret   string `json:"secret"`
-		}
+		var in credentials.CreateInput
 		if err := decodeJSON(r, &in); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
-		cred, err := credentialsService.Create(in.Name, in.Kind, in.Username, in.Secret)
+		cred, err := credentialsService.Create(in)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CREATE_FAILED", "message": err.Error()})
 			return
 		}
 		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
-			auditService.Record(user.Username, "credential.create", cred.ID, cred.Kind+"/"+cred.Name)
+			detail := cred.Kind + "/" + cred.Name
+			if cred.Group != "" {
+				detail += " group=" + cred.Group
+			}
+			auditService.Record(user.Username, "credential.create", cred.ID, detail)
 		}
 		writeJSON(w, http.StatusCreated, cred)
 	})
@@ -2400,4 +2429,3 @@ func requestLogger(next http.Handler) http.Handler {
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
 	})
 }
-

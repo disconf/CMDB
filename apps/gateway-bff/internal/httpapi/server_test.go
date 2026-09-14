@@ -344,3 +344,33 @@ func TestCMDBWriteHistoryAndImportFlow(t *testing.T) {
 		t.Fatalf("expected conflict 409, got %d", duplicate.Code)
 	}
 }
+
+func TestAgentVersionLedgerEndpoint(t *testing.T) {
+	t.Setenv("CMDB_ENABLE_DEMO_DATA", "false")
+	server := NewServer()
+	login := httptest.NewRecorder()
+	server.Handler().ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"admin123"}`)))
+	var session struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&session); err != nil || session.Token == "" {
+		t.Fatalf("login failed: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/agent-versions", nil)
+	request.Header.Set("Authorization", "Bearer "+session.Token)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected agent version ledger 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		CurrentVersion string `json:"currentVersion"`
+		Agents         []any  `json:"agents"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode agent version ledger: %v", err)
+	}
+	if body.CurrentVersion == "" || body.Agents == nil {
+		t.Fatalf("unexpected agent version ledger: %+v", body)
+	}
+}

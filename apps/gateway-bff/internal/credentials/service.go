@@ -14,15 +14,28 @@ import (
 var ErrNotConfigured = errors.New("vault not configured")
 
 type Credential struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Username string `json:"username"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Username    string `json:"username"`
+	Group       string `json:"group"`
+	Description string `json:"description"`
 }
+
+type CreateInput struct {
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Username    string `json:"username"`
+	Secret      string `json:"secret"`
+	Group       string `json:"group"`
+	Description string `json:"description"`
+}
+
 type Material struct {
 	Username string `json:"username"`
 	Secret   string `json:"secret"`
 }
+
 type Service struct {
 	addr   string
 	token  string
@@ -54,15 +67,23 @@ func (s *Service) do(method, path string, payload interface{}) (*http.Response, 
 	return s.client.Do(req)
 }
 
-func (s *Service) Create(name, kind, username, secret string) (Credential, error) {
+func (s *Service) Create(in CreateInput) (Credential, error) {
 	if !s.configured() {
 		return Credential{}, ErrNotConfigured
 	}
-	if strings.TrimSpace(name) == "" || strings.TrimSpace(kind) == "" || strings.TrimSpace(secret) == "" {
+	in.Name = strings.TrimSpace(in.Name)
+	in.Kind = strings.TrimSpace(in.Kind)
+	in.Username = strings.TrimSpace(in.Username)
+	in.Group = strings.TrimSpace(in.Group)
+	in.Description = strings.TrimSpace(in.Description)
+	if in.Name == "" || in.Kind == "" || strings.TrimSpace(in.Secret) == "" {
 		return Credential{}, errors.New("name/kind/secret required")
 	}
 	id := fmt.Sprintf("cred-%d", time.Now().UnixNano())
-	payload := map[string]interface{}{"data": map[string]string{"name": name, "kind": kind, "username": username, "secret": secret}}
+	payload := map[string]interface{}{"data": map[string]string{
+		"name": in.Name, "kind": in.Kind, "username": in.Username, "secret": in.Secret,
+		"group": in.Group, "description": in.Description,
+	}}
 	resp, err := s.do(http.MethodPost, "/v1/secret/data/cmdb/"+id, payload)
 	if err != nil {
 		return Credential{}, err
@@ -71,7 +92,7 @@ func (s *Service) Create(name, kind, username, secret string) (Credential, error
 	if resp.StatusCode >= 300 {
 		return Credential{}, fmt.Errorf("vault write: %s", resp.Status)
 	}
-	return Credential{ID: id, Name: name, Kind: kind, Username: username}, nil
+	return Credential{ID: id, Name: in.Name, Kind: in.Kind, Username: in.Username, Group: in.Group, Description: in.Description}, nil
 }
 
 func (s *Service) List() ([]Credential, error) {
@@ -110,7 +131,10 @@ func (s *Service) List() ([]Credential, error) {
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&item)
 		resp.Body.Close()
-		out = append(out, Credential{ID: id, Name: item.Data.Data["name"], Kind: item.Data.Data["kind"], Username: item.Data.Data["username"]})
+		out = append(out, Credential{
+			ID: id, Name: item.Data.Data["name"], Kind: item.Data.Data["kind"], Username: item.Data.Data["username"],
+			Group: item.Data.Data["group"], Description: item.Data.Data["description"],
+		})
 	}
 	return out, nil
 }

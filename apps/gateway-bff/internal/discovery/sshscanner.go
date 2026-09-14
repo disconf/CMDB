@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,11 +99,12 @@ func runSSHRaw(ip string, port int, username, password, command string, timeout 
 }
 
 type AgentInstallInput struct {
-	Hosts        []string `json:"hosts"`
-	Port         int      `json:"port"`
-	AssetType    string   `json:"assetType"`
-	GatewayURL   string   `json:"gatewayUrl"`
-	CredentialID string   `json:"credentialId"`
+	Hosts         []string `json:"hosts"`
+	Port          int      `json:"port"`
+	AssetType     string   `json:"assetType"`
+	GatewayURL    string   `json:"gatewayUrl"`
+	CredentialID  string   `json:"credentialId"`
+	TargetVersion string   `json:"targetVersion,omitempty"`
 }
 type AgentInstallResult struct {
 	Host string `json:"host"`
@@ -116,9 +118,20 @@ func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult,
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")
 	if in.CredentialID != "" {
-		if u, sec, err := s.resolveCredential(in.CredentialID); err == nil && sec != "" {
-			username, password = u, sec
+		u, sec, err := s.resolveCredential(in.CredentialID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve SSH credential: %w", err)
 		}
+		if u == "" || sec == "" {
+			return nil, errors.New("SSH credential is empty")
+		}
+		username, password = u, sec
+	}
+	if username == "" || password == "" {
+		return nil, errors.New("SSH credentials are not configured")
+	}
+	if target := strings.TrimSpace(in.TargetVersion); target != "" && normalizeAgentVersion(target) != normalizeAgentVersion(AgentBundleVersion()) {
+		return nil, fmt.Errorf("agent bundle version %s is not available", target)
 	}
 	gatewayURL := strings.TrimRight(in.GatewayURL, "/")
 	if gatewayURL == "" {
@@ -134,11 +147,11 @@ func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult,
 	if port < 1 || port > 65535 {
 		return nil, errors.New("invalid port")
 	}
-	assetType := in.AssetType
-	if assetType == "" {
-		assetType = "virtual-machine"
+	assetType := strings.TrimSpace(in.AssetType)
+	token := strings.TrimSpace(os.Getenv("AGENT_SHARED_TOKEN"))
+	if token == "" {
+		return nil, errors.New("AGENT_SHARED_TOKEN is not configured")
 	}
-	token := os.Getenv("AGENT_SHARED_TOKEN")
 	results := []AgentInstallResult{}
 	for _, ip := range in.Hosts {
 		envContent := "CMDB_GATEWAY_URL=" + gatewayURL + "\nCMDB_AGENT_TOKEN=" + token + "\nCMDB_AGENT_TYPE=" + assetType + "\nCMDB_REPORT_INTERVAL=60s"
@@ -157,10 +170,34 @@ func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult,
 	return results, nil
 }
 
+// AgentBatchUpgrade reinstalls the currently served agent bundle. Versioned binary
+// hosting is intentionally not faked: the gateway only advertises the bundle it can
+// actually serve, so an upgrade is an idempotent reinstall of that bundle.
+func (s *Service) AgentBatchUpgrade(in AgentInstallInput) ([]AgentInstallResult, error) {
+	target := strings.TrimSpace(in.TargetVersion)
+	if target == "" || normalizeAgentVersion(target) != normalizeAgentVersion(AgentBundleVersion()) {
+		return nil, fmt.Errorf("agent bundle version %s is not available", target)
+	}
+	return s.AgentBatchInstall(in)
+}
+
 // AgentBatchUninstall stops and removes cmdb-agent from hosts via SSH.
-func (s *Service) AgentBatchUninstall(hosts []string, port int) ([]AgentInstallResult, error) {
+func (s *Service) AgentBatchUninstall(hosts []string, port int, credentialID string) ([]AgentInstallResult, error) {
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")
+	if credentialID != "" {
+		u, sec, err := s.resolveCredential(credentialID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve SSH credential: %w", err)
+		}
+		if u == "" || sec == "" {
+			return nil, errors.New("SSH credential is empty")
+		}
+		username, password = u, sec
+	}
+	if username == "" || password == "" {
+		return nil, errors.New("SSH credentials are not configured")
+	}
 	if port == 0 {
 		port = 22
 	}
@@ -185,11 +222,153 @@ func (s *Service) AgentBatchUninstall(hosts []string, port int) ([]AgentInstallR
 }
 
 func AgentBundleVersion() string {
-	v := os.Getenv("CMDB_AGENT_VERSION")
+	v := strings.TrimSpace(os.Getenv("CMDB_AGENT_VERSION"))
 	if v == "" {
 		return "0.1.2"
 	}
 	return v
+}
+
+func normalizeAgentVersion(value string) string {
+	return strings.TrimPrefix(strings.TrimSpace(value), "v")
+}
+
+type AgentVersionItem struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Hostname      string `json:"hostname"`
+	IP            string `json:"ip"`
+	Version       string `json:"version"`
+	Status        string `json:"status"`
+	LastHeartbeat string `json:"lastHeartbeat"`
+	Current       bool   `json:"current"`
+	Outdated      bool   `json:"outdated"`
+	Unknown       bool   `json:"unknown"`
+	Source        string `json:"source"`
+}
+
+type AgentVersionBucket struct {
+	Version string `json:"version"`
+	Count   int    `json:"count"`
+}
+
+type AgentVersionReport struct {
+	CurrentVersion      string               `json:"currentVersion"`
+	NodeExporterVersion string               `json:"nodeExporterVersion"`
+	Total               int                  `json:"total"`
+	Online              int                  `json:"online"`
+	Offline             int                  `json:"offline"`
+	Current             int                  `json:"current"`
+	Outdated            int                  `json:"outdated"`
+	Unknown             int                  `json:"unknown"`
+	Versions            []AgentVersionBucket `json:"versions"`
+	Agents              []AgentVersionItem   `json:"agents"`
+}
+
+// AgentVersionReport merges in-memory heartbeats with persisted CMDB agent assets
+// so the version ledger remains useful immediately after a gateway restart.
+func (s *Service) AgentVersionReport() AgentVersionReport {
+	current := normalizeAgentVersion(AgentBundleVersion())
+	report := AgentVersionReport{
+		CurrentVersion: AgentBundleVersion(), NodeExporterVersion: NodeExporterVersion(),
+		Versions: []AgentVersionBucket{}, Agents: []AgentVersionItem{},
+	}
+	byID := map[string]int{}
+	appendItem := func(item AgentVersionItem) {
+		item.Version = strings.TrimSpace(item.Version)
+		if item.Version == "" || item.Version == "-" || strings.EqualFold(item.Version, "unknown") {
+			item.Unknown = true
+		} else if normalizeAgentVersion(item.Version) == current {
+			item.Current = true
+		} else {
+			item.Outdated = true
+		}
+		if item.Status != "online" && item.Status != "offline" {
+			item.Status = "pending"
+		}
+		if index, ok := byID[item.ID]; ok {
+			existing := &report.Agents[index]
+			if item.Version != "" && item.Version != "-" {
+				existing.Version = item.Version
+			}
+			if item.Status != "" && item.Status != "pending" {
+				existing.Status = item.Status
+			}
+			if item.LastHeartbeat != "" {
+				existing.LastHeartbeat = item.LastHeartbeat
+			}
+			existing.Current = existing.Version != "" && normalizeAgentVersion(existing.Version) == current
+			existing.Unknown = existing.Version == "" || existing.Version == "-" || strings.EqualFold(existing.Version, "unknown")
+			existing.Outdated = !existing.Current && !existing.Unknown
+			return
+		}
+		byID[item.ID] = len(report.Agents)
+		report.Agents = append(report.Agents, item)
+	}
+	for _, agent := range s.Agents() {
+		appendItem(AgentVersionItem{ID: agent.ID, Name: agent.Name, Hostname: agent.Hostname, IP: agent.IP, Version: agent.Version, Status: agent.Status, LastHeartbeat: agent.LastHeartbeat, Source: "heartbeat"})
+	}
+	if s.cmdb != nil {
+		for _, asset := range s.cmdb.MonitoringAssets() {
+			version := assetAttribute(asset, "agent_version")
+			status := "pending"
+			if asset.Status == "online" || asset.Status == "warning" {
+				status = "online"
+			} else if asset.Status == "offline" {
+				status = "offline"
+			}
+			appendItem(AgentVersionItem{ID: asset.ID, Name: asset.Name, Hostname: asset.Name, IP: asset.IP, Version: version, Status: status, LastHeartbeat: asset.LastSeenAt, Source: "cmdb"})
+		}
+	}
+	buckets := map[string]int{}
+	for _, item := range report.Agents {
+		report.Total++
+		switch item.Status {
+		case "online":
+			report.Online++
+		case "offline":
+			report.Offline++
+		}
+		switch {
+		case item.Unknown:
+			report.Unknown++
+		case item.Current:
+			report.Current++
+		default:
+			report.Outdated++
+		}
+		buckets[item.Version]++
+	}
+	for version, count := range buckets {
+		report.Versions = append(report.Versions, AgentVersionBucket{Version: version, Count: count})
+	}
+	sort.Slice(report.Versions, func(i, j int) bool {
+		iCurrent := report.Versions[i].Version == report.CurrentVersion
+		jCurrent := report.Versions[j].Version == report.CurrentVersion
+		if iCurrent != jCurrent {
+			return iCurrent
+		}
+		return report.Versions[i].Version < report.Versions[j].Version
+	})
+	sort.Slice(report.Agents, func(i, j int) bool {
+		if report.Agents[i].Outdated != report.Agents[j].Outdated {
+			return report.Agents[i].Outdated
+		}
+		if report.Agents[i].Status != report.Agents[j].Status {
+			return report.Agents[i].Status < report.Agents[j].Status
+		}
+		return report.Agents[i].IP < report.Agents[j].IP
+	})
+	return report
+}
+
+func assetAttribute(asset cmdb.Asset, name string) string {
+	for _, attribute := range asset.Attributes {
+		if attribute.Name == name {
+			return strings.TrimSpace(attribute.Value)
+		}
+	}
+	return ""
 }
 
 func runSSHInventory(ip string, port int, username, password string, timeout time.Duration) *NodeExporterHost {

@@ -49,9 +49,17 @@ func (s *Service) ExporterBatchInstall(in ExporterInstallInput) ([]ExporterInsta
 	}
 	username, password := os.Getenv("CMDB_SSH_USERNAME"), os.Getenv("CMDB_SSH_PASSWORD")
 	if in.CredentialID != "" {
-		if u, secret, err := s.resolveCredential(in.CredentialID); err == nil && secret != "" {
-			username, password = u, secret
+		u, secret, err := s.resolveCredential(in.CredentialID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve SSH credential: %w", err)
 		}
+		if u == "" || secret == "" {
+			return nil, errors.New("SSH credential is empty")
+		}
+		username, password = u, secret
+	}
+	if username == "" || password == "" {
+		return nil, errors.New("SSH credentials are not configured")
 	}
 	gatewayURL := strings.TrimRight(in.GatewayURL, "/")
 	if gatewayURL == "" {
@@ -60,7 +68,10 @@ func (s *Service) ExporterBatchInstall(in ExporterInstallInput) ([]ExporterInsta
 	if gatewayURL == "" {
 		gatewayURL = "http://172.28.69.161:30080"
 	}
-	token := os.Getenv("AGENT_SHARED_TOKEN")
+	token := strings.TrimSpace(os.Getenv("AGENT_SHARED_TOKEN"))
+	if token == "" {
+		return nil, errors.New("AGENT_SHARED_TOKEN is not configured")
+	}
 	results := []ExporterInstallResult{}
 	for _, host := range in.Hosts {
 		script := fmt.Sprintf("set -e; mkdir -p /opt/node-exporter; curl -fsSL --connect-timeout 5 -H 'Authorization: Bearer %s' '%s/api/v1/agent/install/node-exporter/linux-amd64' -o /opt/node-exporter/node_exporter.new; chmod 755 /opt/node-exporter/node_exporter.new; /opt/node-exporter/node_exporter.new --version >/dev/null; mv -f /opt/node-exporter/node_exporter.new /opt/node-exporter/node_exporter; cat > /etc/systemd/system/node_exporter.service <<'U'\n[Unit]\nDescription=Prometheus Node Exporter\nAfter=network-online.target\n[Service]\nExecStart=/opt/node-exporter/node_exporter --web.listen-address=:%d\nRestart=always\nRestartSec=3\n[Install]\nWantedBy=multi-user.target\nU\nsystemctl daemon-reload; systemctl enable node_exporter >/dev/null 2>&1 || true; systemctl restart node_exporter; sleep 2; echo ACTIVE=$(systemctl is-active node_exporter) PORT=%d", token, gatewayURL, exporterPort, exporterPort)
@@ -78,7 +89,7 @@ func (s *Service) ExporterBatchInstall(in ExporterInstallInput) ([]ExporterInsta
 	return results, nil
 }
 
-func (s *Service) ExporterBatchUninstall(hosts []string, port int) ([]ExporterInstallResult, error) {
+func (s *Service) ExporterBatchUninstall(hosts []string, port int, credentialID string) ([]ExporterInstallResult, error) {
 	if len(hosts) == 0 {
 		return nil, errors.New("hosts required")
 	}
@@ -89,6 +100,19 @@ func (s *Service) ExporterBatchUninstall(hosts []string, port int) ([]ExporterIn
 		return nil, errors.New("invalid port")
 	}
 	username, password := os.Getenv("CMDB_SSH_USERNAME"), os.Getenv("CMDB_SSH_PASSWORD")
+	if credentialID != "" {
+		u, secret, err := s.resolveCredential(credentialID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve SSH credential: %w", err)
+		}
+		if u == "" || secret == "" {
+			return nil, errors.New("SSH credential is empty")
+		}
+		username, password = u, secret
+	}
+	if username == "" || password == "" {
+		return nil, errors.New("SSH credentials are not configured")
+	}
 	script := "systemctl stop node_exporter 2>/dev/null; systemctl disable node_exporter 2>/dev/null; rm -f /etc/systemd/system/node_exporter.service /opt/node-exporter/node_exporter; rmdir /opt/node-exporter 2>/dev/null || true; systemctl daemon-reload; echo UNINSTALLED"
 	results := []ExporterInstallResult{}
 	for _, host := range hosts {
