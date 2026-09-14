@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"path"
 	"strconv"
@@ -375,7 +377,7 @@ func (s *Service) CreateRemoteSession(assetID, credentialID, operator string, ro
 		s.mu.Unlock()
 		return RemoteSession{}, fmt.Errorf("%w: concurrent remote session limit reached (%d)", ErrRemoteValidation, policy.MaxConcurrentSessions)
 	}
-	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(time.Duration(policy.MaxSessionMinutes) * time.Minute).Format("2006-01-02 15:04:05"), RecordingRetentionDays: policy.RecordingRetentionDays, OwnerNode: s.instanceID, LeaseHeartbeatAt: now.Format("2006-01-02 15:04:05"), LeaseExpiresAt: now.Add(s.remoteLeaseTTL).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
+	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(time.Duration(policy.MaxSessionMinutes) * time.Minute).Format("2006-01-02 15:04:05"), RecordingRetentionDays: policy.RecordingRetentionDays, OwnerNode: "", LeaseHeartbeatAt: "", LeaseExpiresAt: "", Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
 	s.remoteSessions = append([]RemoteSession{item}, s.remoteSessions...)
 	s.mu.Unlock()
 	if s.db != nil {
@@ -748,6 +750,17 @@ func (s *Service) ExportCommandLog(sessionID, operator string, roles []string) (
 }
 
 func (s *Service) sessionForOperator(id, operator string, roles []string) (RemoteSession, int, error) {
+	item, index, err := s.findRemoteSessionForOperator(id, operator, roles)
+	if err == nil || !errors.Is(err, ErrNotFound) || s.db == nil {
+		return item, index, err
+	}
+	if syncErr := s.syncRemoteSessionsFromDB(); syncErr != nil {
+		return RemoteSession{}, -1, syncErr
+	}
+	return s.findRemoteSessionForOperator(id, operator, roles)
+}
+
+func (s *Service) findRemoteSessionForOperator(id, operator string, roles []string) (RemoteSession, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i, item := range s.remoteSessions {
@@ -1153,11 +1166,18 @@ func (s *Service) loadRemoteSessions() error {
 		return nil
 	}
 	now := time.Now().Format("2006-01-02 15:04:05")
-	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted',closed_at=CASE WHEN closed_at='' THEN $2 ELSE closed_at END,owner_node='',lease_heartbeat_at='',lease_expires_at='',updated_at=now() WHERE status='active' AND (owner_node=$1 OR owner_node='' OR NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now())`, s.instanceID, now); err != nil {
+	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted',closed_at=CASE WHEN closed_at='' THEN $2 ELSE closed_at END,owner_node='',lease_heartbeat_at='',lease_expires_at='',updated_at=now() WHERE status='active' AND owner_node<>'' AND (owner_node=$1 OR NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now())`, s.instanceID, now); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET archive_status='failed', archive_error='archive task interrupted by service restart' WHERE archive_status='archiving'`); err != nil {
 		return err
+	}
+	return s.syncRemoteSessionsFromDB()
+}
+
+func (s *Service) syncRemoteSessionsFromDB() error {
+	if s.db == nil {
+		return nil
 	}
 	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,archive_deleted_at,archive_delete_error,owner_node,lease_heartbeat_at,lease_expires_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
@@ -1185,8 +1205,31 @@ func (s *Service) loadRemoteSessions() error {
 		}
 		out = append(out, item)
 	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
 	s.remoteSessions = out
-	return rows.Err()
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) RunRemoteSessionSync(ctx context.Context) {
+	if s.db == nil {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.syncRemoteSessionsFromDB(); err != nil {
+				slog.Error("sync remote sessions", "error", err)
+			}
+		}
+	}
 }
 
 func (s *Service) persistRemoteSession(item RemoteSession) error {

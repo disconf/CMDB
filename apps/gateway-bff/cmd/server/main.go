@@ -36,6 +36,7 @@ func main() {
 	go api.DiscoveryService().AutoScanLoops(runContext)
 	go api.DiscoveryService().RunTerminalRetention(runContext)
 	go api.DiscoveryService().RunRemoteSessionLeases(runContext)
+	go api.DiscoveryService().RunRemoteSessionSync(runContext)
 	var publisher *events.OutboxPublisher
 	if os.Getenv("KAFKA_BROKERS") != "" {
 		var err error

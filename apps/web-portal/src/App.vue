@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { Activity, BellRing, Bot, Box, ChevronDown, ClipboardCheck, Database, Gauge, LayoutDashboard, LogOut, Maximize2, Network, Radar, RadioTower, Rocket, Search, Server, Settings, TicketCheck, Wrench } from 'lucide-vue-next'
+import { Activity, BellRing, Bot, Box, ChevronDown, ClipboardCheck, Database, Gauge, LayoutDashboard, LogOut, Maximize2, Network, Radar, RadioTower, Rocket, Search, Server, Settings, Terminal, TicketCheck, Wrench } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import DashboardPanel from '@/components/DashboardPanel.vue'
 import LoginPage from '@/components/LoginPage.vue'
 import ModulePage from '@/components/ModulePage.vue'
 import CmdbPage from '@/components/CmdbPage.vue'
 import DiscoveryPage from '@/components/DiscoveryPage.vue'
+import RemoteAccessPage from '@/components/RemoteAccessPage.vue'
 import TopologyPage from '@/components/TopologyPage.vue'
 import MonitorPage from '@/components/MonitorPage.vue'
 import JobsPage from '@/components/JobsPage.vue'
@@ -22,7 +23,7 @@ import { formatUpdateTime } from '@/features/dashboard/dashboardModel'
 
 const store = useDashboardStore(); const auth=useAuthStore(); const route=useRoute(); const router=useRouter()
 const iconMap = { Database, RadioTower, BellRing, ClipboardCheck }
-const navigationIcons={LayoutDashboard,Database,Network,Radar,BellRing,ClipboardCheck,TicketCheck,Rocket,Wrench,Bot,Settings}
+const navigationIcons={LayoutDashboard,Database,Network,Radar,BellRing,ClipboardCheck,TicketCheck,Rocket,Wrench,Bot,Settings,Terminal}
 const currentTime = computed(()=>store.overview ? formatUpdateTime(store.overview.updatedAt) : '--')
 let timer: ReturnType<typeof setInterval> | undefined; let controller: AbortController | undefined
 function refresh(){ controller?.abort(); controller=new AbortController(); void store.load(controller.signal) }
@@ -60,6 +61,7 @@ async function signOut(){await auth.signOut();await router.replace('/login')}
       </section>
       <CmdbPage v-else-if="route.path==='/cmdb'" />
       <DiscoveryPage v-else-if="route.path==='/discovery'" />
+      <RemoteAccessPage v-else-if="route.path==='/remote'" />
       <TopologyPage v-else-if="route.path==='/topology'" />
       <MonitorPage v-else-if="route.path==='/monitor'" />
       <JobsPage v-else-if="route.path==='/jobs'" />

@@ -45,6 +45,23 @@ func (s *Service) RemoteSessionLeaseRenewalInterval() time.Duration {
 	return interval
 }
 
+func (s *Service) AcquireRemoteSessionLease(ctx context.Context, sessionID string) (string, error) {
+	err := s.RenewRemoteSessionLease(ctx, sessionID)
+	if err == nil {
+		return s.instanceID, nil
+	}
+	if !errors.Is(err, ErrRemoteForbidden) {
+		return "", err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID == sessionID {
+			return s.remoteSessions[i].OwnerNode, ErrRemoteForbidden
+		}
+	}
+	return "", ErrRemoteForbidden
+}
 func (s *Service) RenewRemoteSessionLease(ctx context.Context, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || s.instanceID == "" {
@@ -126,23 +143,26 @@ func (s *Service) RunRemoteSessionLeases(ctx context.Context) {
 		}
 	}
 }
-
 func (s *Service) ReconcileRemoteSessionLeases(ctx context.Context) (int, error) {
 	if s.db == nil {
 		return 0, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM remote_access_sessions WHERE status='active' AND (owner_node='' OR NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now()) ORDER BY updated_at LIMIT 200`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,owner_node FROM remote_access_sessions WHERE status='active' AND ((owner_node<>'' AND (NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now())) OR (owner_node='' AND NULLIF(expires_at,'') IS NOT NULL AND NULLIF(expires_at,'')::timestamptz <= now())) ORDER BY updated_at LIMIT 200`)
 	if err != nil {
 		return 0, err
 	}
-	ids := []string{}
+	type expiredSession struct {
+		id    string
+		owner string
+	}
+	expired := []expiredSession{}
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
+		var item expiredSession
+		if err = rows.Scan(&item.id, &item.owner); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		ids = append(ids, id)
+		expired = append(expired, item)
 	}
 	if err = rows.Close(); err != nil {
 		return 0, err
@@ -152,11 +172,14 @@ func (s *Service) ReconcileRemoteSessionLeases(ctx context.Context) (int, error)
 	}
 
 	interrupted := 0
-	for _, id := range ids {
+	for _, item := range expired {
 		message := "会话租约已过期，控制节点失联，已自动中断"
+		if strings.TrimSpace(item.owner) == "" {
+			message = "会话在建立终端连接前已到期，系统已自动关闭"
+		}
 		closedAt := time.Now().Format("2006-01-02 15:04:05")
 		entry, _ := json.Marshal([]RemoteSessionLog{{Time: time.Now().Format("15:04:05"), Level: "error", Kind: "session", Message: message}})
-		result, updateErr := s.db.ExecContext(ctx, `UPDATE remote_access_sessions SET status='interrupted',closed_at=$2,owner_node='',lease_heartbeat_at='',lease_expires_at='',logs=COALESCE(logs,'[]'::jsonb) || $3::jsonb,updated_at=now() WHERE id=$1 AND status='active' AND (owner_node='' OR NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now())`, id, closedAt, entry)
+		result, updateErr := s.db.ExecContext(ctx, `UPDATE remote_access_sessions SET status='interrupted',closed_at=$2,owner_node='',lease_heartbeat_at='',lease_expires_at='',logs=COALESCE(logs,'[]'::jsonb) || $3::jsonb,updated_at=now() WHERE id=$1 AND status='active' AND ((owner_node<>'' AND (NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now())) OR (owner_node='' AND NULLIF(expires_at,'') IS NOT NULL AND NULLIF(expires_at,'')::timestamptz <= now()))`, item.id, closedAt, entry)
 		if updateErr != nil {
 			return interrupted, updateErr
 		}
@@ -167,12 +190,11 @@ func (s *Service) ReconcileRemoteSessionLeases(ctx context.Context) (int, error)
 		if affected == 0 {
 			continue
 		}
-		s.markRemoteSessionInterrupted(id, closedAt, message)
+		s.markRemoteSessionInterrupted(item.id, closedAt, message)
 		interrupted++
 	}
 	return interrupted, nil
 }
-
 func (s *Service) markRemoteSessionInterrupted(sessionID, closedAt, message string) {
 	s.mu.Lock()
 	for i := range s.remoteSessions {

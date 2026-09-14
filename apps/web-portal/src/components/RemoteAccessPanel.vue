@@ -75,6 +75,7 @@ const interactiveTerminalElement = ref<HTMLElement>()
 const replayTerminalElement = ref<HTMLElement>()
 let replayTimer: ReturnType<typeof setInterval> | undefined
 let approvalPoll: ReturnType<typeof setInterval> | undefined
+let sessionPoll: ReturnType<typeof setInterval> | undefined
 let watermarkTimer: ReturnType<typeof setInterval> | undefined
 let recordingTimers: ReturnType<typeof setTimeout>[] = []
 let terminalInstance: XTerm | undefined
@@ -94,6 +95,29 @@ const policyTemplateHistoryId = ref('')
 
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
 const selectedSession = computed(() => sessions.value.find(item => item.id === selectedSessionId.value))
+function leaseRemaining(value?:string) {
+  const text = value?.trim()
+  if (!text) return ''
+  const expires = new Date(text.replace(' ', 'T'))
+  if (Number.isNaN(expires.getTime())) return ''
+  const seconds = Math.round((expires.getTime() - Date.now()) / 1000)
+  if (seconds <= 0) return '已过期'
+  if (seconds < 60) return `${seconds} 秒`
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} 分钟`
+  return `${(seconds / 3600).toFixed(1)} 小时`
+}
+const selectedSessionLease = computed(() => {
+  const item = selectedSession.value
+  if (!item) return { label:'未选择会话', detail:'', state:'idle' }
+  if (item.status !== 'active') return { label:'会话已结束', detail:'当前不再持有网关运行租约', state:'offline' }
+  const owner = item.ownerNode?.trim()
+  if (!owner) return { label:'待分配控制节点', detail:'首次接入时自动选择网关实例，可从任意副本进入', state:'pending' }
+  const remaining = leaseRemaining(item.leaseExpiresAt)
+  if (remaining === '已过期') return { label:owner, detail:'租约已过期，后台将自动回收会话', state:'offline' }
+  const heartbeat = item.leaseHeartbeatAt ? `最近心跳 ${item.leaseHeartbeatAt}` : '等待首次心跳'
+  const lease = remaining ? `租约剩余 ${remaining}` : '租约时间未知'
+  return { label:owner, detail:`跨实例接入就绪 · ${heartbeat} · ${lease}`, state:'online' }
+})
 const projectGroups = computed(() => [...new Set(assets.value.map(item => item.projectGroup).filter(Boolean))])
 const assetTags = computed(() => [...new Set(assets.value.flatMap(item => item.tags || []).filter(Boolean))])
 const visibleReplayLogs = computed(() => replaySession.value?.logs.slice(0, replayVisible.value) ?? [])
@@ -363,6 +387,15 @@ function approvalStatusLabel(status:string) {
   return ({ pending:'待审批', approved:'已放行', rejected:'已拒绝', expired:'已超时', failed:'放行失败' } as Record<string,string>)[status] || status
 }
 
+async function refreshSessions() {
+  try { sessions.value = await request<Session[]>('/api/v1/discovery/remote-sessions') } catch { /* polling must not interrupt active terminals */ }
+}
+
+function startSessionPolling() {
+  if (sessionPoll) return
+  sessionPoll = setInterval(() => { void refreshSessions() }, 15000)
+}
+
 async function load() {
   busy.value = true
   error.value = ''
@@ -623,6 +656,7 @@ async function openInteractiveTerminal() {
     socket.onopen = () => {
       terminalConnecting.value = false
       terminalConnected.value = true
+      void refreshSessions()
       if (!terminalReadOnly.value) terminalInstance?.focus()
       terminalInstance?.writeln(terminalReadOnly.value
         ? '\x1b[36m[CMDB] 已以只读协作者身份接入，仅同步观看远程终端输出。\x1b[0m'
@@ -780,10 +814,12 @@ function commandCount(item:Session) {
 onMounted(async () => {
   await load()
   startApprovalPolling()
+  startSessionPolling()
   watermarkTimer = setInterval(() => { watermarkTime.value = new Date().toLocaleString('zh-CN', { hour12:false }) }, 15000)
 })
 onBeforeUnmount(() => {
   if (approvalPoll) clearInterval(approvalPoll)
+  if (sessionPoll) clearInterval(sessionPoll)
   if (watermarkTimer) clearInterval(watermarkTimer)
   stopReplay()
   closeInteractiveTerminal(false)
@@ -845,7 +881,7 @@ onBeforeUnmount(() => {
           <select v-model="selectedAssetId"><option v-for="asset in assets" :key="asset.id" :value="asset.id">{{asset.name}} · {{asset.ip}}</option></select>
           <select v-model="credentialId"><option value="">默认凭据</option><option v-for="credential in credentials.filter(item=>item.kind==='ssh')" :key="credential.id" :value="credential.id">{{credential.name}}</option></select>
           <button class="primary" :disabled="!selectedAssetId" @click="createSession">建立会话</button>
-          <select v-model="selectedSessionId"><option value="">选择会话</option><option v-for="session in sessions" :key="session.id" :value="session.id">{{session.assetName}} · {{session.operator}} · {{session.status}}</option></select>
+          <select v-model="selectedSessionId"><option value="">选择会话</option><option v-for="session in sessions" :key="session.id" :value="session.id">{{session.assetName}} · {{session.operator}} · {{session.status}} · {{session.ownerNode || '待接入'}}</option></select>
           <button :disabled="!selectedSessionId||!canManageSelectedSession" @click="closeSession"><X/>关闭</button>
           <button v-if="isPlatformAdmin" class="danger" :disabled="!selectedSessionId" @click="forceDisconnectSession"><Ban/>强制断开</button>
           <button class="primary" :disabled="!selectedSessionId||terminalConnecting" @click="openInteractiveTerminal"><TerminalIcon/>{{terminalConnected?'重新连接交互终端':'连接交互终端'}}</button>
@@ -857,6 +893,11 @@ onBeforeUnmount(() => {
             <div><strong>会话协作者</strong><span>{{selectedSession.accessMode==='readonly'?'当前身份：只读协作者':'当前身份：控制者'}} · {{selectedSession.activeConnections||0}} 人在线</span></div>
             <b :data-online="selectedSession.controllerOnline">{{selectedSession.controllerOnline?'控制端在线':'等待控制端'}}</b>
           </header>
+          <div class="lease-strip" :data-state="selectedSessionLease.state">
+            <span>运行节点</span><strong>{{selectedSessionLease.label}}</strong><small>{{selectedSessionLease.detail}}</small>
+            <em v-if="selectedSession.leaseHeartbeatAt">心跳 {{selectedSession.leaseHeartbeatAt}} · 到期 {{selectedSession.leaseExpiresAt || '--'}}</em>
+          </div>
+
           <div v-if="canManageSelectedSession" class="collaborator-form">
             <input v-model="collaboratorForm.username" placeholder="平台用户名" @keyup.enter="addCollaborator">
             <select v-model="collaboratorForm.access"><option value="readonly">只读观看</option><option value="control">允许控制</option></select>
@@ -1057,4 +1098,5 @@ onBeforeUnmount(() => {
 .policy-card{grid-column:1/-1}.policy-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.policy-head>div{display:grid;gap:4px}.policy-head h3{margin:0}.policy-head>div>span{color:#6f91a5;font-size:10px}.policy-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:10px}.policy-layout{display:grid;grid-template-columns:minmax(420px,1fr) minmax(420px,1.15fr);gap:14px;margin-top:12px}.policy-form{display:grid;gap:8px;padding:12px;border:1px solid #123043;background:#061620}.policy-form input,.policy-form select,.policy-form textarea{padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff;font:inherit}.policy-form textarea{resize:vertical}.policy-row,.policy-limits{display:grid;grid-template-columns:1fr 1fr;gap:8px}.policy-numbers{display:grid;grid-template-columns:1fr 1fr;gap:8px}.policy-numbers label,.policy-limits label,.policy-path{display:grid;gap:4px;color:#7894a8;font-size:10px}.policy-switches{display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:#8fb2c4;font-size:11px}.policy-switches label{display:flex;align-items:center;gap:4px}.policy-switches select{margin-left:auto}.policy-actions{display:flex;gap:8px}.policy-list{display:grid;gap:8px;max-height:520px;overflow:auto}.policy-list article{display:grid;gap:7px;padding:11px;border:1px solid #16445c;background:#061a29}.policy-list article.disabled{opacity:.55}.policy-list article>header{display:flex;justify-content:space-between;gap:12px}.policy-list article>header>div{display:grid;gap:2px}.policy-list article>header span,.policy-list article p{color:#6f91a5;font-size:10px;margin:0}.policy-list article>header>b{color:#5eead4;font-size:10px}.policy-list article.disabled>header>b{color:#94a3b8}.policy-list footer{display:flex;gap:7px}.policy-effective{margin:9px 0 0;padding:7px 9px;border:1px solid #155e75;background:#082b38;color:#a5f3fc!important}.policy-list article>p:first-of-type{color:#8fb2c4}.policy-list article>p:last-of-type{color:#64748b}@media(max-width:1200px){.policy-layout{grid-template-columns:1fr}.policy-numbers{grid-template-columns:1fr 1fr}}.policy-templates{display:flex;align-items:stretch;gap:8px;margin-top:12px;padding:9px;border:1px solid #16445c;background:#061620;flex-wrap:wrap}.policy-templates>span{align-self:center;color:#67e8f9;font-size:10px;font-weight:700;letter-spacing:1px}.policy-templates button{display:grid;gap:2px;min-width:170px;padding:8px 10px;border:1px solid #17415a;background:#082638;color:#dcecff;text-align:left;cursor:pointer}.policy-templates button:hover{border-color:#22d3ee;background:#0b3045}.policy-templates strong{font-size:11px}.policy-templates small{color:#7894a8;font-size:9px}.policy-templates em{margin-left:auto;align-self:center;color:#64748b;font-size:10px;font-style:normal}.policy-list article>small{color:#64748b;font-size:9px}.policy-batch{margin-top:14px;padding:12px;border:1px solid #16445c;background:#061620}.policy-batch>header,.policy-audit>header{display:flex;justify-content:space-between;align-items:center;gap:12px}.policy-batch h4,.policy-audit h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-batch>header>div,.policy-audit>header{display:grid;gap:3px}.policy-batch>header span,.policy-audit>header span{color:#6f91a5;font-size:10px}.policy-batch>header>b{padding:4px 8px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:10px}.policy-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.policy-target-grid>section{min-width:0;padding:9px;border:1px solid #123043;background:#040f17}.policy-target-grid>section>strong{display:block;margin-bottom:7px;color:#8fb2c4;font-size:10px}.policy-target-list{display:grid;gap:5px;max-height:180px;overflow:auto}.policy-target-list label{display:flex;align-items:flex-start;gap:7px;padding:6px;border:1px solid transparent;color:#dcecff;cursor:pointer}.policy-target-list label:hover{border-color:#1b5069;background:#071c29}.policy-target-list input{margin-top:2px}.policy-target-list span{display:grid;gap:2px;min-width:0;font-size:11px}.policy-target-list small{overflow:hidden;color:#6f91a5;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.policy-target-list em{color:#64748b;font-size:10px;font-style:normal}.policy-batch>footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}.policy-batch>footer span{color:#7894a8;font-size:10px}.policy-audit{margin-top:14px;padding:12px;border:1px solid #16445c;background:#040f17}.policy-audit ul{display:grid;gap:0;max-height:240px;overflow:auto;margin:9px 0 0;padding:0;list-style:none}.policy-audit li{display:grid;grid-template-columns:145px 180px 1fr;gap:10px;padding:8px 4px;border-top:1px solid #123043;color:#8fb2c4;font-size:10px}.policy-audit time{color:#64748b}.policy-audit strong{color:#a5f3fc}.policy-audit-empty{display:block!important;color:#64748b!important;text-align:center}.policy-list article>p:last-of-type{color:#64748b}@media(max-width:1200px){.policy-layout{grid-template-columns:1fr}.policy-numbers{grid-template-columns:1fr 1fr}.policy-target-grid{grid-template-columns:1fr}.policy-audit li{grid-template-columns:1fr}.policy-templates em{width:100%;margin-left:0}}
 
 .grant-form{gap:9px}.grant-main-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grant-main-row input:not([type=checkbox]){min-width:150px}.grant-scope-picker{display:flex;gap:6px;max-height:150px;overflow:auto;padding:8px;border:1px solid #16445c;background:#04121c;flex-wrap:wrap}.grant-scope-picker label{display:flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid #17415a;background:#082638;color:#dcecff;font-size:11px;cursor:pointer}.grant-scope-picker label:hover{border-color:#22d3ee}.grant-scope-picker em{color:#64748b;font-size:10px;font-style:normal}.policy-template-center{margin-top:12px;padding:11px;border:1px solid #16445c;background:#061620}.policy-template-center>header,.policy-template-history>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.policy-template-center h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-template-center>header span,.policy-template-editor>header span{display:block;margin-top:3px;color:#6f91a5;font-size:10px}.policy-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin-top:9px}.policy-template-grid article{display:grid;gap:6px;padding:10px;border:1px solid #17415a;background:#082638}.policy-template-grid article.disabled{opacity:.5}.policy-template-grid article>header{display:flex;justify-content:space-between;gap:8px}.policy-template-grid article p{margin:0;color:#8fb2c4;font-size:10px}.policy-template-grid article small{color:#6f91a5;font-size:9px}.policy-template-grid article footer,.policy-template-editor footer{display:flex;gap:6px;flex-wrap:wrap}.policy-template-empty{display:grid;place-items:center;min-height:110px;color:#64748b;font-size:11px;border:1px dashed #17415a}.policy-template-editor{display:grid;gap:7px;margin-top:10px;padding:10px;border:1px solid #155e75;background:#04121c}.policy-template-editor input{padding:7px;border:1px solid #22465f;background:#061725;color:#dcecff}.policy-template-editor label{color:#8fb2c4;font-size:10px}.policy-template-history{display:grid;gap:5px;margin-top:10px;padding:9px;border:1px solid #123043;background:#040f17}.policy-template-history article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 5px;border-top:1px solid #123043}.policy-template-history article>div{display:grid;gap:2px}.policy-template-history span,.policy-template-history small{color:#7894a8;font-size:9px}
-</style>
+
+.lease-strip{display:grid;grid-template-columns:auto auto 1fr;gap:4px 8px;align-items:center;margin-top:9px;padding:8px 10px;border:1px solid #16445c;border-radius:8px;background:#061a29}.lease-strip>span{color:#6f91a5;font-size:10px}.lease-strip>strong{color:#a5f3fc;font-size:11px}.lease-strip>small{color:#8fb2c4;font-size:10px}.lease-strip>em{grid-column:1/-1;color:#64748b;font-size:9px;font-style:normal}.lease-strip[data-state=online]{border-color:#155e75;background:#07212e}.lease-strip[data-state=pending]{border-color:#854d0e;background:#2a1e08}.lease-strip[data-state=offline]{border-color:#7f1d1d;background:#2c1116}@media(max-width:1200px){.lease-strip{grid-template-columns:auto 1fr}}</style>

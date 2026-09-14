@@ -166,6 +166,7 @@ type Service struct {
 	archiveLocks      map[string]*sync.Mutex
 	instanceID        string
 	remoteLeaseTTL    time.Duration
+	terminalBus       *RemoteTerminalBus
 }
 
 func NewService() *Service {
@@ -192,6 +193,11 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s.archiveLocks = map[string]*sync.Mutex{}
 	s.instanceID = gatewayInstanceID()
 	s.remoteLeaseTTL = remoteSessionLeaseTTL()
+	if bus, busErr := newRemoteTerminalBusFromEnv(s.instanceID); busErr != nil {
+		slog.Warn("remote terminal bus disabled", "error", busErr)
+	} else {
+		s.terminalBus = bus
+	}
 	s.terminalApprovals = []TerminalApproval{}
 	s.remotePolicies = []RemoteSecurityPolicy{defaultRemoteSecurityPolicy()}
 	s.policyTemplates = defaultPolicyTemplates()

@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -38,6 +41,17 @@ type TerminalRecording struct {
 	Truncated bool                  `json:"truncated"`
 }
 
+type RemoteTerminalEndpoint interface {
+	Subscribe(access string) (uint64, bool)
+	Output(subscriber uint64) (<-chan []byte, bool)
+	Unsubscribe(subscriber uint64) int
+	Write(data []byte) (int, error)
+	Resize(cols, rows int) error
+	Presence() (int, bool)
+	Close() error
+	IsOwner() bool
+}
+
 type RemoteTerminalChannel struct {
 	client           *ssh.Client
 	session          *ssh.Session
@@ -54,6 +68,25 @@ type RemoteTerminalChannel struct {
 	closeOnce        sync.Once
 	subscribersOnce  sync.Once
 	closeErr         error
+	busCancel        context.CancelFunc
+	leaseCancel      context.CancelFunc
+}
+
+type RemoteTerminalProxy struct {
+	service            *Service
+	sessionID          string
+	access             string
+	mu                 sync.Mutex
+	subscribers        map[uint64]chan []byte
+	subscriberAccess   map[uint64]string
+	nextSubscriber     uint64
+	closed             bool
+	readerOnce         sync.Once
+	subscribersOnce    sync.Once
+	closeOnce          sync.Once
+	cancel             context.CancelFunc
+	outputSub          *redis.PubSub
+	participantCancels map[uint64]context.CancelFunc
 }
 
 var blockedTerminalPatterns = []struct {
@@ -121,6 +154,24 @@ func (s *Service) JoinRemoteTerminal(sessionID, operator string, roles []string,
 	}
 	access := item.AccessMode
 	cols, rows = normalizeTerminalSize(cols, rows)
+	channel, err := s.ensureLocalRemoteTerminal(item, cols, rows)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	subscriber, ok := channel.Subscribe(access)
+	if !ok {
+		return nil, 0, "", ErrRemoteValidation
+	}
+	return channel, subscriber, access, nil
+}
+
+func (s *Service) OpenRemoteTerminal(sessionID, operator string, roles []string, cols, rows int) (RemoteTerminalEndpoint, uint64, string, error) {
+	item, _, err := s.sessionForOperator(sessionID, operator, roles)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	access := item.AccessMode
+	cols, rows = normalizeTerminalSize(cols, rows)
 
 	s.mu.Lock()
 	channel := s.terminals[sessionID]
@@ -132,32 +183,71 @@ func (s *Service) JoinRemoteTerminal(sessionID, operator string, roles []string,
 		}
 		return channel, subscriber, access, nil
 	}
-	if access != "control" {
-		return nil, 0, "", ErrRemoteForbidden
+
+	if s.terminalBus == nil {
+		if access != "control" {
+			return nil, 0, "", ErrRemoteForbidden
+		}
+		channel, err = s.ensureLocalRemoteTerminal(item, cols, rows)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		subscriber, ok := channel.Subscribe(access)
+		if !ok {
+			return nil, 0, "", ErrRemoteValidation
+		}
+		return channel, subscriber, access, nil
 	}
 
-	channel, err = s.newRemoteTerminalChannel(item, cols, rows)
+	owner, err := s.AcquireRemoteSessionLease(context.Background(), sessionID)
+	if err == nil && owner == s.instanceID {
+		channel, err = s.ensureLocalRemoteTerminal(item, cols, rows)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		subscriber, ok := channel.Subscribe(access)
+		if !ok {
+			return nil, 0, "", ErrRemoteValidation
+		}
+		return channel, subscriber, access, nil
+	}
+	if err != nil && !errors.Is(err, ErrRemoteForbidden) {
+		return nil, 0, "", err
+	}
+
+	proxy, err := newRemoteTerminalProxy(s, item, access)
 	if err != nil {
 		return nil, 0, "", err
 	}
-	s.mu.Lock()
-	existing := s.terminals[sessionID]
-	if existing == nil {
-		s.terminals[sessionID] = channel
-	}
-	s.mu.Unlock()
-	if existing != nil {
-		_ = channel.Close()
-		channel = existing
-	}
-	subscriber, ok := channel.Subscribe(access)
+	subscriber, ok := proxy.Subscribe(access)
 	if !ok {
+		_ = proxy.Close()
 		return nil, 0, "", ErrRemoteValidation
 	}
-	if existing == nil {
-		channel.startPump()
+	return proxy, subscriber, access, nil
+}
+
+func (s *Service) ensureLocalRemoteTerminal(item RemoteSession, cols, rows int) (*RemoteTerminalChannel, error) {
+	s.mu.Lock()
+	existing := s.terminals[item.ID]
+	s.mu.Unlock()
+	if existing != nil {
+		return existing, nil
 	}
-	return channel, subscriber, access, nil
+	channel, err := s.newRemoteTerminalChannel(item, cols, rows)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if current := s.terminals[item.ID]; current != nil {
+		s.mu.Unlock()
+		_ = channel.Close()
+		return current, nil
+	}
+	s.terminals[item.ID] = channel
+	s.mu.Unlock()
+	channel.startPump()
+	return channel, nil
 }
 
 func normalizeTerminalSize(cols, rows int) (int, int) {
@@ -213,7 +303,12 @@ func (s *Service) newRemoteTerminalChannel(item RemoteSession, cols, rows int) (
 		_ = client.Close()
 		return nil, err
 	}
-	return &RemoteTerminalChannel{client: client, session: session, stdin: stdin, stdout: stdout, service: s, sessionID: item.ID, subscribers: map[uint64]chan []byte{}, subscriberAccess: map[uint64]string{}}, nil
+	channel := &RemoteTerminalChannel{client: client, session: session, stdin: stdin, stdout: stdout, service: s, sessionID: item.ID, subscribers: map[uint64]chan []byte{}, subscriberAccess: map[uint64]string{}}
+	if s.terminalBus != nil {
+		channel.startControlConsumer()
+		channel.startLeaseLoop()
+	}
+	return channel, nil
 }
 
 func (c *RemoteTerminalChannel) Read(p []byte) (int, error) {
@@ -229,6 +324,110 @@ func (c *RemoteTerminalChannel) Resize(cols, rows int) error {
 		return ErrRemoteValidation
 	}
 	return c.session.WindowChange(rows, cols)
+}
+
+func (c *RemoteTerminalChannel) IsOwner() bool { return true }
+
+func (c *RemoteTerminalChannel) startControlConsumer() {
+	bus := c.service.terminalBus
+	if bus == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.busCancel = cancel
+	go func() {
+		for ctx.Err() == nil {
+			subscribeCtx, stopSubscribe := context.WithTimeout(ctx, remoteTerminalControlWait)
+			subscription, err := bus.SubscribeControl(subscribeCtx, c.sessionID)
+			stopSubscribe()
+			if err != nil {
+				bus.logError("subscribe control", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+					continue
+				}
+			}
+			messages := subscription.Channel()
+			reconnect := false
+			for !reconnect && ctx.Err() == nil {
+				select {
+				case <-ctx.Done():
+					_ = subscription.Close()
+					return
+				case payload, ok := <-messages:
+					if !ok {
+						reconnect = true
+						break
+					}
+					event, decodeErr := decodeRemoteTerminalBusEvent(payload.Payload)
+					if decodeErr != nil {
+						bus.logError("decode control", decodeErr)
+						continue
+					}
+					switch event.Kind {
+					case "input":
+						data, dataErr := remoteTerminalEventData(event)
+						if dataErr != nil {
+							bus.logError("decode input", dataErr)
+							continue
+						}
+						if _, err = c.Write(data); err != nil {
+							bus.logError("write proxied input", err)
+						}
+					case "resize":
+						if err = c.Resize(event.Cols, event.Rows); err != nil {
+							bus.logError("resize proxied terminal", err)
+						}
+					case "close":
+						_ = subscription.Close()
+						_ = c.Close()
+						return
+					case "release":
+						time.AfterFunc(time.Second, func() {
+							if c.service != nil {
+								c.service.MaybeCloseRemoteTerminal(c.sessionID)
+							}
+						})
+					}
+				}
+			}
+			_ = subscription.Close()
+			if ctx.Err() == nil {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
+			}
+		}
+	}()
+}
+
+func (c *RemoteTerminalChannel) startLeaseLoop() {
+	if c.service == nil || c.service.db == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.leaseCancel = cancel
+	interval := c.service.RemoteSessionLeaseRenewalInterval()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := c.service.RenewRemoteSessionLease(ctx, c.sessionID); err != nil {
+					c.service.terminalBus.logError("renew owner lease", err)
+					_ = c.Close()
+					return
+				}
+			}
+		}
+	}()
 }
 
 func (c *RemoteTerminalChannel) Subscribe(access string) (uint64, bool) {
@@ -266,7 +465,7 @@ func (c *RemoteTerminalChannel) Unsubscribe(subscriber uint64) int {
 
 func (c *RemoteTerminalChannel) Presence() (int, bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	count := len(c.subscribers)
 	controllerOnline := false
 	for _, access := range c.subscriberAccess {
 		if access == "control" {
@@ -274,7 +473,15 @@ func (c *RemoteTerminalChannel) Presence() (int, bool) {
 			break
 		}
 	}
-	return len(c.subscribers), controllerOnline
+	c.mu.Unlock()
+	if c.service != nil && c.service.terminalBus != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		remoteCount, remoteController := c.service.terminalBus.Presence(ctx, c.sessionID)
+		cancel()
+		count += remoteCount
+		controllerOnline = controllerOnline || remoteController
+	}
+	return count, controllerOnline
 }
 
 func (c *RemoteTerminalChannel) startPump() {
@@ -286,7 +493,7 @@ func (c *RemoteTerminalChannel) startPump() {
 				count, readErr := c.stdout.Read(buffer)
 				if count > 0 {
 					chunk := append([]byte(nil), buffer[:count]...)
-					_ = c.service.AppendTerminalEvent(c.sessionID, "output", string(chunk))
+					c.service.recordRemoteTerminalOutput(c.sessionID, chunk)
 					c.broadcast(chunk)
 				}
 				if readErr != nil {
@@ -327,6 +534,17 @@ func (c *RemoteTerminalChannel) closeSubscribers() {
 
 func (c *RemoteTerminalChannel) Close() error {
 	c.closeOnce.Do(func() {
+		if c.busCancel != nil {
+			c.busCancel()
+		}
+		if c.leaseCancel != nil {
+			c.leaseCancel()
+		}
+		if c.service != nil && c.service.terminalBus != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			c.service.terminalBus.PublishOwnerOffline(ctx, c.sessionID)
+			cancel()
+		}
 		_ = c.stdin.Close()
 		_ = c.session.Close()
 		c.closeErr = c.client.Close()
@@ -348,26 +566,335 @@ func (s *Service) CloseRemoteTerminal(sessionID string) {
 	s.mu.RUnlock()
 	if channel != nil {
 		_ = channel.Close()
+		return
+	}
+	if s.terminalBus == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.terminalBus.PublishClose(ctx, sessionID)
+}
+
+func (s *Service) MaybeCloseRemoteTerminal(sessionID string) {
+	s.mu.RLock()
+	channel := s.terminals[sessionID]
+	s.mu.RUnlock()
+	if channel == nil {
+		return
+	}
+	count, _ := channel.Presence()
+	if count == 0 {
+		_ = channel.Close()
+	}
+}
+
+func (s *Service) WriteRemoteTerminalInput(sessionID string, data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	s.mu.RLock()
+	channel := s.terminals[sessionID]
+	s.mu.RUnlock()
+	if channel != nil {
+		return channel.Write(data)
+	}
+	if s.terminalBus == nil {
+		return 0, ErrRemoteValidation
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.terminalBus.PublishInput(ctx, sessionID, "", data); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func (s *Service) recordRemoteTerminalOutput(sessionID string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sequence, err := s.AppendTerminalEventWithSequence(sessionID, "output", string(data))
+	if err != nil {
+		if s.terminalBus != nil {
+			s.terminalBus.logError("record output", err)
+		}
+		return
+	}
+	if s.terminalBus == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err = s.terminalBus.PublishOutput(ctx, sessionID, int64(sequence), data); err != nil {
+		s.terminalBus.logError("publish output", err)
 	}
 }
 
 func (s *Service) AppendTerminalEvent(sessionID, direction, data string) error {
+	_, err := s.AppendTerminalEventWithSequence(sessionID, direction, data)
+	return err
+}
+
+func (s *Service) AppendTerminalEventWithSequence(sessionID, direction, data string) (uint64, error) {
 	if strings.TrimSpace(sessionID) == "" || data == "" || len(data) > 256<<10 {
-		return nil
+		return 0, nil
+	}
+	sequence, err := s.nextRemoteTerminalSequence(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	if s.db == nil {
+		return sequence, nil
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(data))
+	_, err = s.db.Exec(`INSERT INTO remote_terminal_events(session_id,sequence,direction,data) VALUES($1,$2,$3,$4) ON CONFLICT(session_id,sequence) DO NOTHING`, sessionID, sequence, direction, encoded)
+	if err != nil {
+		return 0, err
+	}
+	return sequence, nil
+}
+
+func (s *Service) nextRemoteTerminalSequence(sessionID string) (uint64, error) {
+	if s.terminalBus != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		sequence, err := s.terminalBus.NextSequence(ctx, sessionID)
+		cancel()
+		if err == nil && sequence > 0 {
+			return uint64(sequence), nil
+		}
+		if err != nil {
+			s.terminalBus.logError("next sequence", err)
+		}
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.terminalSequences == nil {
 		s.terminalSequences = map[string]uint64{}
 	}
 	s.terminalSequences[sessionID]++
-	sequence := s.terminalSequences[sessionID]
-	s.mu.Unlock()
-	if s.db == nil {
-		return nil
+	return s.terminalSequences[sessionID], nil
+}
+
+func newRemoteTerminalProxy(service *Service, item RemoteSession, access string) (*RemoteTerminalProxy, error) {
+	if service == nil || service.terminalBus == nil {
+		return nil, ErrRemoteValidation
 	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(data))
-	_, err := s.db.Exec(`INSERT INTO remote_terminal_events(session_id,sequence,direction,data) VALUES($1,$2,$3,$4)`, sessionID, sequence, direction, encoded)
-	return err
+	ctx, cancel := context.WithCancel(context.Background())
+	subscribeCtx, stopSubscribe := context.WithTimeout(ctx, remoteTerminalControlWait)
+	subscription, err := service.terminalBus.SubscribeOutput(subscribeCtx, item.ID)
+	stopSubscribe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	proxy := &RemoteTerminalProxy{
+		service:            service,
+		sessionID:          item.ID,
+		access:             access,
+		subscribers:        map[uint64]chan []byte{},
+		subscriberAccess:   map[uint64]string{},
+		participantCancels: map[uint64]context.CancelFunc{},
+		cancel:             cancel,
+		outputSub:          subscription,
+	}
+	go proxy.readLoop(ctx)
+	return proxy, nil
+}
+
+func (p *RemoteTerminalProxy) readLoop(ctx context.Context) {
+	if p.outputSub == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case payload, ok := <-p.outputSub.Channel():
+			if !ok {
+				p.closeSubscribers()
+				return
+			}
+			event, err := decodeRemoteTerminalBusEvent(payload.Payload)
+			if err != nil {
+				p.service.terminalBus.logError("decode output", err)
+				continue
+			}
+			switch event.Kind {
+			case "output":
+				data, dataErr := remoteTerminalEventData(event)
+				if dataErr != nil {
+					p.service.terminalBus.logError("decode output data", dataErr)
+					continue
+				}
+				p.broadcast(data)
+			case "owner_offline":
+				p.closeSubscribers()
+				return
+			}
+		}
+	}
+}
+
+func (p *RemoteTerminalProxy) IsOwner() bool { return false }
+
+func (p *RemoteTerminalProxy) Subscribe(access string) (uint64, bool) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return 0, false
+	}
+	p.nextSubscriber++
+	subscriber := p.nextSubscriber
+	p.subscribers[subscriber] = make(chan []byte, 512)
+	p.subscriberAccess[subscriber] = access
+	p.mu.Unlock()
+	p.startParticipantHeartbeat(subscriber, access)
+	return subscriber, true
+}
+
+func (p *RemoteTerminalProxy) startParticipantHeartbeat(subscriber uint64, access string) {
+	heartbeatCtx, cancel := context.WithCancel(context.Background())
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		cancel()
+		return
+	}
+	p.participantCancels[subscriber] = cancel
+	p.mu.Unlock()
+	participantID := p.service.instanceID + ":" + access + ":" + strconv.FormatUint(subscriber, 10)
+	send := func() {
+		ctx, stop := context.WithTimeout(heartbeatCtx, time.Second)
+		defer stop()
+		if err := p.service.terminalBus.HeartbeatPresence(ctx, p.sessionID, participantID, access); err != nil {
+			p.service.terminalBus.logError("heartbeat presence", err)
+		}
+	}
+	send()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				ctx, stop := context.WithTimeout(context.Background(), time.Second)
+				_ = p.service.terminalBus.RemovePresence(ctx, p.sessionID, participantID)
+				stop()
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+}
+
+func (p *RemoteTerminalProxy) Output(subscriber uint64) (<-chan []byte, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	output, ok := p.subscribers[subscriber]
+	return output, ok
+}
+
+func (p *RemoteTerminalProxy) Unsubscribe(subscriber uint64) int {
+	p.mu.Lock()
+	output, ok := p.subscribers[subscriber]
+	if ok {
+		delete(p.subscribers, subscriber)
+		delete(p.subscriberAccess, subscriber)
+		close(output)
+	}
+	cancel := p.participantCancels[subscriber]
+	delete(p.participantCancels, subscriber)
+	remaining := len(p.subscribers)
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return remaining
+}
+
+func (p *RemoteTerminalProxy) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := p.service.terminalBus.PublishInput(ctx, p.sessionID, "", data); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func (p *RemoteTerminalProxy) Resize(cols, rows int) error {
+	if cols < 40 || rows < 12 || cols > 400 || rows > 200 {
+		return ErrRemoteValidation
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return p.service.terminalBus.PublishResize(ctx, p.sessionID, cols, rows)
+}
+
+func (p *RemoteTerminalProxy) Presence() (int, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	return p.service.terminalBus.Presence(ctx, p.sessionID)
+}
+
+func (p *RemoteTerminalProxy) broadcast(data []byte) {
+	chunk := append([]byte(nil), data...)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for subscriber, output := range p.subscribers {
+		select {
+		case output <- chunk:
+		default:
+			delete(p.subscribers, subscriber)
+			delete(p.subscriberAccess, subscriber)
+			if cancel := p.participantCancels[subscriber]; cancel != nil {
+				delete(p.participantCancels, subscriber)
+				cancel()
+			}
+			close(output)
+		}
+	}
+}
+
+func (p *RemoteTerminalProxy) closeSubscribers() {
+	p.subscribersOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		for subscriber, output := range p.subscribers {
+			delete(p.subscribers, subscriber)
+			delete(p.subscriberAccess, subscriber)
+			if cancel := p.participantCancels[subscriber]; cancel != nil {
+				delete(p.participantCancels, subscriber)
+				cancel()
+			}
+			close(output)
+		}
+		p.mu.Unlock()
+	})
+}
+
+func (p *RemoteTerminalProxy) Close() error {
+	p.closeOnce.Do(func() {
+		if p.cancel != nil {
+			p.cancel()
+		}
+		if p.outputSub != nil {
+			_ = p.outputSub.Close()
+		}
+		p.closeSubscribers()
+		if p.service != nil && p.service.terminalBus != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			if err := p.service.terminalBus.PublishRelease(ctx, p.sessionID); err != nil {
+				p.service.terminalBus.logError("publish release", err)
+			}
+			cancel()
+		}
+	})
+	return nil
 }
 
 func (s *Service) TerminalRecording(sessionID, username string, roles []string) (TerminalRecording, error) {

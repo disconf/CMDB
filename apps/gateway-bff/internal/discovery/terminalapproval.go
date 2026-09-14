@@ -155,20 +155,6 @@ func (s *Service) DecideTerminalApproval(id, decision, comment, approver string,
 		return item, nil
 	}
 
-	channel := s.terminals[item.SessionID]
-	if channel == nil {
-		item.Status = "expired"
-		item.DecidedAt = now.Format("2006-01-02 15:04:05")
-		item.Approver = approver
-		item.DecisionComment = "终端连接已断开，审批请求自动失效"
-		s.terminalApprovals[index] = item
-		if s.db != nil {
-			_ = s.persistTerminalApproval(item)
-		}
-		s.mu.Unlock()
-		return item, ErrRemoteValidation
-	}
-
 	// Mark approved before writing so two approvers cannot release the same
 	// command twice.
 	item.Status = "approved"
@@ -181,7 +167,7 @@ func (s *Service) DecideTerminalApproval(id, decision, comment, approver string,
 	}
 	s.mu.Unlock()
 
-	if _, err := channel.Write([]byte(item.Command + "\r")); err != nil {
+	if _, err := s.WriteRemoteTerminalInput(item.SessionID, []byte(item.Command+"\r")); err != nil {
 		s.mu.Lock()
 		for i := range s.terminalApprovals {
 			if s.terminalApprovals[i].ID == id {
