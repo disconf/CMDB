@@ -159,6 +159,12 @@ ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_sha256 text 
 ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_size bigint NOT NULL DEFAULT 0;
 ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archived_at text NOT NULL DEFAULT '';
 ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_error text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_deleted_at text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_delete_error text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS owner_node text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS lease_heartbeat_at text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS lease_expires_at text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_remote_access_sessions_lease ON remote_access_sessions(status,lease_expires_at);
 `
 
 func openPostgres(databaseURL string) (*sql.DB, []Task, error) {

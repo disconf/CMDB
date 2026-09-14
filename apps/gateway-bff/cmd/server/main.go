@@ -35,6 +35,7 @@ func main() {
 	go api.DiscoveryService().RunAgentHealth(runContext)
 	go api.DiscoveryService().AutoScanLoops(runContext)
 	go api.DiscoveryService().RunTerminalRetention(runContext)
+	go api.DiscoveryService().RunRemoteSessionLeases(runContext)
 	var publisher *events.OutboxPublisher
 	if os.Getenv("KAFKA_BROKERS") != "" {
 		var err error
@@ -66,4 +67,5 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		slog.Error("shutdown", "error", err)
 	}
+	api.DiscoveryService().ShutdownRemoteSessions()
 }

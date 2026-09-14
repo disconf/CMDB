@@ -163,6 +163,9 @@ type Service struct {
 	terminalTickets   map[string]terminalTicketRecord
 	terminalSequences map[string]uint64
 	terminals         map[string]*RemoteTerminalChannel
+	archiveLocks      map[string]*sync.Mutex
+	instanceID        string
+	remoteLeaseTTL    time.Duration
 }
 
 func NewService() *Service {
@@ -186,6 +189,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s.terminalTickets = map[string]terminalTicketRecord{}
 	s.terminalSequences = map[string]uint64{}
 	s.terminals = map[string]*RemoteTerminalChannel{}
+	s.archiveLocks = map[string]*sync.Mutex{}
+	s.instanceID = gatewayInstanceID()
+	s.remoteLeaseTTL = remoteSessionLeaseTTL()
 	s.terminalApprovals = []TerminalApproval{}
 	s.remotePolicies = []RemoteSecurityPolicy{defaultRemoteSecurityPolicy()}
 	s.policyTemplates = defaultPolicyTemplates()

@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"cmdb/gateway-bff/internal/audit"
 	"cmdb/gateway-bff/internal/auth"
@@ -130,6 +132,10 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "terminal ticket is invalid or expired"})
 			return
 		}
+		if err = discoveryService.RenewRemoteSessionLease(r.Context(), item.ID); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "remote session is owned by another gateway instance"})
+			return
+		}
 		cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
 		rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
 		upgrader := websocket.Upgrader{ReadBufferSize: 8192, WriteBufferSize: 8192, CheckOrigin: func(_ *http.Request) bool { return true }}
@@ -151,6 +157,22 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		auditService.Record(item.Operator, "remote.session.terminal_open", item.ID, item.AssetName+"/"+item.IP+" | "+access)
 		discoveryService.RecordRemoteSessionEvent(item.ID, "success", "terminal-open", "交互式终端已连接")
 		defer discoveryService.RecordRemoteSessionEvent(item.ID, "success", "terminal-close", "交互式终端已断开")
+		leaseContext, stopLease := context.WithCancel(r.Context())
+		defer stopLease()
+		go func() {
+			ticker := time.NewTicker(discoveryService.RemoteSessionLeaseRenewalInterval())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-leaseContext.Done():
+					return
+				case <-ticker.C:
+					if leaseErr := discoveryService.RenewRemoteSessionLease(leaseContext, item.ID); leaseErr != nil {
+						return
+					}
+				}
+			}
+		}()
 
 		var writeMu sync.Mutex
 		writeMessage := func(message terminalSocketMessage) error {

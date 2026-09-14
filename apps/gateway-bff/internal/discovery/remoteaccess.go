@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -114,6 +115,11 @@ type RemoteSession struct {
 	ArchiveSize            int64                       `json:"archiveSize,omitempty"`
 	ArchivedAt             string                      `json:"archivedAt,omitempty"`
 	ArchiveError           string                      `json:"archiveError,omitempty"`
+	ArchiveDeletedAt       string                      `json:"archiveDeletedAt,omitempty"`
+	ArchiveDeleteError     string                      `json:"archiveDeleteError,omitempty"`
+	OwnerNode              string                      `json:"ownerNode,omitempty"`
+	LeaseHeartbeatAt       string                      `json:"leaseHeartbeatAt,omitempty"`
+	LeaseExpiresAt         string                      `json:"leaseExpiresAt,omitempty"`
 	Logs                   []RemoteSessionLog          `json:"logs"`
 	AccessMode             string                      `json:"accessMode,omitempty"`
 	ActiveConnections      int                         `json:"activeConnections"`
@@ -369,7 +375,7 @@ func (s *Service) CreateRemoteSession(assetID, credentialID, operator string, ro
 		s.mu.Unlock()
 		return RemoteSession{}, fmt.Errorf("%w: concurrent remote session limit reached (%d)", ErrRemoteValidation, policy.MaxConcurrentSessions)
 	}
-	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(time.Duration(policy.MaxSessionMinutes) * time.Minute).Format("2006-01-02 15:04:05"), RecordingRetentionDays: policy.RecordingRetentionDays, Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
+	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(time.Duration(policy.MaxSessionMinutes) * time.Minute).Format("2006-01-02 15:04:05"), RecordingRetentionDays: policy.RecordingRetentionDays, OwnerNode: s.instanceID, LeaseHeartbeatAt: now.Format("2006-01-02 15:04:05"), LeaseExpiresAt: now.Add(s.remoteLeaseTTL).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
 	s.remoteSessions = append([]RemoteSession{item}, s.remoteSessions...)
 	s.mu.Unlock()
 	if s.db != nil {
@@ -421,6 +427,9 @@ func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, role
 	if item.AccessMode != "control" {
 		return RemoteSession{}, ErrRemoteForbidden
 	}
+	if err = s.RenewRemoteSessionLease(context.Background(), sessionID); err != nil {
+		return RemoteSession{}, err
+	}
 	username, secret, err := s.resolveRemoteCredential(item.CredentialID)
 	if err != nil {
 		return RemoteSession{}, err
@@ -454,6 +463,9 @@ func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reade
 	}
 	if item.AccessMode != "control" {
 		return ErrRemoteForbidden
+	}
+	if err = s.RenewRemoteSessionLease(context.Background(), sessionID); err != nil {
+		return err
 	}
 	if !s.authorizeRemoteAccessForAsset(operator, roles, item.AssetID, "file") {
 		return ErrRemoteValidation
@@ -500,6 +512,9 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	}
 	if item.AccessMode != "control" {
 		return nil, ErrRemoteForbidden
+	}
+	if err = s.RenewRemoteSessionLease(context.Background(), sessionID); err != nil {
+		return nil, err
 	}
 	if !s.authorizeRemoteAccessForAsset(operator, roles, item.AssetID, "file") {
 		return nil, ErrRemoteValidation
@@ -1138,13 +1153,13 @@ func (s *Service) loadRemoteSessions() error {
 		return nil
 	}
 	now := time.Now().Format("2006-01-02 15:04:05")
-	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted', closed_at=CASE WHEN closed_at='' THEN $1 ELSE closed_at END, updated_at=now() WHERE status='active'`, now); err != nil {
+	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted',closed_at=CASE WHEN closed_at='' THEN $2 ELSE closed_at END,owner_node='',lease_heartbeat_at='',lease_expires_at='',updated_at=now() WHERE status='active' AND (owner_node=$1 OR owner_node='' OR NULLIF(lease_expires_at,'') IS NULL OR NULLIF(lease_expires_at,'')::timestamptz <= now())`, s.instanceID, now); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET archive_status='failed', archive_error='archive task interrupted by service restart' WHERE archive_status='archiving'`); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
+	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,archive_deleted_at,archive_delete_error,owner_node,lease_heartbeat_at,lease_expires_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
 		return err
 	}
@@ -1153,7 +1168,7 @@ func (s *Service) loadRemoteSessions() error {
 	for rows.Next() {
 		var item RemoteSession
 		var roles, collaborators, logs []byte
-		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.RecordingRetentionDays, &item.ClosedAt, &item.ArchiveStatus, &item.ArchiveBucket, &item.ArchiveKey, &item.ArchiveSHA256, &item.ArchiveSize, &item.ArchivedAt, &item.ArchiveError, &logs); err != nil {
+		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.RecordingRetentionDays, &item.ClosedAt, &item.ArchiveStatus, &item.ArchiveBucket, &item.ArchiveKey, &item.ArchiveSHA256, &item.ArchiveSize, &item.ArchivedAt, &item.ArchiveError, &item.ArchiveDeletedAt, &item.ArchiveDeleteError, &item.OwnerNode, &item.LeaseHeartbeatAt, &item.LeaseExpiresAt, &logs); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(roles, &item.Roles)
@@ -1190,6 +1205,6 @@ func (s *Service) persistRemoteSession(item RemoteSession) error {
 	roles, _ := json.Marshal(item.Roles)
 	collaborators, _ := json.Marshal(item.Collaborators)
 	logs, _ := json.Marshal(item.Logs)
-	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,recording_retention_days=excluded.recording_retention_days,closed_at=excluded.closed_at,archive_status=excluded.archive_status,archive_bucket=excluded.archive_bucket,archive_key=excluded.archive_key,archive_sha256=excluded.archive_sha256,archive_size=excluded.archive_size,archived_at=excluded.archived_at,archive_error=excluded.archive_error,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.RecordingRetentionDays, item.ClosedAt, item.ArchiveStatus, item.ArchiveBucket, item.ArchiveKey, item.ArchiveSHA256, item.ArchiveSize, item.ArchivedAt, item.ArchiveError, logs)
+	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,archive_deleted_at,archive_delete_error,owner_node,lease_heartbeat_at,lease_expires_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,recording_retention_days=excluded.recording_retention_days,closed_at=excluded.closed_at,archive_status=excluded.archive_status,archive_bucket=excluded.archive_bucket,archive_key=excluded.archive_key,archive_sha256=excluded.archive_sha256,archive_size=excluded.archive_size,archived_at=excluded.archived_at,archive_error=excluded.archive_error,archive_deleted_at=excluded.archive_deleted_at,archive_delete_error=excluded.archive_delete_error,owner_node=excluded.owner_node,lease_heartbeat_at=excluded.lease_heartbeat_at,lease_expires_at=excluded.lease_expires_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.RecordingRetentionDays, item.ClosedAt, item.ArchiveStatus, item.ArchiveBucket, item.ArchiveKey, item.ArchiveSHA256, item.ArchiveSize, item.ArchivedAt, item.ArchiveError, item.ArchiveDeletedAt, item.ArchiveDeleteError, item.OwnerNode, item.LeaseHeartbeatAt, item.LeaseExpiresAt, logs)
 	return err
 }

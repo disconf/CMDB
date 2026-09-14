@@ -422,7 +422,7 @@ func (s *Service) PurgeExpiredTerminalEvents() (int64, error) {
 	if s.db == nil {
 		return 0, nil
 	}
-	result, err := s.db.Exec(`DELETE FROM remote_terminal_events e USING remote_access_sessions a WHERE e.session_id=a.id AND a.status<>'active' AND a.archive_status='archived' AND a.updated_at < now() - make_interval(days => GREATEST(a.recording_retention_days,1))`)
+	result, err := s.db.Exec(`DELETE FROM remote_terminal_events e USING remote_access_sessions a WHERE e.session_id=a.id AND a.status<>'active' AND a.archive_status='expired'`)
 	if err != nil {
 		return 0, err
 	}
@@ -436,6 +436,13 @@ func (s *Service) RunTerminalRetention(ctx context.Context) {
 			slog.Error("archive terminal recordings", "error", err)
 		} else if archived > 0 {
 			slog.Info("archived terminal recordings", "count", archived)
+		}
+		expired, err := s.ExpireRemoteSessionArchives(ctx)
+		if err != nil {
+			slog.Error("expire terminal recording archives", "error", err)
+		}
+		if expired > 0 {
+			slog.Info("expired terminal recording archives", "count", expired)
 		}
 		removed, err := s.PurgeExpiredTerminalEvents()
 		if err != nil {

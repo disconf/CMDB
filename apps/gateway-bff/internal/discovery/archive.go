@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,8 @@ func (s *Service) ArchiveRemoteSessionRecording(ctx context.Context, sessionID s
 	if s.db == nil || s.objectStore == nil {
 		return errors.New("object storage is not configured")
 	}
+	unlock := s.lockArchiveSession(sessionID)
+	defer unlock()
 	s.mu.RLock()
 	var current RemoteSession
 	for _, item := range s.remoteSessions {
@@ -34,6 +37,9 @@ func (s *Service) ArchiveRemoteSessionRecording(ctx context.Context, sessionID s
 		return fmt.Errorf("%w: active sessions cannot be archived", ErrRemoteValidation)
 	}
 	if current.ArchiveStatus == "archived" && current.ArchiveKey != "" {
+		return nil
+	}
+	if current.ArchiveStatus == "expired" {
 		return nil
 	}
 	if err := s.markSessionArchiveState(sessionID, "archiving", "", ""); err != nil {
@@ -65,6 +71,7 @@ func (s *Service) ArchiveRemoteSessionRecording(ctx context.Context, sessionID s
 		if s.remoteSessions[i].ID != sessionID {
 			continue
 		}
+		previous := cloneRemoteSession(s.remoteSessions[i])
 		s.remoteSessions[i].ArchiveStatus = "archived"
 		s.remoteSessions[i].ArchiveBucket = s.objectStore.Bucket()
 		s.remoteSessions[i].ArchiveKey = key
@@ -72,9 +79,22 @@ func (s *Service) ArchiveRemoteSessionRecording(ctx context.Context, sessionID s
 		s.remoteSessions[i].ArchiveSize = int64(len(content))
 		s.remoteSessions[i].ArchivedAt = time.Now().Format("2006-01-02 15:04:05")
 		s.remoteSessions[i].ArchiveError = ""
+		s.remoteSessions[i].ArchiveDeletedAt = ""
+		s.remoteSessions[i].ArchiveDeleteError = ""
 		updated := cloneRemoteSession(s.remoteSessions[i])
 		s.mu.Unlock()
-		return s.persistRemoteSession(updated)
+		if err = s.persistRemoteSession(updated); err != nil {
+			s.mu.Lock()
+			for j := range s.remoteSessions {
+				if s.remoteSessions[j].ID == sessionID {
+					s.remoteSessions[j] = previous
+					break
+				}
+			}
+			s.mu.Unlock()
+			return err
+		}
+		return nil
 	}
 	s.mu.Unlock()
 	return ErrNotFound
@@ -91,6 +111,7 @@ func (s *Service) markSessionArchiveState(sessionID, status, key, message string
 		s.remoteSessions[i].ArchiveError = truncateArchiveError(message)
 		if status == "archiving" {
 			s.remoteSessions[i].ArchiveError = ""
+			s.remoteSessions[i].ArchiveDeleteError = ""
 		}
 		if key != "" {
 			s.remoteSessions[i].ArchiveKey = key
@@ -104,6 +125,21 @@ func (s *Service) markSessionArchiveState(sessionID, status, key, message string
 		return ErrNotFound
 	}
 	return s.persistRemoteSession(updated)
+}
+
+func (s *Service) lockArchiveSession(sessionID string) func() {
+	s.mu.Lock()
+	if s.archiveLocks == nil {
+		s.archiveLocks = map[string]*sync.Mutex{}
+	}
+	lock := s.archiveLocks[sessionID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.archiveLocks[sessionID] = lock
+	}
+	s.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func truncateArchiveError(value string) string {
@@ -165,6 +201,123 @@ func (s *Service) terminalRecordingSnapshot(ctx context.Context, sessionID strin
 		result.Events = append(result.Events, item)
 	}
 	return result, rows.Err()
+}
+
+type remoteSessionArchiveCandidate struct {
+	ID  string
+	Key string
+}
+
+func (s *Service) ExpireRemoteSessionArchives(ctx context.Context) (int, error) {
+	if s.db == nil || s.objectStore == nil {
+		return 0, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,archive_key FROM remote_access_sessions WHERE status<>'active' AND archive_status='archived' AND archive_key<>'' AND COALESCE(NULLIF(archived_at,'')::timestamptz,updated_at) <= now() - make_interval(days => GREATEST(recording_retention_days,1)) ORDER BY COALESCE(NULLIF(archived_at,'')::timestamptz,updated_at) LIMIT 100`)
+	if err != nil {
+		return 0, err
+	}
+	candidates := []remoteSessionArchiveCandidate{}
+	for rows.Next() {
+		var item remoteSessionArchiveCandidate
+		if err = rows.Scan(&item.ID, &item.Key); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		candidates = append(candidates, item)
+	}
+	if err = rows.Close(); err != nil {
+		return 0, err
+	}
+	if err = rows.Err(); err != nil {
+		return 0, err
+	}
+
+	expired := 0
+	failures := []error{}
+	for _, candidate := range candidates {
+		unlock := s.lockArchiveSession(candidate.ID)
+		s.mu.RLock()
+		current := RemoteSession{}
+		for _, item := range s.remoteSessions {
+			if item.ID == candidate.ID {
+				current = cloneRemoteSession(item)
+				break
+			}
+		}
+		s.mu.RUnlock()
+		if current.ID == "" || current.ArchiveStatus != "archived" || current.ArchiveKey == "" || current.ArchiveKey != candidate.Key {
+			unlock()
+			continue
+		}
+		if deleteErr := s.objectStore.Delete(ctx, candidate.Key); deleteErr != nil {
+			if markErr := s.markSessionArchiveExpirationFailure(candidate.ID, deleteErr); markErr != nil {
+				failures = append(failures, fmt.Errorf("session %s delete archive: %w; persist: %v", candidate.ID, deleteErr, markErr))
+			} else {
+				failures = append(failures, fmt.Errorf("session %s delete archive: %w", candidate.ID, deleteErr))
+			}
+			unlock()
+			continue
+		}
+		if markErr := s.markSessionArchiveExpired(candidate.ID); markErr != nil {
+			failures = append(failures, fmt.Errorf("session %s mark archive expired: %w", candidate.ID, markErr))
+		} else {
+			expired++
+		}
+		unlock()
+	}
+	return expired, errors.Join(failures...)
+}
+
+func (s *Service) markSessionArchiveExpired(sessionID string) error {
+	var updated RemoteSession
+	var previous RemoteSession
+	s.mu.Lock()
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID != sessionID {
+			continue
+		}
+		previous = cloneRemoteSession(s.remoteSessions[i])
+		s.remoteSessions[i].ArchiveStatus = "expired"
+		s.remoteSessions[i].ArchiveDeletedAt = time.Now().Format("2006-01-02 15:04:05")
+		s.remoteSessions[i].ArchiveDeleteError = ""
+		updated = cloneRemoteSession(s.remoteSessions[i])
+		break
+	}
+	s.mu.Unlock()
+	if updated.ID == "" {
+		return ErrNotFound
+	}
+	if err := s.persistRemoteSession(updated); err != nil {
+		s.mu.Lock()
+		for i := range s.remoteSessions {
+			if s.remoteSessions[i].ID == sessionID {
+				s.remoteSessions[i] = previous
+				break
+			}
+		}
+		s.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *Service) markSessionArchiveExpirationFailure(sessionID string, archiveErr error) error {
+	var updated RemoteSession
+	s.mu.Lock()
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID != sessionID {
+			continue
+		}
+		s.remoteSessions[i].ArchiveStatus = "archived"
+		s.remoteSessions[i].ArchiveDeleteError = truncateArchiveError(archiveErr.Error())
+		updated = cloneRemoteSession(s.remoteSessions[i])
+		break
+	}
+	s.mu.Unlock()
+	if updated.ID == "" {
+		return ErrNotFound
+	}
+	return s.persistRemoteSession(updated)
 }
 
 func (s *Service) ArchivePendingRemoteSessions(ctx context.Context) (int, error) {

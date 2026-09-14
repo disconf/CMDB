@@ -13,7 +13,7 @@ type HostKeyProbe = { assetId:string; host:string; port:number; keyType:string; 
 type Grant = { id:string; subjectType:string; subject:string; assetId:string; projectGroup:string; assetIds?:string[]; projectGroups?:string[]; tags?:string[]; permissions:string[]; enabled:boolean; createdBy:string }
 type SessionLog = { time:string; level:string; kind?:string; message:string; durationMs?:number }
 type Collaborator = { username:string; access:'control'|'readonly'; addedBy:string; addedAt:string }
-type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; archiveStatus?:string; archiveBucket?:string; archiveKey?:string; archiveSha256?:string; archiveSize?:number; archivedAt?:string; archiveError?:string; collaborators:Collaborator[]; accessMode?:'control'|'readonly'; activeConnections:number; controllerOnline:boolean; logs:SessionLog[] }
+type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; archiveStatus?:string; archiveBucket?:string; archiveKey?:string; archiveSha256?:string; archiveSize?:number; archivedAt?:string; archiveError?:string; archiveDeletedAt?:string; archiveDeleteError?:string; ownerNode?:string; leaseHeartbeatAt?:string; leaseExpiresAt?:string; collaborators:Collaborator[]; accessMode?:'control'|'readonly'; activeConnections:number; controllerOnline:boolean; logs:SessionLog[] }
 type TerminalEvent = { sequence:number; direction:string; data:string; createdAt:string }
 type TerminalRecording = { events:TerminalEvent[]; truncated:boolean }
 type TerminalApproval = { id:string; sessionId:string; assetId:string; assetName:string; ip:string; operator:string; command:string; reason:string; status:string; requestedAt:string; expiresAt:string; decidedAt?:string; approver?:string; decisionComment?:string }
@@ -691,6 +691,10 @@ async function ensureReplayTerminal() {
 
 async function loadTerminalRecording() {
   if (!replaySession.value || recordingLoading.value) return
+  if (replaySession.value.archiveStatus === 'expired') {
+    message.value = '该录像已超过保留期，归档对象已完成清理'
+    return
+  }
   resetRecordingView()
   recordingLoading.value = true
   try {
@@ -753,6 +757,8 @@ function resetReplay() {
 }
 
 function archiveStatusLabel(item:Session) {
+  if (item.archiveStatus === 'expired') return '保留期已到，归档已清理'
+  if (item.archiveStatus === 'archived' && item.archiveDeleteError) return '归档清理待重试'
   if (item.archiveStatus === 'archived') return `已归档 ${Math.max(1, Math.round((item.archiveSize || 0) / 1024))} KB`
   if (item.archiveStatus === 'archiving') return '归档中'
   if (item.archiveStatus === 'failed') return '归档失败'
@@ -1019,7 +1025,7 @@ onBeforeUnmount(() => {
               <button v-else @click="stopReplay"><Pause/>暂停</button>
               <button @click="resetReplay"><RotateCcw/>显示全部</button>
               <button :disabled="recordingLoading" @click="loadTerminalRecording"><TerminalIcon/>{{recordingLoading?'加载中':'逐屏录像'}}</button>
-              <button v-if="replaySession.status!=='active' && replaySession.archiveStatus!=='archived'" @click="archiveSession(replaySession)">归档录像</button>
+              <button v-if="replaySession.status!=='active' && replaySession.archiveStatus!=='archived' && replaySession.archiveStatus!=='expired'" @click="archiveSession(replaySession)">归档录像</button>
               <span>{{replayVisible}} / {{replaySession.logs.length}} 个事件</span>
             </div>
             <div class="replay-timeline">

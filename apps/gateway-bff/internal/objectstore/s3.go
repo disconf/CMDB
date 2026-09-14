@@ -96,6 +96,26 @@ func (s *Store) Put(ctx context.Context, key string, content []byte, contentType
 	return strings.Trim(resp.Header.Get("ETag"), `"`), nil
 }
 
+func (s *Store) Delete(ctx context.Context, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("object key is required")
+	}
+	if err := s.EnsureBucket(ctx); err != nil {
+		return err
+	}
+	resp, err := s.request(ctx, http.MethodDelete, s.bucket, key, nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
+		return nil
+	}
+	message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("object storage delete returned %d: %s", resp.StatusCode, strings.TrimSpace(string(message)))
+}
+
 func (s *Store) Get(ctx context.Context, key string) ([]byte, error) {
 	if err := s.EnsureBucket(ctx); err != nil {
 		return nil, err

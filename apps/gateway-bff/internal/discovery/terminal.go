@@ -409,6 +409,9 @@ func (s *Service) TerminalRecording(sessionID, username string, roles []string) 
 }
 
 func (s *Service) terminalRecordingFromArchive(item RemoteSession) (TerminalRecording, error) {
+	if item.ArchiveStatus == "expired" {
+		return TerminalRecording{Events: []RemoteTerminalEvent{}}, nil
+	}
 	if item.ArchiveKey == "" || s.objectStore == nil {
 		return TerminalRecording{Events: []RemoteTerminalEvent{}}, nil
 	}
