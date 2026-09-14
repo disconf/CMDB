@@ -34,6 +34,7 @@ func main() {
 	go api.MonitorService().RunEscalations(runContext)
 	go api.DiscoveryService().RunAgentHealth(runContext)
 	go api.DiscoveryService().AutoScanLoops(runContext)
+	go api.DiscoveryService().RunCollectionSchedules(runContext)
 	go api.DiscoveryService().RunTerminalRetention(runContext)
 	go api.DiscoveryService().RunRemoteSessionLeases(runContext)
 	go api.DiscoveryService().RunRemoteSessionSync(runContext)

@@ -23,6 +23,8 @@ type SNMPScanInput struct {
 	DefaultType     string   `json:"defaultType"` // network-device / physical-server / ""(自动)
 	CredentialID    string   `json:"credentialId"`
 	RequireApproval bool     `json:"requireApproval"`
+	TaskID          string   `json:"taskId,omitempty"`
+	TaskName        string   `json:"taskName,omitempty"`
 }
 
 type SNMPScanResult struct {
@@ -31,6 +33,7 @@ type SNMPScanResult struct {
 	Adopted   int                `json:"adopted"`
 	Merged    int                `json:"merged"`
 	Conflicts int                `json:"conflicts"`
+	TaskID    string             `json:"taskId,omitempty"`
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
@@ -392,13 +395,14 @@ func (s *Service) ScanSNMP(ctx context.Context, in SNMPScanInput) (SNMPScanResul
 		result.Hosts = append(result.Hosts, *host)
 	}
 	if len(items) > 0 {
-		ing, err := s.Ingest(IngestInput{Source: "snmp", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
+		ing, err := s.Ingest(IngestInput{TaskID: in.TaskID, TaskName: in.TaskName, Source: "snmp", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
 		if err != nil {
 			return result, err
 		}
 		result.Adopted = ing.Imported
 		result.Merged = ing.Merged
 		result.Conflicts = ing.Conflicts
+		result.TaskID = ing.TaskID
 	}
 	return result, nil
 }

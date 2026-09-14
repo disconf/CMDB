@@ -18,7 +18,11 @@ spec:
       - name: gateway
         image: cmdb/gateway:1.4.0
         ports: [{containerPort: 8080}]
+        envFrom:
+        - secretRef: {name: cmdb-gateway-env}
         env:
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
         - {name: HTTP_ADDR, value: ":8080"}
         - {name: CMDB_ENABLE_DEMO_DATA, value: "false"}
         - {name: PROMETHEUS_RULES_NAMESPACE, value: "monitoring"}

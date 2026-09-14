@@ -23,6 +23,8 @@ type NodeExporterScanInput struct {
 	Ports           []int    `json:"ports"`
 	DefaultType     string   `json:"defaultType"`
 	RequireApproval bool     `json:"requireApproval"`
+	TaskID          string   `json:"taskId,omitempty"`
+	TaskName        string   `json:"taskName,omitempty"`
 }
 
 type NodeExporterHost struct {
@@ -47,6 +49,7 @@ type NodeExporterScanResult struct {
 	Adopted   int                `json:"adopted"`
 	Merged    int                `json:"merged"`
 	Conflicts int                `json:"conflicts"`
+	TaskID    string             `json:"taskId,omitempty"`
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
@@ -288,13 +291,14 @@ func (s *Service) ScanNodeExporter(ctx context.Context, in NodeExporterScanInput
 		result.Hosts = append(result.Hosts, *host)
 	}
 	if len(items) > 0 {
-		ingestResult, err := s.Ingest(IngestInput{Source: "node-exporter", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
+		ingestResult, err := s.Ingest(IngestInput{TaskID: in.TaskID, TaskName: in.TaskName, Source: "node-exporter", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
 		if err != nil {
 			return result, err
 		}
 		result.Adopted = ingestResult.Imported
 		result.Merged = ingestResult.Merged
 		result.Conflicts = ingestResult.Conflicts
+		result.TaskID = ingestResult.TaskID
 	}
 	return result, nil
 }

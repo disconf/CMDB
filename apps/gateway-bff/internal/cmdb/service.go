@@ -484,6 +484,15 @@ func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
 	return groups
 }
 
+func (s *Service) InventoryAssets() []Asset {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assets := make([]Asset, 0, len(s.assets))
+	for _, asset := range s.assets {
+		assets = append(assets, cloneAsset(asset))
+	}
+	return assets
+}
 func (s *Service) MonitoringAssets() []Asset {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

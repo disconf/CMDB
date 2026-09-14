@@ -23,6 +23,8 @@ type SSHScanInput struct {
 	DefaultType     string   `json:"defaultType"`
 	CredentialID    string   `json:"credentialId"`
 	RequireApproval bool     `json:"requireApproval"`
+	TaskID          string   `json:"taskId,omitempty"`
+	TaskName        string   `json:"taskName,omitempty"`
 }
 
 type SSHScanResult struct {
@@ -31,6 +33,7 @@ type SSHScanResult struct {
 	Adopted   int                `json:"adopted"`
 	Merged    int                `json:"merged"`
 	Conflicts int                `json:"conflicts"`
+	TaskID    string             `json:"taskId,omitempty"`
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
@@ -299,13 +302,14 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 		result.Hosts = append(result.Hosts, *host)
 	}
 	if len(items) > 0 {
-		ingestResult, err := s.Ingest(IngestInput{Source: "ssh", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
+		ingestResult, err := s.Ingest(IngestInput{TaskID: in.TaskID, TaskName: in.TaskName, Source: "ssh", Scope: strings.Join(in.CIDRs, ","), Items: items, RequireApproval: in.RequireApproval})
 		if err != nil {
 			return result, err
 		}
 		result.Adopted = ingestResult.Imported
 		result.Merged = ingestResult.Merged
 		result.Conflicts = ingestResult.Conflicts
+		result.TaskID = ingestResult.TaskID
 	}
 	return result, nil
 }

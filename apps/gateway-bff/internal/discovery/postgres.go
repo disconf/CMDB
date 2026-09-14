@@ -43,6 +43,18 @@ ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS port integer NOT NULL DEF
 ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS command text NOT NULL DEFAULT '';
 ALTER TABLE remote_executions ADD COLUMN IF NOT EXISTS risk text NOT NULL DEFAULT 'high';
 CREATE INDEX IF NOT EXISTS idx_remote_executions_updated ON remote_executions(updated_at DESC);
+CREATE TABLE IF NOT EXISTS discovery_schedules (
+ id text PRIMARY KEY, name text NOT NULL, kind text NOT NULL,
+ cidrs jsonb NOT NULL DEFAULT '[]', port integer NOT NULL DEFAULT 0,
+ ports jsonb NOT NULL DEFAULT '[]', default_type text NOT NULL DEFAULT '',
+ credential_id text NOT NULL DEFAULT '', require_approval boolean NOT NULL DEFAULT false,
+ interval_minutes integer NOT NULL DEFAULT 60, enabled boolean NOT NULL DEFAULT true,
+ running boolean NOT NULL DEFAULT false, next_run_at timestamptz, last_run_at timestamptz,
+ last_task_id text NOT NULL DEFAULT '', last_status text NOT NULL DEFAULT '', last_error text NOT NULL DEFAULT '',
+ created_by text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_schedules_due ON discovery_schedules(enabled,running,next_run_at);
 `
 
 const remoteAccessSchema = `

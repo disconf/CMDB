@@ -86,6 +86,8 @@ type CreateTaskInput struct {
 	Scope  string `json:"scope"`
 }
 type IngestInput struct {
+	TaskID          string           `json:"taskId,omitempty"`
+	TaskName        string           `json:"taskName,omitempty"`
 	Source          string           `json:"source"`
 	Scope           string           `json:"scope"`
 	Items           []DiscoveredItem `json:"items"`
@@ -143,6 +145,7 @@ type Service struct {
 	mu                sync.RWMutex
 	agents            []Agent
 	tasks             []Task
+	schedules         []CollectionSchedule
 	db                *sql.DB
 	cmdb              *cmdb.Service
 	objectStore       *objectstore.Store
@@ -167,18 +170,20 @@ type Service struct {
 	instanceID        string
 	remoteLeaseTTL    time.Duration
 	terminalBus       *RemoteTerminalBus
+	scheduleRunner    collectionScheduleRunner
 }
 
 func NewService() *Service {
 	return NewServiceWithCMDB(nil)
 }
 func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
-	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{}}
+	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{}, schedules: []CollectionSchedule{}}
 	store, err := objectstore.NewFromEnv()
 	if err != nil {
 		panic(fmt.Sprintf("initialize object storage: %v", err))
 	}
 	s.objectStore = store
+	s.scheduleRunner = s.executeCollectionSchedule
 	if demo.Enabled() {
 		s.tasks = []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}
 	}
@@ -236,6 +241,11 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		if err := s.loadRemoteSecurityPolicyTemplates(); err != nil {
 			panic(fmt.Sprintf("load remote security policy templates: %v", err))
 		}
+		loadedSchedules, err := s.loadCollectionSchedules()
+		if err != nil {
+			panic(fmt.Sprintf("load discovery schedules: %v", err))
+		}
+		s.schedules = loadedSchedules
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}
 	if s.db == nil && demo.Enabled() {
@@ -557,7 +567,14 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 	if strings.TrimSpace(in.Source) == "" || len(in.Items) == 0 {
 		return IngestResult{}, errors.New("validation")
 	}
-	taskID := in.Source + "-" + time.Now().Format("20060102")
+	taskID := strings.TrimSpace(in.TaskID)
+	if taskID == "" {
+		taskID = in.Source + "-" + time.Now().Format("20060102")
+	}
+	taskName := strings.TrimSpace(in.TaskName)
+	if taskName == "" {
+		taskName = in.Source + " 自动发现"
+	}
 	result := IngestResult{TaskID: taskID}
 	now := time.Now()
 	created := false
@@ -570,7 +587,7 @@ func (s *Service) Ingest(in IngestInput) (IngestResult, error) {
 		}
 	}
 	if index < 0 {
-		s.tasks = append(s.tasks, Task{ID: taskID, Name: in.Source + " 自动发现", Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: now.Format("2006-01-02 15:04"), UpdatedAt: now.Format("2006-01-02 15:04:05")})
+		s.tasks = append(s.tasks, Task{ID: taskID, Name: taskName, Source: in.Source, Scope: in.Scope, Status: "running", CreatedAt: now.Format("2006-01-02 15:04"), UpdatedAt: now.Format("2006-01-02 15:04:05")})
 		index = len(s.tasks) - 1
 		created = true
 		if err := s.persistTask(s.tasks[index]); err != nil {

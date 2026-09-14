@@ -61,6 +61,8 @@ func NewServer() *Server {
 		m, err := credentialsService.Resolve(id)
 		return m.Username, m.Secret, err
 	})
+	registerCollectionScheduleRoutes(mux, authService, auditService, discoveryService)
+	registerDiscoveryQualityRoute(mux, authService, discoveryService, cmdbService)
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -2398,3 +2400,4 @@ func requestLogger(next http.Handler) http.Handler {
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
 	})
 }
+
