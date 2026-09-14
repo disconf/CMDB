@@ -146,6 +146,7 @@ type Service struct {
 	agents            []Agent
 	tasks             []Task
 	schedules         []CollectionSchedule
+	agentDeployments  []AgentDeployment
 	db                *sql.DB
 	cmdb              *cmdb.Service
 	objectStore       *objectstore.Store
@@ -177,7 +178,7 @@ func NewService() *Service {
 	return NewServiceWithCMDB(nil)
 }
 func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
-	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{}, schedules: []CollectionSchedule{}}
+	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{}, schedules: []CollectionSchedule{}, agentDeployments: []AgentDeployment{}}
 	store, err := objectstore.NewFromEnv()
 	if err != nil {
 		panic(fmt.Sprintf("initialize object storage: %v", err))
@@ -246,6 +247,11 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 			panic(fmt.Sprintf("load discovery schedules: %v", err))
 		}
 		s.schedules = loadedSchedules
+		loadedDeployments, err := s.loadAgentDeployments(100)
+		if err != nil {
+			panic(fmt.Sprintf("load agent deployments: %v", err))
+		}
+		s.agentDeployments = loadedDeployments
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}
 	if s.db == nil && demo.Enabled() {

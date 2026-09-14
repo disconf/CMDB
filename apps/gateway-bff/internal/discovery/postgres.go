@@ -55,6 +55,30 @@ CREATE TABLE IF NOT EXISTS discovery_schedules (
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_discovery_schedules_due ON discovery_schedules(enabled,running,next_run_at);
+CREATE TABLE IF NOT EXISTS agent_deployments (
+ id text PRIMARY KEY,
+ action text NOT NULL,
+ status text NOT NULL,
+ target_version text NOT NULL DEFAULT '',
+ credential_id text NOT NULL DEFAULT '',
+ ssh_port integer NOT NULL DEFAULT 22,
+ gateway_url text NOT NULL DEFAULT '',
+ asset_type text NOT NULL DEFAULT '',
+ hosts jsonb NOT NULL DEFAULT '[]',
+ results jsonb NOT NULL DEFAULT '[]',
+ total integer NOT NULL DEFAULT 0,
+ succeeded integer NOT NULL DEFAULT 0,
+ failed integer NOT NULL DEFAULT 0,
+ precheck boolean NOT NULL DEFAULT false,
+ requested_by text NOT NULL DEFAULT '',
+ message text NOT NULL DEFAULT '',
+ retry_of text NOT NULL DEFAULT '',
+ created_at text NOT NULL,
+ started_at text NOT NULL DEFAULT '',
+ finished_at text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_agent_deployments_created ON agent_deployments(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_deployments_status ON agent_deployments(status,created_at DESC);
 `
 
 const remoteAccessSchema = `

@@ -114,7 +114,7 @@ type AgentInstallResult struct {
 
 // AgentBatchInstall installs the cmdb-agent on hosts via SSH. The agent binary is
 // downloaded by each host from the gateway itself (GET /api/v1/agent/install/linux-amd64).
-func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult, error) {
+func (s *Service) agentBatchInstall(in AgentInstallInput) ([]AgentInstallResult, error) {
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")
 	if in.CredentialID != "" {
@@ -173,16 +173,16 @@ func (s *Service) AgentBatchInstall(in AgentInstallInput) ([]AgentInstallResult,
 // AgentBatchUpgrade reinstalls the currently served agent bundle. Versioned binary
 // hosting is intentionally not faked: the gateway only advertises the bundle it can
 // actually serve, so an upgrade is an idempotent reinstall of that bundle.
-func (s *Service) AgentBatchUpgrade(in AgentInstallInput) ([]AgentInstallResult, error) {
+func (s *Service) agentBatchUpgrade(in AgentInstallInput) ([]AgentInstallResult, error) {
 	target := strings.TrimSpace(in.TargetVersion)
 	if target == "" || normalizeAgentVersion(target) != normalizeAgentVersion(AgentBundleVersion()) {
 		return nil, fmt.Errorf("agent bundle version %s is not available", target)
 	}
-	return s.AgentBatchInstall(in)
+	return s.agentBatchInstall(in)
 }
 
 // AgentBatchUninstall stops and removes cmdb-agent from hosts via SSH.
-func (s *Service) AgentBatchUninstall(hosts []string, port int, credentialID string) ([]AgentInstallResult, error) {
+func (s *Service) agentBatchUninstall(hosts []string, port int, credentialID string) ([]AgentInstallResult, error) {
 	username := os.Getenv("CMDB_SSH_USERNAME")
 	password := os.Getenv("CMDB_SSH_PASSWORD")
 	if credentialID != "" {

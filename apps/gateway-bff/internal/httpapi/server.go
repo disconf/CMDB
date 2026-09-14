@@ -437,13 +437,15 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
 			return
 		}
-		res, err := discoveryService.AgentBatchUninstall(in.Hosts, in.Port, in.CredentialID)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RunAgentDeployment(discovery.AgentInstallInput{Hosts: in.Hosts, Port: in.Port, CredentialID: in.CredentialID}, "uninstall", user.Username)
+		res := item.Results
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UNINSTALL_FAILED", "message": err.Error()})
 			return
 		}
-		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
-			auditService.Record(user.Username, "discovery.agent.uninstall", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts)))
+		if user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.uninstall", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" deployment="+item.ID)
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
@@ -456,13 +458,15 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
 			return
 		}
-		res, err := discoveryService.AgentBatchInstall(in)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RunAgentDeployment(in, "install", user.Username)
+		res := item.Results
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "INSTALL_FAILED", "message": err.Error()})
 			return
 		}
-		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
-			auditService.Record(user.Username, "discovery.agent.install", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" version="+discovery.AgentBundleVersion())
+		if user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.install", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" version="+discovery.AgentBundleVersion()+" deployment="+item.ID)
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
@@ -475,15 +479,87 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
 			return
 		}
-		res, err := discoveryService.AgentBatchUpgrade(in)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RunAgentDeployment(in, "upgrade", user.Username)
+		res := item.Results
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UPGRADE_FAILED", "message": err.Error()})
 			return
 		}
-		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
-			auditService.Record(user.Username, "discovery.agent.upgrade", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" target="+in.TargetVersion)
+		if user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.upgrade", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" target="+in.TargetVersion+" deployment="+item.ID)
 		}
 		writeJSON(w, http.StatusOK, res)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-deployments", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		limit := 50
+		if value := strings.TrimSpace(r.URL.Query().Get("limit")); value != "" {
+			if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		items, err := discoveryService.AgentDeployments(limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "DEPLOYMENTS_LOAD_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-deployments/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		item, err := discoveryService.AgentDeployment(r.PathValue("id"))
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "DEPLOYMENT_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "DEPLOYMENT_LOAD_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-deployments/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RetryAgentDeployment(r.PathValue("id"), user.Username)
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "DEPLOYMENT_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "RETRY_FAILED", "message": err.Error()})
+			return
+		}
+		if user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.retry", item.ID, "retryOf="+item.RetryOf+" hosts="+strconv.Itoa(item.Total))
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-precheck", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in discovery.AgentPrecheckInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		results, err := discoveryService.AgentPrecheck(in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "PRECHECK_FAILED", "message": err.Error()})
+			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.precheck", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts)))
+		}
+		writeJSON(w, http.StatusOK, results)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-snmp", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {

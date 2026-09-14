@@ -27,8 +27,9 @@
 ### P0（建议尽快，价值高改动小）
 - [x] 批量安装（已完成）
 - [x] **批量卸载/升级**（卸载脚本；升级=可校验的当前服务端版本，避免伪造历史二进制）
-- [ ] 发现任务区“去伪存真”：隐藏演示执行按钮，展示真实扫描/采集记录
+- [x] 发现任务区“去伪存真”：隐藏演示执行按钮，展示真实扫描/采集记录
 - [x] Agent 列表与版本台账：搜索/筛选/详情、版本分布、过期/未知版本统计
+- [x] Agent 部署任务历史、逐台结果、失败重试与只读预检查
 
 ### P1（核心扩展）
 - [x] **采集计划/定时**：在平台维护 node_exporter / SSH / SNMP 计划，支持分钟级到天级周期、暂停启用、立即执行和后台多实例抢占调度
@@ -83,7 +84,7 @@ absent(up{job="cmdb-hosts"})
 第一条覆盖采集目标存在但抓取失败，第二条覆盖目标列表中完全没有该实例的情况；告警通过现有 Alertmanager Webhook 回写 CMDB 资产健康状态。
 
 ## 7. 数据模型建议（后续）
-- agent_installs(host,status,version,installed_at) 安装记录
+- agent_deployments(id,action,status,hosts,results,requested_by,created_at) 部署任务、逐台结果与失败重试记录
 - collector_targets(id,kind,address,credential_ref,plan)
 - discovery_runs(run_id,source,scope,started,finished,found,imported,merged,failed)
 - credentials(id,name,kind,vault_path)
@@ -99,5 +100,13 @@ Agent 与发现页重排为：
    - 采集计划（周期、启停、立即执行、上次结果）
    - 任务记录（真实，含明细）
 3) 右侧：选中主机/任务详情抽屉
+## 9. 部署任务中心落地（2026-09-15）
 
+在原有 Agent 版本台账和批量操作之上，新增“预检查 → 执行 → 结果明细 → 失败重试”的闭环：
 
+- `POST /api/v1/discovery/agent-precheck`：通过 SSH 只读检查 root 权限、systemd、curl、/opt 磁盘空间和 Gateway 下载通道，不修改目标主机。
+- `agent_deployments` 表：持久化安装、升级、卸载和重试任务，记录发起人、目标主机、参数、逐台结果、成功/失败数量和状态。
+- `GET /api/v1/discovery/agent-deployments`：查询最近部署任务。
+- `GET /api/v1/discovery/agent-deployments/{id}`：查看单个任务的逐台执行结果。
+- `POST /api/v1/discovery/agent-deployments/{id}/retry`：只重试原任务中的失败主机，新任务通过 `retry_of` 关联原任务。
+- 前端 Agent 部署页展示预检查结果表、部署任务历史、状态统计和逐台结果弹窗；失败的安装、升级、卸载任务均可一键重试。
