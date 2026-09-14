@@ -397,6 +397,7 @@ func (s *Service) CloseRemoteSession(sessionID, operator string, roles []string)
 	if s.db != nil {
 		_ = s.persistRemoteSession(closed)
 	}
+	s.CloseRemoteTerminal(sessionID)
 	return nil
 }
 

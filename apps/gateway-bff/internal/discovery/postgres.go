@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS remote_access_sessions(
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remote_access_sessions_time ON remote_access_sessions(updated_at DESC);
+CREATE TABLE IF NOT EXISTS remote_terminal_events(
+ session_id text NOT NULL,
+ sequence bigint NOT NULL,
+ direction text NOT NULL,
+ data text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(session_id,sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_terminal_events_time ON remote_terminal_events(session_id,created_at);
 `
 
 func openPostgres(databaseURL string) (*sql.DB, []Task, error) {

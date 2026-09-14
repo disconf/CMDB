@@ -1441,6 +1441,7 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+	registerRemoteTerminalRoutes(mux, authService, auditService, discoveryService)
 	mux.HandleFunc("POST /api/v1/discovery/remote-sessions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return

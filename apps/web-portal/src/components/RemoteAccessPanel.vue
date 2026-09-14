@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Clock3, FileUp, History, KeyRound, Pause, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Terminal, Upload, X } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Clock3, FileUp, History, KeyRound, Pause, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Terminal as TerminalIcon, Upload, X } from 'lucide-vue-next'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
 import { listCredentials, type Credential } from '@/api/cmdb'
 import { useAuthStore } from '@/stores/useAuthStore'
 
@@ -10,6 +13,9 @@ type HostKeyProbe = { assetId:string; host:string; port:number; keyType:string; 
 type Grant = { id:string; subjectType:string; subject:string; assetId:string; projectGroup:string; permissions:string[]; enabled:boolean; createdBy:string }
 type SessionLog = { time:string; level:string; kind?:string; message:string; durationMs?:number }
 type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; logs:SessionLog[] }
+type TerminalEvent = { sequence:number; direction:string; data:string; createdAt:string }
+type TerminalRecording = { events:TerminalEvent[]; truncated:boolean }
+type TerminalSocketMessage = { type:string; data?:string; message?:string; cols?:number; rows?:number }
 
 const auth = useAuthStore()
 const assets = ref<Asset[]>([])
@@ -34,7 +40,21 @@ const historyStatus = ref('')
 const replaySession = ref<Session>()
 const replayVisible = ref(0)
 const replayPlaying = ref(false)
+const terminalMode = ref(false)
+const terminalConnecting = ref(false)
+const terminalConnected = ref(false)
+const terminalError = ref('')
+const recordingLoading = ref(false)
+const recordingEvents = ref<TerminalEvent[]>([])
+const interactiveTerminalElement = ref<HTMLElement>()
+const replayTerminalElement = ref<HTMLElement>()
 let replayTimer: ReturnType<typeof setInterval> | undefined
+let recordingTimers: ReturnType<typeof setTimeout>[] = []
+let terminalInstance: XTerm | undefined
+let terminalFit: FitAddon | undefined
+let terminalSocket: WebSocket | undefined
+let replayTerminal: XTerm | undefined
+let replayFit: FitAddon | undefined
 const grantForm = ref({ subjectType:'user', subject:'admin', scopeType:'project', assetId:'', projectGroup:'', permissions:['terminal', 'file'] })
 
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
@@ -175,8 +195,159 @@ async function closeSession() {
   catch (reason) { error.value = reason instanceof Error ? reason.message : '关闭会话失败' }
 }
 
+function decodeTerminalData(value:string) {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
+}
+
+function createTerminal() {
+  return new XTerm({
+    cursorBlink: true,
+    convertEol: false,
+    fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, monospace',
+    fontSize: 12,
+    scrollback: 5000,
+    theme: { background:'#020b12', foreground:'#d8f3ff', cursor:'#67e8f9', selectionBackground:'#155e75' },
+  })
+}
+
+async function ensureInteractiveTerminal() {
+  await nextTick()
+  if (!interactiveTerminalElement.value) return
+  if (!terminalInstance) {
+    terminalInstance = createTerminal()
+    terminalFit = new FitAddon()
+    terminalInstance.loadAddon(terminalFit)
+    terminalInstance.open(interactiveTerminalElement.value)
+    terminalInstance.onData(data => {
+      if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type:'input', data }))
+    })
+    terminalInstance.onResize(({ cols, rows }) => {
+      if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type:'resize', cols, rows }))
+    })
+  }
+  terminalFit?.fit()
+}
+
+function resizeInteractiveTerminal() {
+  nextTick(() => terminalFit?.fit())
+}
+
+function focusInteractiveTerminal() {
+  terminalInstance?.focus()
+}
+
+function focusReplayTerminal() {
+  replayTerminal?.focus()
+}
+
+async function openInteractiveTerminal() {
+  if (!selectedSessionId.value || terminalConnecting.value) return
+  terminalMode.value = true
+  terminalError.value = ''
+  await ensureInteractiveTerminal()
+  closeInteractiveTerminal(false)
+  terminalConnecting.value = true
+  try {
+    const ticket = await request<{ticket:string}>(`/api/v1/discovery/remote-sessions/${selectedSessionId.value}/terminal-ticket`, { method:'POST' })
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const query = new URLSearchParams({ ticket:ticket.ticket, cols:String(terminalInstance?.cols || 120), rows:String(terminalInstance?.rows || 32) })
+    const socket = new WebSocket(`${protocol}//${location.host}/api/v1/discovery/remote-sessions/${selectedSessionId.value}/terminal?${query}`)
+    terminalSocket = socket
+    socket.onopen = () => {
+      terminalConnecting.value = false
+      terminalConnected.value = true
+      terminalInstance?.focus()
+      terminalInstance?.writeln('\x1b[32m[CMDB] 安全终端已连接，高风险命令将自动阻止。\x1b[0m')
+    }
+    socket.onmessage = event => {
+      let message: TerminalSocketMessage
+      try { message = JSON.parse(String(event.data)) as TerminalSocketMessage } catch { terminalInstance?.write(String(event.data)); return }
+      if (message.type === 'output' && message.data) terminalInstance?.write(decodeTerminalData(message.data))
+      if (message.type === 'blocked') terminalInstance?.writeln(`\r\n\x1b[31m[已阻止] ${message.message}\x1b[0m\r\n`)
+      if (message.type === 'error') { terminalError.value = message.message || '交互终端连接失败'; terminalInstance?.writeln(`\r\n\x1b[31m${terminalError.value}\x1b[0m`) }
+      if (message.type === 'closed') { terminalConnected.value = false; terminalConnecting.value = false }
+    }
+    socket.onerror = () => { terminalError.value = '交互终端连接失败'; terminalConnected.value = false; terminalConnecting.value = false }
+    socket.onclose = () => { terminalConnected.value = false; terminalConnecting.value = false }
+  } catch (reason) {
+    terminalConnecting.value = false
+    terminalError.value = reason instanceof Error ? reason.message : '交互终端连接失败'
+  }
+}
+
+function closeInteractiveTerminal(updateMessage = true) {
+  if (terminalSocket?.readyState === WebSocket.OPEN) {
+    terminalSocket.send(JSON.stringify({ type:'close' }))
+    terminalSocket.close()
+  }
+  terminalSocket = undefined
+  terminalConnected.value = false
+  terminalConnecting.value = false
+  if (updateMessage) terminalInstance?.writeln('\x1b[90m[CMDB] 交互终端已断开，远程会话仍保持。\x1b[0m')
+}
+
+function clearRecordingTimers() {
+  recordingTimers.forEach(timer => clearTimeout(timer))
+  recordingTimers = []
+}
+
+function resetRecordingView() {
+  clearRecordingTimers()
+  recordingEvents.value = []
+  replayTerminal?.dispose()
+  replayTerminal = undefined
+  replayFit = undefined
+}
+
+async function ensureReplayTerminal() {
+  await nextTick()
+  if (!replayTerminalElement.value) return
+  if (!replayTerminal) {
+    replayTerminal = createTerminal()
+    replayFit = new FitAddon()
+    replayTerminal.loadAddon(replayFit)
+    replayTerminal.open(replayTerminalElement.value)
+  }
+  replayFit?.fit()
+}
+
+async function loadTerminalRecording() {
+  if (!replaySession.value || recordingLoading.value) return
+  resetRecordingView()
+  recordingLoading.value = true
+  try {
+    const recording = await request<TerminalRecording>(`/api/v1/discovery/remote-sessions/${encodeURIComponent(replaySession.value.id)}/terminal-recording`)
+    recordingEvents.value = recording.events
+    await ensureReplayTerminal()
+    playTerminalRecording()
+    if (recording.truncated) message.value = '终端录像较长，当前仅回放最近 20000 个事件'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '终端录像加载失败'
+  } finally {
+    recordingLoading.value = false
+  }
+}
+
+async function playTerminalRecording() {
+  if (!recordingEvents.value.length) return
+  clearRecordingTimers()
+  await ensureReplayTerminal()
+  replayTerminal?.reset()
+  let delay = 0
+  recordingEvents.value.forEach(event => {
+    if (event.direction !== 'output') return
+    delay += 80
+    const chunk = decodeTerminalData(event.data)
+    recordingTimers.push(setTimeout(() => replayTerminal?.write(chunk), Math.min(delay, 4000)))
+  })
+}
+
 async function openReplay(id:string) {
   stopReplay()
+  resetRecordingView()
   try {
     replaySession.value = await request<Session>(`/api/v1/discovery/remote-sessions/${encodeURIComponent(id)}/replay`)
     replayVisible.value = replaySession.value.logs.length
@@ -211,15 +382,15 @@ function statusLabel(status:string) {
 }
 
 function kindLabel(kind?:string) {
-  return ({ session:'会话', command:'命令', 'file-upload':'上传', 'file-download':'下载' } as Record<string,string>)[kind || ''] || '事件'
+  return ({ session:'会话', command:'命令', 'interactive-command':'交互命令', 'terminal-open':'终端连接', 'terminal-close':'终端断开', 'risk-blocked':'风险阻止', 'file-upload':'上传', 'file-download':'下载' } as Record<string,string>)[kind || ''] || '事件'
 }
 
 function commandCount(item:Session) {
-  return item.logs.filter(log => log.kind === 'command' || log.message.startsWith('$ ')).length
+  return item.logs.filter(log => log.kind === 'command' || log.kind === 'interactive-command' || log.message.startsWith('$ ')).length
 }
 
 onMounted(load)
-onBeforeUnmount(stopReplay)
+onBeforeUnmount(() => { stopReplay(); closeInteractiveTerminal(false); clearRecordingTimers(); terminalInstance?.dispose(); replayTerminal?.dispose() })
 </script>
 
 <template>
@@ -260,13 +431,15 @@ onBeforeUnmount(stopReplay)
       </section>
 
       <section class="access-card">
-        <h3><Terminal/>远程会话</h3>
+        <h3><TerminalIcon/>远程会话</h3>
         <div class="access-form">
           <select v-model="selectedAssetId"><option v-for="asset in assets" :key="asset.id" :value="asset.id">{{asset.name}} · {{asset.ip}}</option></select>
           <select v-model="credentialId"><option value="">默认凭据</option><option v-for="credential in credentials.filter(item=>item.kind==='ssh')" :key="credential.id" :value="credential.id">{{credential.name}}</option></select>
           <button class="primary" :disabled="!selectedAssetId" @click="createSession">建立会话</button>
           <select v-model="selectedSessionId"><option value="">选择会话</option><option v-for="session in sessions" :key="session.id" :value="session.id">{{session.assetName}} · {{session.operator}} · {{session.status}}</option></select>
           <button :disabled="!selectedSessionId" @click="closeSession"><X/>关闭</button>
+          <button class="primary" :disabled="!selectedSessionId||terminalConnecting" @click="openInteractiveTerminal"><TerminalIcon/>{{terminalConnected?'重新连接交互终端':'连接交互终端'}}</button>
+          <button v-if="terminalConnected" @click="closeInteractiveTerminal()">断开交互终端</button>
         </div>
         <div class="terminal-box">
           <div class="command-row"><input v-model="command" @keyup.enter="execute" placeholder="输入远程命令"><button :disabled="!selectedSessionId" @click="execute"><Play/>执行</button></div>
@@ -283,6 +456,20 @@ onBeforeUnmount(stopReplay)
         <label>下载远程路径<input v-model="downloadPath"></label>
         <button :disabled="!selectedSessionId" @click="download">下载</button>
         <p>单文件限制：上传 50MB，下载 25MB。路径不允许包含 `..`。</p>
+      </section>
+
+      <section class="access-card live-terminal-card">
+        <header class="live-terminal-head">
+          <div><h3><TerminalIcon/>交互式 WebSSH</h3><span>PTY 实时终端，逐屏录像写入 PostgreSQL；高风险命令在执行前自动阻止</span></div>
+          <div class="terminal-actions">
+            <b :data-state="terminalConnected?'online':terminalConnecting?'connecting':'offline'">{{terminalConnected?'已连接':terminalConnecting?'连接中':'未连接'}}</b>
+            <button v-if="terminalConnected" @click="closeInteractiveTerminal()"><X/>断开</button>
+            <button v-else class="primary" :disabled="!selectedSessionId||terminalConnecting" @click="openInteractiveTerminal"><Play/>连接</button>
+          </div>
+        </header>
+        <div v-if="terminalError" class="access-error">{{terminalError}}</div>
+        <div ref="interactiveTerminalElement" v-show="terminalMode" class="xterm-shell" @click="focusInteractiveTerminal"></div>
+        <div v-if="!terminalMode" class="terminal-empty"><TerminalIcon/><strong>选择或新建远程会话后连接</strong><span>支持交互输入、窗口缩放、逐屏录像与风险命令阻断</span></div>
       </section>
 
       <section class="access-card history-card">
@@ -308,6 +495,7 @@ onBeforeUnmount(stopReplay)
               <button v-if="!replayPlaying" class="primary" @click="startReplay"><Play/>{{replayVisible ? '继续回放' : '开始回放'}}</button>
               <button v-else @click="stopReplay"><Pause/>暂停</button>
               <button @click="resetReplay"><RotateCcw/>显示全部</button>
+              <button :disabled="recordingLoading" @click="loadTerminalRecording"><TerminalIcon/>{{recordingLoading?'加载中':'逐屏录像'}}</button>
               <span>{{replayVisible}} / {{replaySession.logs.length}} 个事件</span>
             </div>
             <div class="replay-timeline">
@@ -316,6 +504,10 @@ onBeforeUnmount(stopReplay)
                 <div class="timeline-content"><header><b>{{kindLabel(log.kind)}}</b><time>{{log.time}}</time><span v-if="log.durationMs">{{log.durationMs}} ms</span></header><pre>{{log.message}}</pre></div>
               </article>
               <div v-if="!replayVisible" class="empty-access">点击开始回放，按时间顺序还原会话操作</div>
+            </div>
+            <div v-if="recordingEvents.length" class="terminal-recording">
+              <header><div><strong>PTY 逐屏录像</strong><span>{{recordingEvents.length}} 个原始终端事件</span></div><button @click="playTerminalRecording"><Play/>重新播放</button></header>
+              <div ref="replayTerminalElement" class="xterm-shell replay-xterm" @click="focusReplayTerminal"></div>
             </div>
           </div>
           <div v-else class="replay-placeholder"><History/><strong>选择一个历史会话</strong><span>查看命令时间线、输出结果、文件操作和关闭记录</span></div>
@@ -327,5 +519,5 @@ onBeforeUnmount(stopReplay)
 </template>
 
 <style scoped>
-.remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
+.remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}.live-terminal-card{grid-column:1/-1}.live-terminal-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.live-terminal-head>div:first-child{display:grid;gap:4px}.live-terminal-head h3{margin:0}.terminal-actions{display:flex;align-items:center;gap:8px}.terminal-actions b{padding:4px 9px;border-radius:999px;font-size:11px}.terminal-actions b[data-state=offline]{background:#2a1721;color:#fda4af}.terminal-actions b[data-state=connecting]{background:#322712;color:#fcd34d}.terminal-actions b[data-state=online]{background:#0b2f2b;color:#5eead4}.terminal-actions button{display:flex;align-items:center;gap:5px}.xterm-shell{height:430px;margin-top:12px;padding:8px;border:1px solid #16445c;border-radius:8px;background:#020b12;overflow:hidden}.xterm-shell .xterm{height:100%}.terminal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;height:180px;margin-top:12px;border:1px dashed #1b4258;color:#64869a}.terminal-empty svg{width:30px;height:30px;color:#22d3ee}.terminal-empty strong{color:#c9e6f5}.terminal-recording{margin-top:12px;border-top:1px solid #123043}.terminal-recording>header{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.terminal-recording>header>div{display:grid;gap:3px}.terminal-recording>header span{color:#6f91a5;font-size:10px}.terminal-recording>header button{display:flex;align-items:center;gap:5px}.replay-xterm{height:300px;margin-top:0}.terminal-recording+.replay-timeline{max-height:220px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
 </style>

@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"bufio"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +37,24 @@ func (w *auditResponseWriter) Write(data []byte) (int, error) {
 		w.body = append(w.body, data[:remaining]...)
 	}
 	return w.ResponseWriter.Write(data)
+}
+
+func (w *auditResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (w *auditResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *auditResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func auditTrail(next http.Handler, authService *auth.Service, auditService *audit.Service) http.Handler {

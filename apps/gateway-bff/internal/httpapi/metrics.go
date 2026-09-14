@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"crypto/tls"
 	"net"
 	"net/http"
@@ -27,6 +28,24 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (w *statusWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 type dependencyProbe struct {

@@ -139,22 +139,25 @@ type AgentReport struct {
 	Virtualization string `json:"virtualization"`
 }
 type Service struct {
-	mu               sync.RWMutex
-	agents           []Agent
-	tasks            []Task
-	db               *sql.DB
-	cmdb             *cmdb.Service
-	agentToken       string
-	agentSeen        map[string]time.Time
-	offlineAfter     time.Duration
-	credResolver     func(id string) (string, string, error)
-	events           map[string][]TaskEvent
-	nextEvent        int64
-	remoteExecutions []RemoteExecution
-	remoteRunner     RemoteRunner
-	accessGrants     []AccessGrant
-	hostKeys         []RemoteHostKey
-	remoteSessions   []RemoteSession
+	mu                sync.RWMutex
+	agents            []Agent
+	tasks             []Task
+	db                *sql.DB
+	cmdb              *cmdb.Service
+	agentToken        string
+	agentSeen         map[string]time.Time
+	offlineAfter      time.Duration
+	credResolver      func(id string) (string, string, error)
+	events            map[string][]TaskEvent
+	nextEvent         int64
+	remoteExecutions  []RemoteExecution
+	remoteRunner      RemoteRunner
+	accessGrants      []AccessGrant
+	hostKeys          []RemoteHostKey
+	remoteSessions    []RemoteSession
+	terminalTickets   map[string]terminalTicketRecord
+	terminalSequences map[string]uint64
+	terminals         map[string]*RemoteTerminalChannel
 }
 
 func NewService() *Service {
@@ -170,6 +173,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s.events = map[string][]TaskEvent{}
 	s.nextEvent = time.Now().UnixNano()
 	s.remoteExecutions = []RemoteExecution{}
+	s.terminalTickets = map[string]terminalTicketRecord{}
+	s.terminalSequences = map[string]uint64{}
+	s.terminals = map[string]*RemoteTerminalChannel{}
 	s.remoteRunner = sshRemoteRunner
 	s.offlineAfter = 3 * time.Minute
 	if value := os.Getenv("AGENT_OFFLINE_AFTER"); value != "" {

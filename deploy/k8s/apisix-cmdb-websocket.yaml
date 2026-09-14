@@ -1,0 +1,31 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: cmdb-web
+  namespace: ops-qa
+spec:
+  http:
+    - name: web
+      match:
+        hosts: ["cmdb.jzq.com"]
+        paths: ["/*"]
+      websocket: true
+      backends:
+        - serviceName: web
+          servicePort: 8080
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: cmdb-api
+  namespace: ops-qa
+spec:
+  http:
+    - name: api
+      match:
+        hosts: ["cmdb-api.jzq.com"]
+        paths: ["/*"]
+      websocket: true
+      backends:
+        - serviceName: gateway
+          servicePort: 8080
