@@ -87,25 +87,26 @@ type RemoteSessionCollaboratorInput struct {
 }
 
 type RemoteSession struct {
-	ID                string                      `json:"id"`
-	AssetID           string                      `json:"assetId"`
-	AssetName         string                      `json:"assetName"`
-	IP                string                      `json:"ip"`
-	Port              int                         `json:"port"`
-	CredentialID      string                      `json:"credentialId"`
-	Operator          string                      `json:"operator"`
-	Roles             []string                    `json:"roles"`
-	Collaborators     []RemoteSessionCollaborator `json:"collaborators"`
-	Status            string                      `json:"status"`
-	CreatedAt         string                      `json:"createdAt"`
-	ExpiresAt         string                      `json:"expiresAt"`
-	ClosedAt          string                      `json:"closedAt,omitempty"`
-	Logs              []RemoteSessionLog          `json:"logs"`
-	AccessMode        string                      `json:"accessMode,omitempty"`
-	ActiveConnections int                         `json:"activeConnections"`
-	ControllerOnline  bool                        `json:"controllerOnline"`
-	CurrentUser       string                      `json:"-"`
-	CurrentRoles      []string                    `json:"-"`
+	ID                     string                      `json:"id"`
+	AssetID                string                      `json:"assetId"`
+	AssetName              string                      `json:"assetName"`
+	IP                     string                      `json:"ip"`
+	Port                   int                         `json:"port"`
+	CredentialID           string                      `json:"credentialId"`
+	Operator               string                      `json:"operator"`
+	Roles                  []string                    `json:"roles"`
+	Collaborators          []RemoteSessionCollaborator `json:"collaborators"`
+	Status                 string                      `json:"status"`
+	CreatedAt              string                      `json:"createdAt"`
+	ExpiresAt              string                      `json:"expiresAt"`
+	RecordingRetentionDays int                         `json:"recordingRetentionDays,omitempty"`
+	ClosedAt               string                      `json:"closedAt,omitempty"`
+	Logs                   []RemoteSessionLog          `json:"logs"`
+	AccessMode             string                      `json:"accessMode,omitempty"`
+	ActiveConnections      int                         `json:"activeConnections"`
+	ControllerOnline       bool                        `json:"controllerOnline"`
+	CurrentUser            string                      `json:"-"`
+	CurrentRoles           []string                    `json:"-"`
 }
 
 func remoteGrantID() string {
@@ -278,15 +279,58 @@ func (s *Service) CreateRemoteSession(assetID, credentialID, operator string, ro
 		return RemoteSession{}, err
 	}
 	now := time.Now()
-	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(30 * time.Minute).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
+	policy := s.EffectiveRemoteSecurityPolicy(operator, roles)
 	s.mu.Lock()
+	activeSessions := 0
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].Operator == operator && s.remoteSessions[i].Status == "active" && !parseRemoteTime(s.remoteSessions[i].ExpiresAt).Before(now) {
+			activeSessions++
+		}
+	}
+	if activeSessions >= policy.MaxConcurrentSessions {
+		s.mu.Unlock()
+		return RemoteSession{}, fmt.Errorf("%w: concurrent remote session limit reached (%d)", ErrRemoteValidation, policy.MaxConcurrentSessions)
+	}
+	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(time.Duration(policy.MaxSessionMinutes) * time.Minute).Format("2006-01-02 15:04:05"), RecordingRetentionDays: policy.RecordingRetentionDays, Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
 	s.remoteSessions = append([]RemoteSession{item}, s.remoteSessions...)
 	s.mu.Unlock()
 	if s.db != nil {
 		_ = s.persistRemoteSession(item)
 	}
+	s.scheduleRemoteSessionExpiry(item.ID, parseRemoteTime(item.ExpiresAt))
 	return cloneRemoteSession(item), nil
 }
+
+func (s *Service) scheduleRemoteSessionExpiry(sessionID string, expiresAt time.Time) {
+	delay := time.Until(expiresAt)
+	if delay <= 0 {
+		return
+	}
+	time.AfterFunc(delay, func() {
+		now := time.Now()
+		s.mu.Lock()
+		var expired RemoteSession
+		for i := range s.remoteSessions {
+			if s.remoteSessions[i].ID != sessionID || s.remoteSessions[i].Status != "active" {
+				continue
+			}
+			s.remoteSessions[i].Status = "interrupted"
+			s.remoteSessions[i].ClosedAt = now.Format("2006-01-02 15:04:05")
+			s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, RemoteSessionLog{Time: now.Format("15:04:05"), Level: "error", Kind: "session", Message: "会话已达到安全策略时长上限，自动关闭"})
+			expired = cloneRemoteSession(s.remoteSessions[i])
+			break
+		}
+		s.mu.Unlock()
+		if expired.ID == "" {
+			return
+		}
+		if s.db != nil {
+			_ = s.persistRemoteSession(expired)
+		}
+		s.CloseRemoteTerminal(sessionID)
+	})
+}
+
 func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, roles []string) (RemoteSession, error) {
 	command = strings.TrimSpace(command)
 	if command == "" || len(command) > 4000 {
@@ -323,7 +367,7 @@ func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, role
 }
 
 func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reader, size int64, operator string, roles []string) error {
-	if size <= 0 || size > 50<<20 {
+	if size <= 0 {
 		return ErrRemoteValidation
 	}
 	item, _, err := s.sessionForOperator(sessionID, operator, roles)
@@ -337,6 +381,9 @@ func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reade
 		return ErrRemoteValidation
 	}
 	if err = validateRemotePath(remotePath); err != nil {
+		return err
+	}
+	if err = s.checkRemoteFilePolicy(item, operator, roles, remotePath, true, size); err != nil {
 		return err
 	}
 	username, secret, err := s.resolveRemoteCredential(item.CredentialID)
@@ -379,6 +426,9 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "file") {
 		return nil, ErrRemoteValidation
 	}
+	if err = s.checkRemoteFilePolicy(item, operator, roles, remotePath, false, 0); err != nil {
+		return nil, err
+	}
 	username, secret, err := s.resolveRemoteCredential(item.CredentialID)
 	if err != nil {
 		return nil, err
@@ -397,8 +447,9 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	if err != nil {
 		return nil, err
 	}
-	if len(output) > 25<<20 {
-		return nil, fmt.Errorf("remote file exceeds 25MB")
+	policy := s.EffectiveRemoteSecurityPolicy(operator, roles)
+	if int64(len(output)) > int64(policy.DownloadMaxMB)<<20 {
+		return nil, fmt.Errorf("%w: download exceeds policy limit %dMB", ErrRemoteValidation, policy.DownloadMaxMB)
 	}
 	s.appendSessionLog(sessionID, "success", "file-download", "下载文件: "+remotePath, 0)
 	return output, nil
@@ -486,6 +537,9 @@ func (s *Service) AddRemoteSessionCollaborator(sessionID string, input RemoteSes
 	}
 	if item.Operator == username {
 		return nil, ErrRemoteValidation
+	}
+	if access == "control" && !s.EffectiveRemoteSecurityPolicy(operator, roles).AllowControlCollaborators {
+		return nil, fmt.Errorf("%w: control collaborators are disabled by policy", ErrRemoteValidation)
 	}
 	now := time.Now().Format("2006-01-02 15:04:05")
 	s.mu.Lock()
@@ -994,7 +1048,7 @@ func (s *Service) loadRemoteSessions() error {
 	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted', closed_at=CASE WHEN closed_at='' THEN $1 ELSE closed_at END, updated_at=now() WHERE status='active'`, now); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,closed_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
+	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
 		return err
 	}
@@ -1003,7 +1057,7 @@ func (s *Service) loadRemoteSessions() error {
 	for rows.Next() {
 		var item RemoteSession
 		var roles, collaborators, logs []byte
-		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.ClosedAt, &logs); err != nil {
+		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.RecordingRetentionDays, &item.ClosedAt, &logs); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(roles, &item.Roles)
@@ -1040,6 +1094,6 @@ func (s *Service) persistRemoteSession(item RemoteSession) error {
 	roles, _ := json.Marshal(item.Roles)
 	collaborators, _ := json.Marshal(item.Collaborators)
 	logs, _ := json.Marshal(item.Logs)
-	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,closed_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,closed_at=excluded.closed_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.ClosedAt, logs)
+	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,recording_retention_days=excluded.recording_retention_days,closed_at=excluded.closed_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.RecordingRetentionDays, item.ClosedAt, logs)
 	return err
 }

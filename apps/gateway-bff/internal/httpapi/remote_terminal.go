@@ -30,7 +30,7 @@ type terminalInputGuard struct {
 	skipEscape bool
 }
 
-func (g *terminalInputGuard) process(data string) (forward string, command string, approvalCommand string, blocked string) {
+func (g *terminalInputGuard) process(data string, requireApproval bool) (forward string, command string, approvalCommand string, blocked string) {
 	var out strings.Builder
 	for _, r := range data {
 		if g.skipEscape {
@@ -60,10 +60,14 @@ func (g *terminalInputGuard) process(data string) (forward string, command strin
 		case '\r', '\n':
 			line := strings.TrimSpace(string(g.buffer))
 			g.buffer = g.buffer[:0]
-			if reason := discovery.BlockedTerminalCommand(line); reason != "" {
+			reason := discovery.BlockedTerminalCommand(line)
+			if line != "" && (reason != "" || requireApproval) {
 				out.WriteByte(3)
 				approvalCommand = line
 				blocked = reason
+				if blocked == "" {
+					blocked = "安全策略要求所有交互命令先审批"
+				}
 				continue
 			}
 			out.WriteRune(r)
@@ -163,6 +167,11 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 			_ = conn.Close()
 		}()
 
+		policy, policyErr := discoveryService.RemoteSessionEffectivePolicy(item.ID, item.Operator, item.Roles)
+		if policyErr != nil {
+			_ = writeMessage(terminalSocketMessage{Type: "error", Message: "远程会话策略不可用"})
+			return
+		}
 		guard := &terminalInputGuard{}
 		for {
 			var message terminalSocketMessage
@@ -176,7 +185,7 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 					_ = writeMessage(terminalSocketMessage{Type: "blocked", Message: "当前为只读协作者，不能向远程终端发送输入"})
 					continue
 				}
-				forward, command, approvalCommand, blocked := guard.process(message.Data)
+				forward, command, approvalCommand, blocked := guard.process(message.Data, policy.ApprovalMode == "all")
 				_ = discoveryService.AppendTerminalEvent(item.ID, "input", message.Data)
 				if forward != "" {
 					if _, err = channel.Write([]byte(forward)); err != nil {
@@ -330,6 +339,50 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		}
 		auditService.Record(user.Username, action, item.ID, item.AssetName+"/"+item.IP+" | "+item.Command)
 		writeJSON(w, http.StatusOK, item)
+	})
+
+	mux.HandleFunc("GET /api/v1/discovery/remote-security-policies", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.RemoteSecurityPolicies())
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-security-policies/effective", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, discoveryService.EffectiveRemoteSecurityPolicy(user.Username, user.Roles))
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-security-policies", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input discovery.RemoteSecurityPolicyInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid remote security policy"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.SaveRemoteSecurityPolicy(input, user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.policy.save", item.ID, item.SubjectType+"/"+item.Subject)
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/discovery/remote-security-policies/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := discoveryService.DeleteRemoteSecurityPolicy(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.policy.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

@@ -74,13 +74,39 @@ CREATE TABLE IF NOT EXISTS remote_access_sessions(
  status text NOT NULL,
  created_at text NOT NULL,
  expires_at text NOT NULL,
+ recording_retention_days integer NOT NULL DEFAULT 180,
  closed_at text NOT NULL DEFAULT '',
  logs jsonb NOT NULL DEFAULT '[]',
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remote_access_sessions_time ON remote_access_sessions(updated_at DESC);
 ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS collaborators jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS recording_retention_days integer NOT NULL DEFAULT 180;
 UPDATE remote_access_sessions SET collaborators='[]'::jsonb WHERE jsonb_typeof(collaborators)='null';
+CREATE TABLE IF NOT EXISTS remote_security_policies(
+ id text PRIMARY KEY,
+ name text NOT NULL,
+ subject_type text NOT NULL,
+ subject text NOT NULL,
+ enabled boolean NOT NULL DEFAULT true,
+ priority integer NOT NULL DEFAULT 100,
+ max_session_minutes integer NOT NULL DEFAULT 30,
+ max_concurrent_sessions integer NOT NULL DEFAULT 20,
+ recording_retention_days integer NOT NULL DEFAULT 180,
+ file_transfer_enabled boolean NOT NULL DEFAULT true,
+ upload_max_mb integer NOT NULL DEFAULT 50,
+ download_max_mb integer NOT NULL DEFAULT 25,
+ allowed_upload_paths jsonb NOT NULL DEFAULT '["/**"]',
+ allowed_download_paths jsonb NOT NULL DEFAULT '["/**"]',
+ allow_control_collaborators boolean NOT NULL DEFAULT true,
+ approval_mode text NOT NULL DEFAULT 'risk',
+ approval_ttl_minutes integer NOT NULL DEFAULT 10,
+ created_by text NOT NULL DEFAULT '',
+ updated_by text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_security_policies_subject ON remote_security_policies(subject_type,subject);
 CREATE TABLE IF NOT EXISTS remote_terminal_events(
  session_id text NOT NULL,
  sequence bigint NOT NULL,

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-const terminalApprovalTTL = 10 * time.Minute
-
 var ErrRemoteForbidden = errors.New("remote operation forbidden")
 
 // TerminalApproval is a one-time authorization request for a command that the
@@ -43,10 +41,17 @@ func (s *Service) RequestTerminalApproval(sessionID, command, operator string, r
 		return TerminalApproval{}, ErrRemoteValidation
 	}
 	reason := BlockedTerminalCommand(command)
-	if reason == "" {
-		return TerminalApproval{}, ErrRemoteValidation
-	}
 	item, _, err := s.sessionForOperator(sessionID, operator, roles)
+	if err != nil {
+		return TerminalApproval{}, err
+	}
+	policy := s.EffectiveRemoteSecurityPolicy(operator, roles)
+	if reason == "" {
+		if policy.ApprovalMode != "all" {
+			return TerminalApproval{}, ErrRemoteValidation
+		}
+		reason = "安全策略要求所有交互命令先审批"
+	}
 	if err != nil {
 		return TerminalApproval{}, err
 	}
@@ -74,7 +79,7 @@ func (s *Service) RequestTerminalApproval(sessionID, command, operator string, r
 		Reason:      reason,
 		Status:      "pending",
 		RequestedAt: now.Format("2006-01-02 15:04:05"),
-		ExpiresAt:   now.Add(terminalApprovalTTL).Format("2006-01-02 15:04:05"),
+		ExpiresAt:   now.Add(time.Duration(policy.ApprovalTTLMinutes) * time.Minute).Format("2006-01-02 15:04:05"),
 	}
 	s.terminalApprovals = append([]TerminalApproval{approval}, s.terminalApprovals...)
 	if s.db != nil {
