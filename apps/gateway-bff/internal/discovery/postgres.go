@@ -87,6 +87,25 @@ CREATE TABLE IF NOT EXISTS remote_terminal_events(
  PRIMARY KEY(session_id,sequence)
 );
 CREATE INDEX IF NOT EXISTS idx_remote_terminal_events_time ON remote_terminal_events(session_id,created_at);
+CREATE TABLE IF NOT EXISTS remote_terminal_approvals(
+ id text PRIMARY KEY,
+ session_id text NOT NULL,
+ asset_id text NOT NULL,
+ asset_name text NOT NULL,
+ host text NOT NULL,
+ operator_name text NOT NULL,
+ command text NOT NULL,
+ reason text NOT NULL,
+ status text NOT NULL,
+ requested_at text NOT NULL,
+ expires_at text NOT NULL,
+ decided_at text NOT NULL DEFAULT '',
+ approver text NOT NULL DEFAULT '',
+ decision_comment text NOT NULL DEFAULT '',
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_remote_terminal_approvals_status ON remote_terminal_approvals(status,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remote_terminal_approvals_session ON remote_terminal_approvals(session_id,updated_at DESC);
 `
 
 func openPostgres(databaseURL string) (*sql.DB, []Task, error) {

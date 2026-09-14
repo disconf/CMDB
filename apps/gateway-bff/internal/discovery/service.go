@@ -155,6 +155,7 @@ type Service struct {
 	accessGrants      []AccessGrant
 	hostKeys          []RemoteHostKey
 	remoteSessions    []RemoteSession
+	terminalApprovals []TerminalApproval
 	terminalTickets   map[string]terminalTicketRecord
 	terminalSequences map[string]uint64
 	terminals         map[string]*RemoteTerminalChannel
@@ -176,6 +177,7 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s.terminalTickets = map[string]terminalTicketRecord{}
 	s.terminalSequences = map[string]uint64{}
 	s.terminals = map[string]*RemoteTerminalChannel{}
+	s.terminalApprovals = []TerminalApproval{}
 	s.remoteRunner = sshRemoteRunner
 	s.offlineAfter = 3 * time.Minute
 	if value := os.Getenv("AGENT_OFFLINE_AFTER"); value != "" {
@@ -201,6 +203,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		}
 		if err := s.loadRemoteSessions(); err != nil {
 			panic(fmt.Sprintf("load remote sessions: %v", err))
+		}
+		if err := s.loadTerminalApprovals(); err != nil {
+			panic(fmt.Sprintf("load terminal approvals: %v", err))
 		}
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}

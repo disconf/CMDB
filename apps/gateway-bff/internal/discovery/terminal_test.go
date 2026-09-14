@@ -1,6 +1,16 @@
 package discovery
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
+
+type bufferWriteCloser struct {
+	bytes.Buffer
+}
+
+func (b *bufferWriteCloser) Close() error { return nil }
 
 func TestBlockedTerminalCommand(t *testing.T) {
 	for _, command := range []string{
@@ -36,5 +46,51 @@ func TestTerminalTicketIsOneTimeAndExpires(t *testing.T) {
 	}
 	if _, err = service.ConsumeTerminalTicket(ticket.Ticket); err != ErrNotFound {
 		t.Fatalf("expected one-time ticket rejection, got %v", err)
+	}
+}
+
+func TestTerminalApprovalReject(t *testing.T) {
+	service := NewService()
+	service.remoteSessions = []RemoteSession{{ID: "session-1", AssetID: "asset-1", AssetName: "host-1", IP: "10.0.0.1", Operator: "alice", Roles: []string{"operator"}, Status: "active", ExpiresAt: "2099-01-01 00:00:00"}}
+	approval, err := service.RequestTerminalApproval("session-1", "rm -rf /", "alice", []string{"operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Status != "pending" || approval.Reason == "" || approval.Command != "rm -rf /" {
+		t.Fatalf("unexpected approval: %+v", approval)
+	}
+	decided, err := service.DecideTerminalApproval(approval.ID, "reject", "不允许", "admin", []string{"platform-admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decided.Status != "rejected" || decided.Approver != "admin" {
+		t.Fatalf("unexpected decision: %+v", decided)
+	}
+}
+
+func TestApprovedTerminalApprovalExecutesOnce(t *testing.T) {
+	service := NewService()
+	service.remoteSessions = []RemoteSession{{ID: "session-1", AssetID: "asset-1", AssetName: "host-1", IP: "10.0.0.1", Operator: "admin", Roles: []string{"platform-admin"}, Status: "active", ExpiresAt: "2099-01-01 00:00:00"}}
+	stdin := &bufferWriteCloser{}
+	service.terminals["session-1"] = &RemoteTerminalChannel{stdin: stdin, service: service, sessionID: "session-1"}
+	approval, err := service.RequestTerminalApproval("session-1", "rm -rf /", "admin", []string{"platform-admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided, err := service.DecideTerminalApproval(approval.ID, "approve", "已确认", "admin", []string{"platform-admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decided.Status != "approved" {
+		t.Fatalf("expected approved, got %+v", decided)
+	}
+	if got := stdin.String(); got != "rm -rf /\r" {
+		t.Fatalf("expected one-time command write, got %q", got)
+	}
+	if _, err = service.DecideTerminalApproval(approval.ID, "approve", "", "admin", []string{"platform-admin"}); err == nil {
+		t.Fatal("expected approved command replay to be rejected")
+	}
+	if !strings.Contains(service.terminalApprovals[0].DecisionComment, "已确认") {
+		t.Fatalf("decision comment was not persisted")
 	}
 }

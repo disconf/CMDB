@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,11 +16,12 @@ import (
 )
 
 type terminalSocketMessage struct {
-	Type    string `json:"type"`
-	Data    string `json:"data,omitempty"`
-	Message string `json:"message,omitempty"`
-	Cols    int    `json:"cols,omitempty"`
-	Rows    int    `json:"rows,omitempty"`
+	Type     string                      `json:"type"`
+	Data     string                      `json:"data,omitempty"`
+	Message  string                      `json:"message,omitempty"`
+	Cols     int                         `json:"cols,omitempty"`
+	Rows     int                         `json:"rows,omitempty"`
+	Approval *discovery.TerminalApproval `json:"approval,omitempty"`
 }
 
 type terminalInputGuard struct {
@@ -27,7 +29,7 @@ type terminalInputGuard struct {
 	skipEscape bool
 }
 
-func (g *terminalInputGuard) process(data string) (forward string, command string, blocked string) {
+func (g *terminalInputGuard) process(data string) (forward string, command string, approvalCommand string, blocked string) {
 	var out strings.Builder
 	for _, r := range data {
 		if g.skipEscape {
@@ -59,7 +61,8 @@ func (g *terminalInputGuard) process(data string) (forward string, command strin
 			g.buffer = g.buffer[:0]
 			if reason := discovery.BlockedTerminalCommand(line); reason != "" {
 				out.WriteByte(3)
-				blocked = line + " | " + reason
+				approvalCommand = line
+				blocked = reason
 				continue
 			}
 			out.WriteRune(r)
@@ -71,7 +74,7 @@ func (g *terminalInputGuard) process(data string) (forward string, command strin
 		}
 		out.WriteRune(r)
 	}
-	return out.String(), command, blocked
+	return out.String(), command, approvalCommand, blocked
 }
 
 func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service, auditService *audit.Service, discoveryService *discovery.Service) {
@@ -163,7 +166,7 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 			}
 			switch message.Type {
 			case "input":
-				forward, command, blocked := guard.process(message.Data)
+				forward, command, approvalCommand, blocked := guard.process(message.Data)
 				_ = discoveryService.AppendTerminalEvent(item.ID, "input", message.Data)
 				if forward != "" {
 					if _, err = channel.Write([]byte(forward)); err != nil {
@@ -172,9 +175,20 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 					}
 				}
 				if blocked != "" {
-					_ = writeMessage(terminalSocketMessage{Type: "blocked", Message: blocked})
-					discoveryService.RecordRemoteSessionEvent(item.ID, "error", "risk-blocked", blocked)
-					auditService.Record(item.Operator, "remote.session.command_blocked", item.ID, blocked)
+					discoveryService.RecordRemoteSessionEvent(item.ID, "error", "risk-blocked", approvalCommand+" | "+blocked)
+					if approvalCommand == "" {
+						_ = writeMessage(terminalSocketMessage{Type: "blocked", Message: blocked})
+						auditService.Record(item.Operator, "remote.session.command_blocked", item.ID, approvalCommand+" | "+blocked)
+					} else {
+						approval, approvalErr := discoveryService.RequestTerminalApproval(item.ID, approvalCommand, item.Operator, item.Roles)
+						if approvalErr != nil {
+							_ = writeMessage(terminalSocketMessage{Type: "blocked", Message: blocked + " | " + approvalErr.Error()})
+							auditService.Record(item.Operator, "remote.session.command_blocked", item.ID, approvalCommand+" | "+blocked)
+						} else {
+							_ = writeMessage(terminalSocketMessage{Type: "approval_required", Message: blocked, Approval: &approval})
+							auditService.Record(item.Operator, "remote.session.command_approval_requested", item.ID, approvalCommand+" | "+blocked)
+						}
+					}
 				}
 				if command != "" {
 					discoveryService.RecordRemoteSessionEvent(item.ID, "success", "interactive-command", command)
@@ -186,5 +200,45 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 				return
 			}
 		}
+	})
+
+	mux.HandleFunc("GET /api/v1/discovery/remote-terminal-approvals", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, discoveryService.TerminalApprovals(r.URL.Query().Get("sessionId"), user.Username, user.Roles))
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-terminal-approvals/{id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input struct {
+			Decision string `json:"decision"`
+			Comment  string `json:"comment"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid approval decision"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.DecideTerminalApproval(r.PathValue("id"), input.Decision, input.Comment, user.Username, user.Roles)
+		if err != nil {
+			switch {
+			case errors.Is(err, discovery.ErrRemoteForbidden):
+				writeJSON(w, http.StatusForbidden, map[string]string{"message": "仅平台管理员可审批高风险命令"})
+			case errors.Is(err, discovery.ErrNotFound):
+				writeJSON(w, http.StatusNotFound, map[string]string{"message": "审批请求不存在"})
+			default:
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			}
+			return
+		}
+		action := "remote.session.approval_rejected"
+		if item.Status == "approved" {
+			action = "remote.session.approval_approved"
+		}
+		auditService.Record(user.Username, action, item.ID, item.AssetName+"/"+item.IP+" | "+item.Command)
+		writeJSON(w, http.StatusOK, item)
 	})
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Clock3, FileUp, History, KeyRound, Pause, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Terminal as TerminalIcon, Upload, X } from 'lucide-vue-next'
+import { Ban, Clock3, FileUp, History, KeyRound, Pause, Play, RefreshCw, RotateCcw, Search, ShieldAlert, ShieldCheck, Terminal as TerminalIcon, Upload, X } from 'lucide-vue-next'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -15,7 +15,8 @@ type SessionLog = { time:string; level:string; kind?:string; message:string; dur
 type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; logs:SessionLog[] }
 type TerminalEvent = { sequence:number; direction:string; data:string; createdAt:string }
 type TerminalRecording = { events:TerminalEvent[]; truncated:boolean }
-type TerminalSocketMessage = { type:string; data?:string; message?:string; cols?:number; rows?:number }
+type TerminalApproval = { id:string; sessionId:string; assetId:string; assetName:string; ip:string; operator:string; command:string; reason:string; status:string; requestedAt:string; expiresAt:string; decidedAt?:string; approver?:string; decisionComment?:string }
+type TerminalSocketMessage = { type:string; data?:string; message?:string; cols?:number; rows?:number; approval?:TerminalApproval }
 
 const auth = useAuthStore()
 const assets = ref<Asset[]>([])
@@ -46,9 +47,13 @@ const terminalConnected = ref(false)
 const terminalError = ref('')
 const recordingLoading = ref(false)
 const recordingEvents = ref<TerminalEvent[]>([])
+const terminalApprovals = ref<TerminalApproval[]>([])
+const approvalComment = ref('')
+const approvalBusyId = ref('')
 const interactiveTerminalElement = ref<HTMLElement>()
 const replayTerminalElement = ref<HTMLElement>()
 let replayTimer: ReturnType<typeof setInterval> | undefined
+let approvalPoll: ReturnType<typeof setInterval> | undefined
 let recordingTimers: ReturnType<typeof setTimeout>[] = []
 let terminalInstance: XTerm | undefined
 let terminalFit: FitAddon | undefined
@@ -69,6 +74,11 @@ const filteredHistory = computed(() => {
     return matchesQuery && matchesStatus
   })
 })
+const isPlatformAdmin = computed(() => auth.user?.roles.some(role => role === 'admin' || role === 'platform-admin') ?? false)
+const pendingApprovalCount = computed(() => terminalApprovals.value.filter(item => item.status === 'pending').length)
+const visibleApprovals = computed(() => terminalApprovals.value
+  .filter(item => item.status === 'pending' || item.sessionId === selectedSessionId.value)
+  .slice(0, 30))
 
 async function request<T>(url:string, init?:RequestInit) {
   const response = await fetch(url, { ...init, headers: init?.body instanceof FormData ? { Authorization:`Bearer ${auth.token}` } : headers.value })
@@ -80,17 +90,59 @@ async function request<T>(url:string, init?:RequestInit) {
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
 }
 
+function upsertApproval(item:TerminalApproval) {
+  const index = terminalApprovals.value.findIndex(existing => existing.id === item.id)
+  if (index >= 0) terminalApprovals.value[index] = item
+  else terminalApprovals.value = [item, ...terminalApprovals.value]
+}
+
+async function refreshApprovals() {
+  try { terminalApprovals.value = await request<TerminalApproval[]>('/api/v1/discovery/remote-terminal-approvals') } catch {}
+}
+
+function startApprovalPolling() {
+  if (approvalPoll) return
+  approvalPoll = setInterval(() => void refreshApprovals(), 2000)
+}
+
+async function decideApproval(item:TerminalApproval, decision:'approve'|'reject') {
+  if (approvalBusyId.value) return
+  approvalBusyId.value = item.id
+  try {
+    const updated = await request<TerminalApproval>(`/api/v1/discovery/remote-terminal-approvals/${encodeURIComponent(item.id)}/decision`, {
+      method:'POST',
+      body:JSON.stringify({ decision, comment:approvalComment.value }),
+    })
+    upsertApproval(updated)
+    approvalComment.value = ''
+    message.value = decision === 'approve' ? '审批通过，命令已按一次性授权放行' : '审批已拒绝，命令未执行'
+    if (item.sessionId === selectedSessionId.value && terminalInstance) {
+      terminalInstance.writeln(`\r\n\x1b[${decision === 'approve' ? '32' : '31'}m[审批${decision === 'approve' ? '通过' : '拒绝'}] ${item.command}\x1b[0m\r\n`)
+    }
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '审批处理失败'
+    await refreshApprovals()
+  } finally {
+    approvalBusyId.value = ''
+  }
+}
+
+function approvalStatusLabel(status:string) {
+  return ({ pending:'待审批', approved:'已放行', rejected:'已拒绝', expired:'已超时', failed:'放行失败' } as Record<string,string>)[status] || status
+}
+
 async function load() {
   busy.value = true
   error.value = ''
   try {
-    const [assetPage, gs, ss, cs, hks, hs] = await Promise.all([
+    const [assetPage, gs, ss, cs, hks, hs, approvals] = await Promise.all([
       request<{data:Asset[]}>('/api/v1/cmdb/assets?page=1&pageSize=100&type=server'),
       request<Grant[]>('/api/v1/discovery/access-grants'),
       request<Session[]>('/api/v1/discovery/remote-sessions'),
       listCredentials(auth.token),
       request<HostKey[]>('/api/v1/discovery/remote-host-keys'),
       request<Session[]>('/api/v1/discovery/remote-sessions/history'),
+      request<TerminalApproval[]>('/api/v1/discovery/remote-terminal-approvals'),
     ])
     assets.value = assetPage.data
     grants.value = gs
@@ -98,6 +150,7 @@ async function load() {
     credentials.value = cs
     hostKeys.value = hks
     history.value = hs
+    terminalApprovals.value = approvals
     if (!selectedAssetId.value && assets.value.length) selectedAssetId.value = assets.value[0].id
     if (!selectedSessionId.value && sessions.value.length) selectedSessionId.value = sessions.value[0].id
     if (replaySession.value) replaySession.value = history.value.find(item => item.id === replaySession.value?.id) || replaySession.value
@@ -260,15 +313,20 @@ async function openInteractiveTerminal() {
       terminalConnecting.value = false
       terminalConnected.value = true
       terminalInstance?.focus()
-      terminalInstance?.writeln('\x1b[32m[CMDB] 安全终端已连接，高风险命令将自动阻止。\x1b[0m')
+      terminalInstance?.writeln('\x1b[32m[CMDB] 安全终端已连接，高风险命令将进入审批流程。\x1b[0m')
     }
     socket.onmessage = event => {
-      let message: TerminalSocketMessage
-      try { message = JSON.parse(String(event.data)) as TerminalSocketMessage } catch { terminalInstance?.write(String(event.data)); return }
-      if (message.type === 'output' && message.data) terminalInstance?.write(decodeTerminalData(message.data))
-      if (message.type === 'blocked') terminalInstance?.writeln(`\r\n\x1b[31m[已阻止] ${message.message}\x1b[0m\r\n`)
-      if (message.type === 'error') { terminalError.value = message.message || '交互终端连接失败'; terminalInstance?.writeln(`\r\n\x1b[31m${terminalError.value}\x1b[0m`) }
-      if (message.type === 'closed') { terminalConnected.value = false; terminalConnecting.value = false }
+      let socketMessage: TerminalSocketMessage
+      try { socketMessage = JSON.parse(String(event.data)) as TerminalSocketMessage } catch { terminalInstance?.write(String(event.data)); return }
+      if (socketMessage.type === 'output' && socketMessage.data) terminalInstance?.write(decodeTerminalData(socketMessage.data))
+      if (socketMessage.type === 'blocked') terminalInstance?.writeln(`\r\n\x1b[31m[已阻止] ${socketMessage.message}\x1b[0m\r\n`)
+      if (socketMessage.type === 'approval_required' && socketMessage.approval) {
+        upsertApproval(socketMessage.approval)
+        message.value = '高风险命令已暂停，等待平台管理员审批'
+        terminalInstance?.writeln(`\r\n\x1b[33m[待审批] ${socketMessage.approval.reason}，命令尚未执行。\x1b[0m\r\n`)
+      }
+      if (socketMessage.type === 'error') { terminalError.value = socketMessage.message || '交互终端连接失败'; terminalInstance?.writeln(`\r\n\x1b[31m${terminalError.value}\x1b[0m`) }
+      if (socketMessage.type === 'closed') { terminalConnected.value = false; terminalConnecting.value = false }
     }
     socket.onerror = () => { terminalError.value = '交互终端连接失败'; terminalConnected.value = false; terminalConnecting.value = false }
     socket.onclose = () => { terminalConnected.value = false; terminalConnecting.value = false }
@@ -382,15 +440,15 @@ function statusLabel(status:string) {
 }
 
 function kindLabel(kind?:string) {
-  return ({ session:'会话', command:'命令', 'interactive-command':'交互命令', 'terminal-open':'终端连接', 'terminal-close':'终端断开', 'risk-blocked':'风险阻止', 'file-upload':'上传', 'file-download':'下载' } as Record<string,string>)[kind || ''] || '事件'
+  return ({ session:'会话', command:'命令', 'interactive-command':'交互命令', 'terminal-open':'终端连接', 'terminal-close':'终端断开', 'risk-blocked':'风险阻止', 'command-approved':'审批放行', 'command-rejected':'审批拒绝', 'file-upload':'上传', 'file-download':'下载' } as Record<string,string>)[kind || ''] || '事件'
 }
 
 function commandCount(item:Session) {
   return item.logs.filter(log => log.kind === 'command' || log.kind === 'interactive-command' || log.message.startsWith('$ ')).length
 }
 
-onMounted(load)
-onBeforeUnmount(() => { stopReplay(); closeInteractiveTerminal(false); clearRecordingTimers(); terminalInstance?.dispose(); replayTerminal?.dispose() })
+onMounted(async () => { await load(); startApprovalPolling() })
+onBeforeUnmount(() => { if (approvalPoll) clearInterval(approvalPoll); stopReplay(); closeInteractiveTerminal(false); clearRecordingTimers(); terminalInstance?.dispose(); replayTerminal?.dispose() })
 </script>
 
 <template>
@@ -472,6 +530,33 @@ onBeforeUnmount(() => { stopReplay(); closeInteractiveTerminal(false); clearReco
         <div v-if="!terminalMode" class="terminal-empty"><TerminalIcon/><strong>选择或新建远程会话后连接</strong><span>支持交互输入、窗口缩放、逐屏录像与风险命令阻断</span></div>
       </section>
 
+      <section class="access-card approval-card">
+        <header class="approval-head">
+          <div><h3><ShieldAlert/>高风险命令审批</h3><span>命令先暂停，平台管理员批准后按一次性授权放行；拒绝或超时均不会执行</span></div>
+          <b :data-active="pendingApprovalCount > 0">{{pendingApprovalCount}} 条待处理</b>
+        </header>
+        <div class="approval-list">
+          <article v-for="item in visibleApprovals" :key="item.id" :data-status="item.status">
+            <div class="approval-main">
+              <header><strong>{{item.assetName}} · {{item.ip}}</strong><b :data-status="item.status">{{approvalStatusLabel(item.status)}}</b></header>
+              <code>{{item.command}}</code>
+              <p>{{item.reason}}</p>
+              <small>申请人 {{item.operator}} · {{item.requestedAt}} · 有效至 {{item.expiresAt}}</small>
+              <small v-if="item.approver">审批人 {{item.approver}} · {{item.decidedAt}} · {{item.decisionComment || '无备注'}}</small>
+            </div>
+            <footer v-if="item.status === 'pending'">
+              <input v-if="isPlatformAdmin" v-model="approvalComment" maxlength="500" placeholder="审批备注（可选）">
+              <template v-if="isPlatformAdmin">
+                <button :disabled="approvalBusyId===item.id" @click="decideApproval(item, 'reject')"><Ban/>拒绝</button>
+                <button class="primary" :disabled="approvalBusyId===item.id" @click="decideApproval(item, 'approve')"><ShieldCheck/>通过并执行</button>
+              </template>
+              <span v-else>等待平台管理员审批，当前命令尚未执行</span>
+            </footer>
+          </article>
+          <div v-if="!visibleApprovals.length" class="empty-access"><ShieldCheck/><strong>暂无高风险命令审批</strong><span>在交互式终端中触发风险规则后，请求会显示在这里</span></div>
+        </div>
+      </section>
+
       <section class="access-card history-card">
         <header class="history-head"><div><h3><History/>历史会话与命令回放</h3><span>会话日志持久化保存，重启后仍可审计和回放</span></div><b>{{filteredHistory.length}} 条</b></header>
         <div class="history-toolbar">
@@ -519,5 +604,5 @@ onBeforeUnmount(() => { stopReplay(); closeInteractiveTerminal(false); clearReco
 </template>
 
 <style scoped>
-.remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}.live-terminal-card{grid-column:1/-1}.live-terminal-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.live-terminal-head>div:first-child{display:grid;gap:4px}.live-terminal-head h3{margin:0}.terminal-actions{display:flex;align-items:center;gap:8px}.terminal-actions b{padding:4px 9px;border-radius:999px;font-size:11px}.terminal-actions b[data-state=offline]{background:#2a1721;color:#fda4af}.terminal-actions b[data-state=connecting]{background:#322712;color:#fcd34d}.terminal-actions b[data-state=online]{background:#0b2f2b;color:#5eead4}.terminal-actions button{display:flex;align-items:center;gap:5px}.xterm-shell{height:430px;margin-top:12px;padding:8px;border:1px solid #16445c;border-radius:8px;background:#020b12;overflow:hidden}.xterm-shell .xterm{height:100%}.terminal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;height:180px;margin-top:12px;border:1px dashed #1b4258;color:#64869a}.terminal-empty svg{width:30px;height:30px;color:#22d3ee}.terminal-empty strong{color:#c9e6f5}.terminal-recording{margin-top:12px;border-top:1px solid #123043}.terminal-recording>header{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.terminal-recording>header>div{display:grid;gap:3px}.terminal-recording>header span{color:#6f91a5;font-size:10px}.terminal-recording>header button{display:flex;align-items:center;gap:5px}.replay-xterm{height:300px;margin-top:0}.terminal-recording+.replay-timeline{max-height:220px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
+.remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}.live-terminal-card{grid-column:1/-1}.live-terminal-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.live-terminal-head>div:first-child{display:grid;gap:4px}.live-terminal-head h3{margin:0}.terminal-actions{display:flex;align-items:center;gap:8px}.terminal-actions b{padding:4px 9px;border-radius:999px;font-size:11px}.terminal-actions b[data-state=offline]{background:#2a1721;color:#fda4af}.terminal-actions b[data-state=connecting]{background:#322712;color:#fcd34d}.terminal-actions b[data-state=online]{background:#0b2f2b;color:#5eead4}.terminal-actions button{display:flex;align-items:center;gap:5px}.xterm-shell{height:430px;margin-top:12px;padding:8px;border:1px solid #16445c;border-radius:8px;background:#020b12;overflow:hidden}.xterm-shell .xterm{height:100%}.terminal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;height:180px;margin-top:12px;border:1px dashed #1b4258;color:#64869a}.terminal-empty svg{width:30px;height:30px;color:#22d3ee}.terminal-empty strong{color:#c9e6f5}.terminal-recording{margin-top:12px;border-top:1px solid #123043}.terminal-recording>header{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.terminal-recording>header>div{display:grid;gap:3px}.terminal-recording>header span{color:#6f91a5;font-size:10px}.terminal-recording>header button{display:flex;align-items:center;gap:5px}.replay-xterm{height:300px;margin-top:0}.terminal-recording+.replay-timeline{max-height:220px}.approval-card{grid-column:1/-1}.approval-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.approval-head>div{display:grid;gap:4px}.approval-head h3{margin:0}.approval-head>div>span{color:#6f91a5}.approval-head>b{padding:5px 10px;border-radius:999px;background:#162c38;color:#8fb2c4;font-size:11px}.approval-head>b[data-active=true]{background:#3a2610;color:#fbbf24}.approval-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:10px;margin-top:12px}.approval-list article{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid #443414;background:#171307}.approval-list article[data-status=approved]{border-color:#14564c;background:#071b19}.approval-list article[data-status=rejected],.approval-list article[data-status=failed]{border-color:#692c3a;background:#1d0b11}.approval-list article[data-status=expired]{border-color:#40515d;background:#101820}.approval-main{display:grid;gap:6px;min-width:0}.approval-main header{display:flex;align-items:center;justify-content:space-between;gap:12px}.approval-main header b{font-size:10px;color:#fbbf24}.approval-main header b[data-status=approved]{color:#5eead4}.approval-main header b[data-status=rejected],.approval-main header b[data-status=failed]{color:#fb7185}.approval-main code{overflow-wrap:anywhere;padding:8px;border-radius:6px;background:#020b12;color:#fde68a;font:11px/1.5 monospace}.approval-main p{margin:0;color:#fca5a5;font-size:12px}.approval-main small{color:#7895a6;font-size:10px}.approval-list footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.approval-list footer input{flex:1;min-width:180px;padding:8px 9px;border:1px solid #4a3a1a;border-radius:6px;background:#080f14;color:#e5eef5}.approval-list footer button{display:flex;align-items:center;gap:5px}.approval-list footer span{color:#fbbf24;font-size:11px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
 </style>
