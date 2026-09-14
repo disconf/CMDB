@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -92,5 +93,73 @@ func TestApprovedTerminalApprovalExecutesOnce(t *testing.T) {
 	}
 	if !strings.Contains(service.terminalApprovals[0].DecisionComment, "已确认") {
 		t.Fatalf("decision comment was not persisted")
+	}
+}
+
+func TestRemoteSessionCollaboratorAccess(t *testing.T) {
+	service := NewService()
+	service.remoteSessions = []RemoteSession{{ID: "session-1", AssetID: "asset-1", AssetName: "host-1", IP: "10.0.0.1", Operator: "owner", Roles: []string{"operator"}, Collaborators: []RemoteSessionCollaborator{}, Status: "active", ExpiresAt: "2099-01-01 00:00:00"}}
+	if _, err := service.AddRemoteSessionCollaborator("session-1", RemoteSessionCollaboratorInput{Username: "viewer1", Access: "readonly"}, "owner", []string{"operator"}); err != nil {
+		t.Fatal(err)
+	}
+	item, _, err := service.sessionForOperator("session-1", "viewer1", []string{"operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.AccessMode != "readonly" {
+		t.Fatalf("expected readonly access, got %q", item.AccessMode)
+	}
+	if _, err = service.AddRemoteSessionCollaborator("session-1", RemoteSessionCollaboratorInput{Username: "viewer2", Access: "control"}, "viewer1", []string{"operator"}); err != ErrRemoteForbidden {
+		t.Fatalf("expected collaborator management to be forbidden, got %v", err)
+	}
+	if _, err = service.RemoveRemoteSessionCollaborator("session-1", "viewer1", "owner", []string{"operator"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = service.sessionForOperator("session-1", "viewer1", []string{"operator"}); err != ErrRemoteForbidden {
+		t.Fatalf("expected removed collaborator to be forbidden, got %v", err)
+	}
+}
+
+func TestRemoteTerminalBroadcastsToCollaborators(t *testing.T) {
+	channel := &RemoteTerminalChannel{subscribers: map[uint64]chan []byte{}, subscriberAccess: map[uint64]string{}}
+	controller, ok := channel.Subscribe("control")
+	if !ok {
+		t.Fatal("subscribe controller")
+	}
+	viewer, ok := channel.Subscribe("readonly")
+	if !ok {
+		t.Fatal("subscribe viewer")
+	}
+	controllerOutput, _ := channel.Output(controller)
+	viewerOutput, _ := channel.Output(viewer)
+	channel.broadcast([]byte("shared terminal output"))
+	for name, output := range map[string]<-chan []byte{"controller": controllerOutput, "viewer": viewerOutput} {
+		select {
+		case chunk := <-output:
+			if string(chunk) != "shared terminal output" {
+				t.Fatalf("%s received %q", name, chunk)
+			}
+		default:
+			t.Fatalf("%s did not receive broadcast", name)
+		}
+	}
+	if remaining := channel.Unsubscribe(controller); remaining != 1 {
+		t.Fatalf("expected one remaining subscriber, got %d", remaining)
+	}
+	if _, controllerOnline := channel.Presence(); controllerOnline {
+		t.Fatal("expected controller offline after unsubscribe")
+	}
+}
+
+func TestCloneRemoteSessionKeepsJSONArrays(t *testing.T) {
+	payload, err := json.Marshal(cloneRemoteSession(RemoteSession{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(payload)
+	for _, field := range []string{`"roles":[]`, `"collaborators":[]`, `"logs":[]`} {
+		if !strings.Contains(encoded, field) {
+			t.Fatalf("expected %s in %s", field, encoded)
+		}
 	}
 }

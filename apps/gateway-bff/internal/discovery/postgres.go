@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS remote_access_sessions(
  credential_id text NOT NULL DEFAULT '',
  operator_name text NOT NULL,
  roles jsonb NOT NULL DEFAULT '[]',
+ collaborators jsonb NOT NULL DEFAULT '[]',
  status text NOT NULL,
  created_at text NOT NULL,
  expires_at text NOT NULL,
@@ -78,6 +79,8 @@ CREATE TABLE IF NOT EXISTS remote_access_sessions(
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remote_access_sessions_time ON remote_access_sessions(updated_at DESC);
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS collaborators jsonb NOT NULL DEFAULT '[]';
+UPDATE remote_access_sessions SET collaborators='[]'::jsonb WHERE jsonb_typeof(collaborators)='null';
 CREATE TABLE IF NOT EXISTS remote_terminal_events(
  session_id text NOT NULL,
  sequence bigint NOT NULL,

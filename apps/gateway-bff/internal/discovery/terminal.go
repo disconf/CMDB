@@ -38,14 +38,21 @@ type TerminalRecording struct {
 }
 
 type RemoteTerminalChannel struct {
-	client    *ssh.Client
-	session   *ssh.Session
-	stdin     io.WriteCloser
-	stdout    io.Reader
-	service   *Service
-	sessionID string
-	closeOnce sync.Once
-	closeErr  error
+	client           *ssh.Client
+	session          *ssh.Session
+	stdin            io.WriteCloser
+	stdout           io.Reader
+	service          *Service
+	sessionID        string
+	mu               sync.Mutex
+	subscribers      map[uint64]chan []byte
+	subscriberAccess map[uint64]string
+	nextSubscriber   uint64
+	closed           bool
+	pumpOnce         sync.Once
+	closeOnce        sync.Once
+	subscribersOnce  sync.Once
+	closeErr         error
 }
 
 var blockedTerminalPatterns = []struct {
@@ -67,9 +74,7 @@ func (s *Service) CreateTerminalTicket(sessionID, operator string, roles []strin
 	if err != nil {
 		return TerminalTicket{}, err
 	}
-	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "terminal") {
-		return TerminalTicket{}, ErrRemoteValidation
-	}
+	_ = item
 	data := make([]byte, 32)
 	if _, err = rand.Read(data); err != nil {
 		return TerminalTicket{}, err
@@ -108,14 +113,53 @@ func (s *Service) ConsumeTerminalTicket(ticket string) (RemoteSession, error) {
 	return item, nil
 }
 
-func (s *Service) OpenRemoteTerminal(sessionID, operator string, roles []string, cols, rows int) (*RemoteTerminalChannel, error) {
+func (s *Service) JoinRemoteTerminal(sessionID, operator string, roles []string, cols, rows int) (*RemoteTerminalChannel, uint64, string, error) {
 	item, _, err := s.sessionForOperator(sessionID, operator, roles)
 	if err != nil {
-		return nil, err
+		return nil, 0, "", err
 	}
-	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "terminal") {
-		return nil, ErrRemoteValidation
+	access := item.AccessMode
+	cols, rows = normalizeTerminalSize(cols, rows)
+
+	s.mu.Lock()
+	channel := s.terminals[sessionID]
+	s.mu.Unlock()
+	if channel != nil {
+		subscriber, ok := channel.Subscribe(access)
+		if !ok {
+			return nil, 0, "", ErrRemoteValidation
+		}
+		return channel, subscriber, access, nil
 	}
+	if access != "control" {
+		return nil, 0, "", ErrRemoteForbidden
+	}
+
+	channel, err = s.newRemoteTerminalChannel(item, cols, rows)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	s.mu.Lock()
+	existing := s.terminals[sessionID]
+	if existing == nil {
+		s.terminals[sessionID] = channel
+	}
+	s.mu.Unlock()
+	if existing != nil {
+		_ = channel.Close()
+		channel = existing
+	}
+	subscriber, ok := channel.Subscribe(access)
+	if !ok {
+		return nil, 0, "", ErrRemoteValidation
+	}
+	if existing == nil {
+		channel.startPump()
+	}
+	return channel, subscriber, access, nil
+}
+
+func normalizeTerminalSize(cols, rows int) (int, int) {
 	if cols < 40 {
 		cols = 120
 	}
@@ -128,6 +172,10 @@ func (s *Service) OpenRemoteTerminal(sessionID, operator string, roles []string,
 	if rows > 200 {
 		rows = 200
 	}
+	return cols, rows
+}
+
+func (s *Service) newRemoteTerminalChannel(item RemoteSession, cols, rows int) (*RemoteTerminalChannel, error) {
 	username, secret, err := s.resolveRemoteCredential(item.CredentialID)
 	if err != nil {
 		return nil, err
@@ -164,11 +212,7 @@ func (s *Service) OpenRemoteTerminal(sessionID, operator string, roles []string,
 		_ = client.Close()
 		return nil, err
 	}
-	channel := &RemoteTerminalChannel{client: client, session: session, stdin: stdin, stdout: stdout, service: s, sessionID: sessionID}
-	s.mu.Lock()
-	s.terminals[sessionID] = channel
-	s.mu.Unlock()
-	return channel, nil
+	return &RemoteTerminalChannel{client: client, session: session, stdin: stdin, stdout: stdout, service: s, sessionID: item.ID, subscribers: map[uint64]chan []byte{}, subscriberAccess: map[uint64]string{}}, nil
 }
 
 func (c *RemoteTerminalChannel) Read(p []byte) (int, error) {
@@ -186,6 +230,100 @@ func (c *RemoteTerminalChannel) Resize(cols, rows int) error {
 	return c.session.WindowChange(rows, cols)
 }
 
+func (c *RemoteTerminalChannel) Subscribe(access string) (uint64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, false
+	}
+	c.nextSubscriber++
+	subscriber := c.nextSubscriber
+	c.subscribers[subscriber] = make(chan []byte, 512)
+	c.subscriberAccess[subscriber] = access
+	return subscriber, true
+}
+
+func (c *RemoteTerminalChannel) Output(subscriber uint64) (<-chan []byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	output, ok := c.subscribers[subscriber]
+	return output, ok
+}
+
+func (c *RemoteTerminalChannel) Unsubscribe(subscriber uint64) int {
+	c.mu.Lock()
+	output, ok := c.subscribers[subscriber]
+	if ok {
+		delete(c.subscribers, subscriber)
+		delete(c.subscriberAccess, subscriber)
+		close(output)
+	}
+	remaining := len(c.subscribers)
+	c.mu.Unlock()
+	return remaining
+}
+
+func (c *RemoteTerminalChannel) Presence() (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	controllerOnline := false
+	for _, access := range c.subscriberAccess {
+		if access == "control" {
+			controllerOnline = true
+			break
+		}
+	}
+	return len(c.subscribers), controllerOnline
+}
+
+func (c *RemoteTerminalChannel) startPump() {
+	c.pumpOnce.Do(func() {
+		go func() {
+			defer c.Close()
+			buffer := make([]byte, 8192)
+			for {
+				count, readErr := c.stdout.Read(buffer)
+				if count > 0 {
+					chunk := append([]byte(nil), buffer[:count]...)
+					_ = c.service.AppendTerminalEvent(c.sessionID, "output", string(chunk))
+					c.broadcast(chunk)
+				}
+				if readErr != nil {
+					return
+				}
+			}
+		}()
+	})
+}
+
+func (c *RemoteTerminalChannel) broadcast(data []byte) {
+	chunk := append([]byte(nil), data...)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for subscriber, output := range c.subscribers {
+		select {
+		case output <- chunk:
+		default:
+			delete(c.subscribers, subscriber)
+			delete(c.subscriberAccess, subscriber)
+			close(output)
+		}
+	}
+}
+
+func (c *RemoteTerminalChannel) closeSubscribers() {
+	c.subscribersOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		for subscriber, output := range c.subscribers {
+			delete(c.subscribers, subscriber)
+			delete(c.subscriberAccess, subscriber)
+			close(output)
+		}
+		c.mu.Unlock()
+	})
+}
+
 func (c *RemoteTerminalChannel) Close() error {
 	c.closeOnce.Do(func() {
 		_ = c.stdin.Close()
@@ -198,6 +336,7 @@ func (c *RemoteTerminalChannel) Close() error {
 			}
 			c.service.mu.Unlock()
 		}
+		c.closeSubscribers()
 	})
 	return c.closeErr
 }

@@ -74,20 +74,38 @@ type RemoteSessionLog struct {
 	DurationMS int64  `json:"durationMs,omitempty"`
 }
 
+type RemoteSessionCollaborator struct {
+	Username string `json:"username"`
+	Access   string `json:"access"`
+	AddedBy  string `json:"addedBy"`
+	AddedAt  string `json:"addedAt"`
+}
+
+type RemoteSessionCollaboratorInput struct {
+	Username string `json:"username"`
+	Access   string `json:"access"`
+}
+
 type RemoteSession struct {
-	ID           string             `json:"id"`
-	AssetID      string             `json:"assetId"`
-	AssetName    string             `json:"assetName"`
-	IP           string             `json:"ip"`
-	Port         int                `json:"port"`
-	CredentialID string             `json:"credentialId"`
-	Operator     string             `json:"operator"`
-	Roles        []string           `json:"roles"`
-	Status       string             `json:"status"`
-	CreatedAt    string             `json:"createdAt"`
-	ExpiresAt    string             `json:"expiresAt"`
-	ClosedAt     string             `json:"closedAt,omitempty"`
-	Logs         []RemoteSessionLog `json:"logs"`
+	ID                string                      `json:"id"`
+	AssetID           string                      `json:"assetId"`
+	AssetName         string                      `json:"assetName"`
+	IP                string                      `json:"ip"`
+	Port              int                         `json:"port"`
+	CredentialID      string                      `json:"credentialId"`
+	Operator          string                      `json:"operator"`
+	Roles             []string                    `json:"roles"`
+	Collaborators     []RemoteSessionCollaborator `json:"collaborators"`
+	Status            string                      `json:"status"`
+	CreatedAt         string                      `json:"createdAt"`
+	ExpiresAt         string                      `json:"expiresAt"`
+	ClosedAt          string                      `json:"closedAt,omitempty"`
+	Logs              []RemoteSessionLog          `json:"logs"`
+	AccessMode        string                      `json:"accessMode,omitempty"`
+	ActiveConnections int                         `json:"activeConnections"`
+	ControllerOnline  bool                        `json:"controllerOnline"`
+	CurrentUser       string                      `json:"-"`
+	CurrentRoles      []string                    `json:"-"`
 }
 
 func remoteGrantID() string {
@@ -226,16 +244,21 @@ func (s *Service) RemoteSessions(username string, roles []string) []RemoteSessio
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	admin := remoteContainsString(roles, "admin") || remoteContainsString(roles, "platform-admin")
 	out := []RemoteSession{}
 	for i := range s.remoteSessions {
 		if s.remoteSessions[i].Status == "closed" || parseRemoteTime(s.remoteSessions[i].ExpiresAt).Before(now) {
 			continue
 		}
-		if !admin && s.remoteSessions[i].Operator != username {
+		access := remoteSessionAccess(s.remoteSessions[i], username, roles)
+		if access == "" {
 			continue
 		}
-		out = append(out, cloneRemoteSession(s.remoteSessions[i]))
+		item := cloneRemoteSession(s.remoteSessions[i])
+		item.AccessMode = access
+		item.CurrentUser = username
+		item.CurrentRoles = append([]string(nil), roles...)
+		s.populateRemoteSessionRuntime(&item)
+		out = append(out, item)
 	}
 	return out
 }
@@ -255,7 +278,7 @@ func (s *Service) CreateRemoteSession(assetID, credentialID, operator string, ro
 		return RemoteSession{}, err
 	}
 	now := time.Now()
-	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(30 * time.Minute).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
+	item := RemoteSession{ID: remoteSessionID(), AssetID: asset.ID, AssetName: asset.Name, IP: asset.IP, Port: 22, CredentialID: credentialID, Operator: operator, Roles: append([]string(nil), roles...), Collaborators: []RemoteSessionCollaborator{}, Status: "active", CreatedAt: now.Format("2006-01-02 15:04:05"), ExpiresAt: now.Add(30 * time.Minute).Format("2006-01-02 15:04:05"), Logs: []RemoteSessionLog{{Time: now.Format("15:04:05"), Level: "success", Kind: "session", Message: "远程会话已建立"}}}
 	s.mu.Lock()
 	s.remoteSessions = append([]RemoteSession{item}, s.remoteSessions...)
 	s.mu.Unlock()
@@ -272,6 +295,9 @@ func (s *Service) ExecuteRemoteSession(sessionID, command, operator string, role
 	item, _, err := s.sessionForOperator(sessionID, operator, roles)
 	if err != nil {
 		return RemoteSession{}, err
+	}
+	if item.AccessMode != "control" {
+		return RemoteSession{}, ErrRemoteForbidden
 	}
 	username, secret, err := s.resolveRemoteCredential(item.CredentialID)
 	if err != nil {
@@ -303,6 +329,9 @@ func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reade
 	item, _, err := s.sessionForOperator(sessionID, operator, roles)
 	if err != nil {
 		return err
+	}
+	if item.AccessMode != "control" {
+		return ErrRemoteForbidden
 	}
 	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "file") {
 		return ErrRemoteValidation
@@ -344,6 +373,9 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	if err != nil {
 		return nil, err
 	}
+	if item.AccessMode != "control" {
+		return nil, ErrRemoteForbidden
+	}
 	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "file") {
 		return nil, ErrRemoteValidation
 	}
@@ -372,7 +404,7 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	return output, nil
 }
 func (s *Service) CloseRemoteSession(sessionID, operator string, roles []string) error {
-	if _, _, err := s.sessionForOperator(sessionID, operator, roles); err != nil {
+	if _, _, err := s.sessionManagerFor(sessionID, operator, roles); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -401,6 +433,171 @@ func (s *Service) CloseRemoteSession(sessionID, operator string, roles []string)
 	return nil
 }
 
+func (s *Service) ForceDisconnectRemoteSession(sessionID, operator string, roles []string) error {
+	if !remoteContainsString(roles, "admin") && !remoteContainsString(roles, "platform-admin") {
+		return ErrRemoteForbidden
+	}
+	now := time.Now()
+	s.mu.Lock()
+	var closed RemoteSession
+	found := false
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID != sessionID || s.remoteSessions[i].Status != "active" {
+			continue
+		}
+		s.remoteSessions[i].Status = "closed"
+		s.remoteSessions[i].ClosedAt = now.Format("2006-01-02 15:04:05")
+		s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, RemoteSessionLog{Time: now.Format("15:04:05"), Level: "error", Kind: "session", Message: "管理员 " + operator + " 强制断开远程会话"})
+		closed = cloneRemoteSession(s.remoteSessions[i])
+		found = true
+		break
+	}
+	s.mu.Unlock()
+	if !found {
+		return ErrNotFound
+	}
+	if s.db != nil {
+		_ = s.persistRemoteSession(closed)
+	}
+	s.CloseRemoteTerminal(sessionID)
+	return nil
+}
+
+func (s *Service) RemoteSessionCollaborators(sessionID, operator string, roles []string) ([]RemoteSessionCollaborator, error) {
+	item, _, err := s.sessionForOperator(sessionID, operator, roles)
+	if err != nil {
+		return nil, err
+	}
+	return append([]RemoteSessionCollaborator(nil), item.Collaborators...), nil
+}
+
+func (s *Service) AddRemoteSessionCollaborator(sessionID string, input RemoteSessionCollaboratorInput, operator string, roles []string) ([]RemoteSessionCollaborator, error) {
+	username := strings.ToLower(strings.TrimSpace(input.Username))
+	access := strings.ToLower(strings.TrimSpace(input.Access))
+	if access == "read" {
+		access = "readonly"
+	}
+	if username == "" || (access != "control" && access != "readonly") {
+		return nil, ErrRemoteValidation
+	}
+	item, _, err := s.sessionManagerFor(sessionID, operator, roles)
+	if err != nil {
+		return nil, err
+	}
+	if item.Operator == username {
+		return nil, ErrRemoteValidation
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	s.mu.Lock()
+	var updated RemoteSession
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID != sessionID {
+			continue
+		}
+		for _, collaborator := range s.remoteSessions[i].Collaborators {
+			if collaborator.Username == username {
+				s.mu.Unlock()
+				return nil, ErrRemoteValidation
+			}
+		}
+		s.remoteSessions[i].Collaborators = append(s.remoteSessions[i].Collaborators, RemoteSessionCollaborator{Username: username, Access: access, AddedBy: operator, AddedAt: now})
+		label := "可控"
+		if access == "readonly" {
+			label = "只读"
+		}
+		s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, RemoteSessionLog{Time: time.Now().Format("15:04:05"), Level: "success", Kind: "collaborator", Message: "添加协作者 " + username + "（" + label + "）"})
+		updated = cloneRemoteSession(s.remoteSessions[i])
+		break
+	}
+	s.mu.Unlock()
+	if updated.ID == "" {
+		return nil, ErrNotFound
+	}
+	if s.db != nil {
+		_ = s.persistRemoteSession(updated)
+	}
+	return append([]RemoteSessionCollaborator(nil), updated.Collaborators...), nil
+}
+
+func (s *Service) RemoveRemoteSessionCollaborator(sessionID, username, operator string, roles []string) ([]RemoteSessionCollaborator, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return nil, ErrRemoteValidation
+	}
+	if _, _, err := s.sessionManagerFor(sessionID, operator, roles); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	var updated RemoteSession
+	for i := range s.remoteSessions {
+		if s.remoteSessions[i].ID != sessionID {
+			continue
+		}
+		collaborators := s.remoteSessions[i].Collaborators[:0]
+		removed := false
+		for _, collaborator := range s.remoteSessions[i].Collaborators {
+			if collaborator.Username == username {
+				removed = true
+				continue
+			}
+			collaborators = append(collaborators, collaborator)
+		}
+		if !removed {
+			s.mu.Unlock()
+			return nil, ErrNotFound
+		}
+		s.remoteSessions[i].Collaborators = collaborators
+		s.remoteSessions[i].Logs = append(s.remoteSessions[i].Logs, RemoteSessionLog{Time: time.Now().Format("15:04:05"), Level: "success", Kind: "collaborator", Message: "移除协作者 " + username})
+		updated = cloneRemoteSession(s.remoteSessions[i])
+		break
+	}
+	s.mu.Unlock()
+	if updated.ID == "" {
+		return nil, ErrNotFound
+	}
+	if s.db != nil {
+		_ = s.persistRemoteSession(updated)
+	}
+	return append([]RemoteSessionCollaborator(nil), updated.Collaborators...), nil
+}
+
+func (s *Service) ExportTerminalRecording(sessionID, operator string, roles []string) ([]byte, error) {
+	recording, err := s.TerminalRecording(sessionID, operator, roles)
+	if err != nil {
+		return nil, err
+	}
+	var output strings.Builder
+	output.WriteString("CMDB remote terminal recording\nSession: " + sessionID + "\n\n")
+	for _, event := range recording.Events {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(event.Data)
+		if decodeErr != nil {
+			continue
+		}
+		output.WriteString("[" + event.CreatedAt + "] [" + event.Direction + "]\n")
+		output.Write(decoded)
+		if len(decoded) > 0 && decoded[len(decoded)-1] != '\n' {
+			output.WriteByte('\n')
+		}
+	}
+	return []byte(output.String()), nil
+}
+
+func (s *Service) ExportCommandLog(sessionID, operator string, roles []string) ([]byte, error) {
+	item, err := s.RemoteSessionReplay(sessionID, operator, roles)
+	if err != nil {
+		return nil, err
+	}
+	var output strings.Builder
+	output.WriteString("CMDB remote session command log\nSession: " + item.ID + "\nAsset: " + item.AssetName + "/" + item.IP + "\nOperator: " + item.Operator + "\n\n")
+	for _, entry := range item.Logs {
+		if entry.Kind != "command" && entry.Kind != "interactive-command" && entry.Kind != "risk-blocked" && entry.Kind != "command-approved" && entry.Kind != "command-rejected" {
+			continue
+		}
+		output.WriteString("[" + entry.Time + "] [" + entry.Level + "] [" + entry.Kind + "] " + entry.Message + "\n")
+	}
+	return []byte(output.String()), nil
+}
+
 func (s *Service) sessionForOperator(id, operator string, roles []string) (RemoteSession, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -409,13 +606,51 @@ func (s *Service) sessionForOperator(id, operator string, roles []string) (Remot
 			if item.Status != "active" || parseRemoteTime(item.ExpiresAt).Before(time.Now()) {
 				return RemoteSession{}, -1, ErrRemoteValidation
 			}
-			if item.Operator != operator && !remoteContainsString(roles, "admin") && !remoteContainsString(roles, "platform-admin") {
-				return RemoteSession{}, -1, ErrRemoteValidation
+			access := remoteSessionAccess(item, operator, roles)
+			if access == "" {
+				return RemoteSession{}, -1, ErrRemoteForbidden
 			}
-			return cloneRemoteSession(item), i, nil
+			item = cloneRemoteSession(item)
+			item.AccessMode = access
+			item.CurrentUser = operator
+			item.CurrentRoles = append([]string(nil), roles...)
+			s.populateRemoteSessionRuntime(&item)
+			return item, i, nil
 		}
 	}
 	return RemoteSession{}, -1, ErrNotFound
+}
+
+func (s *Service) sessionManagerFor(id, operator string, roles []string) (RemoteSession, int, error) {
+	item, index, err := s.sessionForOperator(id, operator, roles)
+	if err != nil {
+		return RemoteSession{}, -1, err
+	}
+	if item.Operator != operator && !remoteContainsString(roles, "admin") && !remoteContainsString(roles, "platform-admin") {
+		return RemoteSession{}, -1, ErrRemoteForbidden
+	}
+	return item, index, nil
+}
+
+func remoteSessionAccess(item RemoteSession, operator string, roles []string) string {
+	if item.Operator == operator || remoteContainsString(roles, "admin") || remoteContainsString(roles, "platform-admin") {
+		return "control"
+	}
+	for _, collaborator := range item.Collaborators {
+		if collaborator.Username == operator {
+			if collaborator.Access == "readonly" {
+				return "readonly"
+			}
+			return "control"
+		}
+	}
+	return ""
+}
+
+func (s *Service) populateRemoteSessionRuntime(item *RemoteSession) {
+	if channel := s.terminals[item.ID]; channel != nil {
+		item.ActiveConnections, item.ControllerOnline = channel.Presence()
+	}
 }
 func (s *Service) appendSessionLog(id, level, kind, message string, duration time.Duration) (RemoteSession, bool) {
 	s.mu.Lock()
@@ -464,7 +699,18 @@ func (s *Service) runTrustedSSH(assetID, ip string, port int, command, username,
 }
 func cloneRemoteSession(item RemoteSession) RemoteSession {
 	item.Roles = append([]string(nil), item.Roles...)
+	item.Collaborators = append([]RemoteSessionCollaborator(nil), item.Collaborators...)
 	item.Logs = append([]RemoteSessionLog(nil), item.Logs...)
+	if item.Roles == nil {
+		item.Roles = []string{}
+	}
+	if item.Collaborators == nil {
+		item.Collaborators = []RemoteSessionCollaborator{}
+	}
+	if item.Logs == nil {
+		item.Logs = []RemoteSessionLog{}
+	}
+	item.CurrentRoles = append([]string(nil), item.CurrentRoles...)
 	return item
 }
 func parseRemoteTime(value string) time.Time {
@@ -698,13 +944,18 @@ func (s *Service) deleteHostKeyRow(id string) error {
 func (s *Service) RemoteSessionHistory(username string, roles []string) []RemoteSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	admin := remoteContainsString(roles, "admin") || remoteContainsString(roles, "platform-admin")
 	out := []RemoteSession{}
 	for i := 0; i < len(s.remoteSessions) && len(out) < 200; i++ {
-		if !admin && s.remoteSessions[i].Operator != username {
+		access := remoteSessionAccess(s.remoteSessions[i], username, roles)
+		if access == "" {
 			continue
 		}
-		out = append(out, cloneRemoteSession(s.remoteSessions[i]))
+		item := cloneRemoteSession(s.remoteSessions[i])
+		item.AccessMode = access
+		item.CurrentUser = username
+		item.CurrentRoles = append([]string(nil), roles...)
+		s.populateRemoteSessionRuntime(&item)
+		out = append(out, item)
 	}
 	return out
 }
@@ -715,10 +966,22 @@ func (s *Service) RemoteSessionReplay(id, username string, roles []string) (Remo
 	admin := remoteContainsString(roles, "admin") || remoteContainsString(roles, "platform-admin")
 	for i := range s.remoteSessions {
 		item := s.remoteSessions[i]
-		if item.ID != id || (!admin && item.Operator != username) {
+		if item.ID != id {
 			continue
 		}
-		return cloneRemoteSession(item), nil
+		access := remoteSessionAccess(item, username, roles)
+		if access == "" {
+			continue
+		}
+		item = cloneRemoteSession(item)
+		item.AccessMode = access
+		item.CurrentUser = username
+		item.CurrentRoles = append([]string(nil), roles...)
+		s.populateRemoteSessionRuntime(&item)
+		if admin && access == "" {
+			item.AccessMode = "control"
+		}
+		return item, nil
 	}
 	return RemoteSession{}, ErrNotFound
 }
@@ -731,7 +994,7 @@ func (s *Service) loadRemoteSessions() error {
 	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted', closed_at=CASE WHEN closed_at='' THEN $1 ELSE closed_at END, updated_at=now() WHERE status='active'`, now); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,status,created_at,expires_at,closed_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
+	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,closed_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
 		return err
 	}
@@ -739,14 +1002,18 @@ func (s *Service) loadRemoteSessions() error {
 	out := []RemoteSession{}
 	for rows.Next() {
 		var item RemoteSession
-		var roles, logs []byte
-		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.ClosedAt, &logs); err != nil {
+		var roles, collaborators, logs []byte
+		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.ClosedAt, &logs); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(roles, &item.Roles)
+		_ = json.Unmarshal(collaborators, &item.Collaborators)
 		_ = json.Unmarshal(logs, &item.Logs)
 		if item.Roles == nil {
 			item.Roles = []string{}
+		}
+		if item.Collaborators == nil {
+			item.Collaborators = []RemoteSessionCollaborator{}
 		}
 		if item.Logs == nil {
 			item.Logs = []RemoteSessionLog{}
@@ -761,8 +1028,18 @@ func (s *Service) persistRemoteSession(item RemoteSession) error {
 	if s.db == nil {
 		return nil
 	}
+	if item.Roles == nil {
+		item.Roles = []string{}
+	}
+	if item.Collaborators == nil {
+		item.Collaborators = []RemoteSessionCollaborator{}
+	}
+	if item.Logs == nil {
+		item.Logs = []RemoteSessionLog{}
+	}
 	roles, _ := json.Marshal(item.Roles)
+	collaborators, _ := json.Marshal(item.Collaborators)
 	logs, _ := json.Marshal(item.Logs)
-	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,status,created_at,expires_at,closed_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,closed_at=excluded.closed_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, item.Status, item.CreatedAt, item.ExpiresAt, item.ClosedAt, logs)
+	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,closed_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,closed_at=excluded.closed_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.ClosedAt, logs)
 	return err
 }

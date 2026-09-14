@@ -19,6 +19,7 @@ type terminalSocketMessage struct {
 	Type     string                      `json:"type"`
 	Data     string                      `json:"data,omitempty"`
 	Message  string                      `json:"message,omitempty"`
+	Access   string                      `json:"access,omitempty"`
 	Cols     int                         `json:"cols,omitempty"`
 	Rows     int                         `json:"rows,omitempty"`
 	Approval *discovery.TerminalApproval `json:"approval,omitempty"`
@@ -79,7 +80,7 @@ func (g *terminalInputGuard) process(data string) (forward string, command strin
 
 func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service, auditService *audit.Service, discoveryService *discovery.Service) {
 	mux.HandleFunc("POST /api/v1/discovery/remote-sessions/{id}/terminal-ticket", func(w http.ResponseWriter, r *http.Request) {
-		if !authorize(w, r, authService, "discovery:manage") {
+		if !authorize(w, r, authService, "discovery:view") {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
@@ -117,13 +118,17 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 			return
 		}
 		defer conn.Close()
-		channel, err := discoveryService.OpenRemoteTerminal(item.ID, item.Operator, item.Roles, cols, rows)
+		channel, subscriber, access, err := discoveryService.JoinRemoteTerminal(item.ID, item.Operator, item.Roles, cols, rows)
 		if err != nil {
 			_ = conn.WriteJSON(terminalSocketMessage{Type: "error", Message: err.Error()})
 			return
 		}
-		defer channel.Close()
-		auditService.Record(item.Operator, "remote.session.terminal_open", item.ID, item.AssetName+"/"+item.IP)
+		defer func() {
+			if channel.Unsubscribe(subscriber) == 0 {
+				_ = channel.Close()
+			}
+		}()
+		auditService.Record(item.Operator, "remote.session.terminal_open", item.ID, item.AssetName+"/"+item.IP+" | "+access)
 		discoveryService.RecordRemoteSessionEvent(item.ID, "success", "terminal-open", "交互式终端已连接")
 		defer discoveryService.RecordRemoteSessionEvent(item.ID, "success", "terminal-close", "交互式终端已断开")
 
@@ -133,24 +138,25 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 			defer writeMu.Unlock()
 			return conn.WriteJSON(message)
 		}
+		if err = writeMessage(terminalSocketMessage{Type: "ready", Access: access, Message: "terminal ready"}); err != nil {
+			return
+		}
+		output, ok := channel.Output(subscriber)
+		if !ok {
+			_ = writeMessage(terminalSocketMessage{Type: "error", Message: "terminal subscription unavailable"})
+			return
+		}
 		done := make(chan struct{})
 		var doneOnce sync.Once
 		closeDone := func() { doneOnce.Do(func() { close(done) }) }
 		go func() {
 			defer closeDone()
-			buffer := make([]byte, 8192)
-			for {
-				count, readErr := channel.Read(buffer)
-				if count > 0 {
-					chunk := append([]byte(nil), buffer[:count]...)
-					_ = discoveryService.AppendTerminalEvent(item.ID, "output", string(chunk))
-					_ = writeMessage(terminalSocketMessage{Type: "output", Data: base64.StdEncoding.EncodeToString(chunk)})
-				}
-				if readErr != nil {
-					_ = writeMessage(terminalSocketMessage{Type: "closed", Message: readErr.Error()})
+			for chunk := range output {
+				if writeErr := writeMessage(terminalSocketMessage{Type: "output", Data: base64.StdEncoding.EncodeToString(chunk)}); writeErr != nil {
 					return
 				}
 			}
+			_ = writeMessage(terminalSocketMessage{Type: "closed", Message: "remote terminal closed"})
 		}()
 		go func() {
 			<-done
@@ -166,6 +172,10 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 			}
 			switch message.Type {
 			case "input":
+				if access != "control" {
+					_ = writeMessage(terminalSocketMessage{Type: "blocked", Message: "当前为只读协作者，不能向远程终端发送输入"})
+					continue
+				}
 				forward, command, approvalCommand, blocked := guard.process(message.Data)
 				_ = discoveryService.AppendTerminalEvent(item.ID, "input", message.Data)
 				if forward != "" {
@@ -200,6 +210,86 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 				return
 			}
 		}
+	})
+
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/collaborators", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		collaborators, err := discoveryService.RemoteSessionCollaborators(r.PathValue("id"), user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "remote session not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, collaborators)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-sessions/{id}/collaborators", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		var input discovery.RemoteSessionCollaboratorInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid collaborator"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		collaborators, err := discoveryService.AddRemoteSessionCollaborator(r.PathValue("id"), input, user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.collaborator_add", r.PathValue("id"), input.Username+" | "+input.Access)
+		writeJSON(w, http.StatusCreated, collaborators)
+	})
+	mux.HandleFunc("DELETE /api/v1/discovery/remote-sessions/{id}/collaborators/{username}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		collaborators, err := discoveryService.RemoveRemoteSessionCollaborator(r.PathValue("id"), r.PathValue("username"), user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.collaborator_remove", r.PathValue("id"), r.PathValue("username"))
+		writeJSON(w, http.StatusOK, collaborators)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-sessions/{id}/force-disconnect", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := discoveryService.ForceDisconnectRemoteSession(r.PathValue("id"), user.Username, user.Roles); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.session.force_disconnect", r.PathValue("id"), "管理员强制断开")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/terminal-recording/export", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		content, err := discoveryService.ExportTerminalRecording(r.PathValue("id"), user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "terminal recording not found"})
+			return
+		}
+		writeTerminalExport(w, r.PathValue("id")+"-terminal-recording.txt", content)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/command-log/export", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		content, err := discoveryService.ExportCommandLog(r.PathValue("id"), user.Username, user.Roles)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "remote command log not found"})
+			return
+		}
+		writeTerminalExport(w, r.PathValue("id")+"-command-log.txt", content)
 	})
 
 	mux.HandleFunc("GET /api/v1/discovery/remote-terminal-approvals", func(w http.ResponseWriter, r *http.Request) {
@@ -241,4 +331,11 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		auditService.Record(user.Username, action, item.ID, item.AssetName+"/"+item.IP+" | "+item.Command)
 		writeJSON(w, http.StatusOK, item)
 	})
+}
+
+func writeTerminalExport(w http.ResponseWriter, filename string, content []byte) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
 }

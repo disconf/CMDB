@@ -12,11 +12,12 @@ type HostKey = { id:string; assetId:string; host:string; port:number; keyType:st
 type HostKeyProbe = { assetId:string; host:string; port:number; keyType:string; fingerprint:string; publicKey:string; trusted:boolean; changed:boolean; trustedFingerprint:string }
 type Grant = { id:string; subjectType:string; subject:string; assetId:string; projectGroup:string; permissions:string[]; enabled:boolean; createdBy:string }
 type SessionLog = { time:string; level:string; kind?:string; message:string; durationMs?:number }
-type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; logs:SessionLog[] }
+type Collaborator = { username:string; access:'control'|'readonly'; addedBy:string; addedAt:string }
+type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; collaborators:Collaborator[]; accessMode?:'control'|'readonly'; activeConnections:number; controllerOnline:boolean; logs:SessionLog[] }
 type TerminalEvent = { sequence:number; direction:string; data:string; createdAt:string }
 type TerminalRecording = { events:TerminalEvent[]; truncated:boolean }
 type TerminalApproval = { id:string; sessionId:string; assetId:string; assetName:string; ip:string; operator:string; command:string; reason:string; status:string; requestedAt:string; expiresAt:string; decidedAt?:string; approver?:string; decisionComment?:string }
-type TerminalSocketMessage = { type:string; data?:string; message?:string; cols?:number; rows?:number; approval?:TerminalApproval }
+type TerminalSocketMessage = { type:string; data?:string; message?:string; access?:'control'|'readonly'; cols?:number; rows?:number; approval?:TerminalApproval }
 
 const auth = useAuthStore()
 const assets = ref<Asset[]>([])
@@ -50,10 +51,13 @@ const recordingEvents = ref<TerminalEvent[]>([])
 const terminalApprovals = ref<TerminalApproval[]>([])
 const approvalComment = ref('')
 const approvalBusyId = ref('')
+const terminalAccess = ref<'control'|'readonly'>('control')
+const watermarkTime = ref(new Date().toLocaleString('zh-CN', { hour12:false }))
 const interactiveTerminalElement = ref<HTMLElement>()
 const replayTerminalElement = ref<HTMLElement>()
 let replayTimer: ReturnType<typeof setInterval> | undefined
 let approvalPoll: ReturnType<typeof setInterval> | undefined
+let watermarkTimer: ReturnType<typeof setInterval> | undefined
 let recordingTimers: ReturnType<typeof setTimeout>[] = []
 let terminalInstance: XTerm | undefined
 let terminalFit: FitAddon | undefined
@@ -61,6 +65,7 @@ let terminalSocket: WebSocket | undefined
 let replayTerminal: XTerm | undefined
 let replayFit: FitAddon | undefined
 const grantForm = ref({ subjectType:'user', subject:'admin', scopeType:'project', assetId:'', projectGroup:'', permissions:['terminal', 'file'] })
+const collaboratorForm = ref({ username:'', access:'readonly' as 'control'|'readonly' })
 
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
 const selectedSession = computed(() => sessions.value.find(item => item.id === selectedSessionId.value))
@@ -75,6 +80,9 @@ const filteredHistory = computed(() => {
   })
 })
 const isPlatformAdmin = computed(() => auth.user?.roles.some(role => role === 'admin' || role === 'platform-admin') ?? false)
+const canManageSelectedSession = computed(() => Boolean(selectedSession.value && (isPlatformAdmin.value || selectedSession.value.operator === auth.user?.username)))
+const terminalReadOnly = computed(() => terminalAccess.value === 'readonly' || selectedSession.value?.accessMode === 'readonly')
+const watermarkText = computed(() => `${auth.user?.username || 'unknown'} · ${watermarkTime.value} · ${selectedSession.value?.assetName || 'CMDB 远程运维'}`)
 const pendingApprovalCount = computed(() => terminalApprovals.value.filter(item => item.status === 'pending').length)
 const visibleApprovals = computed(() => terminalApprovals.value
   .filter(item => item.status === 'pending' || item.sessionId === selectedSessionId.value)
@@ -208,6 +216,7 @@ async function createSession() {
   try {
     const item = await request<Session>('/api/v1/discovery/remote-sessions', { method:'POST', body:JSON.stringify({ assetId:selectedAssetId.value, credentialId:credentialId.value }) })
     selectedSessionId.value = item.id
+    terminalAccess.value = item.accessMode === 'readonly' ? 'readonly' : 'control'
     message.value = '远程会话已建立，操作记录会自动保存'
     await load()
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '会话建立失败' }
@@ -248,6 +257,54 @@ async function closeSession() {
   catch (reason) { error.value = reason instanceof Error ? reason.message : '关闭会话失败' }
 }
 
+async function addCollaborator() {
+  if (!selectedSessionId.value || !collaboratorForm.value.username.trim()) return
+  try {
+    await request(`/api/v1/discovery/remote-sessions/${encodeURIComponent(selectedSessionId.value)}/collaborators`, {
+      method:'POST',
+      body:JSON.stringify(collaboratorForm.value),
+    })
+    collaboratorForm.value.username = ''
+    message.value = '协作者已加入当前远程会话'
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '添加协作者失败' }
+}
+
+async function removeCollaborator(item:Collaborator) {
+  if (!selectedSessionId.value || !confirm(`移除协作者 ${item.username}？`)) return
+  try {
+    await request(`/api/v1/discovery/remote-sessions/${encodeURIComponent(selectedSessionId.value)}/collaborators/${encodeURIComponent(item.username)}`, { method:'DELETE' })
+    message.value = `已移除协作者 ${item.username}`
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '移除协作者失败' }
+}
+
+async function forceDisconnectSession() {
+  if (!selectedSessionId.value || !confirm('确认强制断开该远程会话及全部协作者连接？')) return
+  try {
+    await request(`/api/v1/discovery/remote-sessions/${encodeURIComponent(selectedSessionId.value)}/force-disconnect`, { method:'POST' })
+    closeInteractiveTerminal(false)
+    message.value = '远程会话已由管理员强制断开'
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '强制断开失败' }
+}
+
+async function downloadExport(kind:'terminal-recording'|'command-log') {
+  if (!selectedSessionId.value) return
+  try {
+    const response = await fetch(`/api/v1/discovery/remote-sessions/${encodeURIComponent(selectedSessionId.value)}/${kind}/export`, { headers:{ Authorization:`Bearer ${auth.token}` } })
+    if (!response.ok) throw new Error(`导出失败 (${response.status})`)
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${selectedSession.value?.assetName || 'remote-session'}-${kind}.txt`
+    link.click()
+    URL.revokeObjectURL(url)
+    message.value = kind === 'terminal-recording' ? '终端录像已导出' : '命令审计日志已导出'
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '审计记录导出失败' }
+}
+
 function decodeTerminalData(value:string) {
   const binary = atob(value)
   const bytes = new Uint8Array(binary.length)
@@ -275,6 +332,7 @@ async function ensureInteractiveTerminal() {
     terminalInstance.loadAddon(terminalFit)
     terminalInstance.open(interactiveTerminalElement.value)
     terminalInstance.onData(data => {
+      if (terminalReadOnly.value) return
       if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type:'input', data }))
     })
     terminalInstance.onResize(({ cols, rows }) => {
@@ -300,7 +358,9 @@ async function openInteractiveTerminal() {
   if (!selectedSessionId.value || terminalConnecting.value) return
   terminalMode.value = true
   terminalError.value = ''
+  terminalAccess.value = selectedSession.value?.accessMode === 'readonly' ? 'readonly' : 'control'
   await ensureInteractiveTerminal()
+  if (terminalInstance) terminalInstance.options.disableStdin = terminalReadOnly.value
   closeInteractiveTerminal(false)
   terminalConnecting.value = true
   try {
@@ -312,13 +372,19 @@ async function openInteractiveTerminal() {
     socket.onopen = () => {
       terminalConnecting.value = false
       terminalConnected.value = true
-      terminalInstance?.focus()
-      terminalInstance?.writeln('\x1b[32m[CMDB] 安全终端已连接，高风险命令将进入审批流程。\x1b[0m')
+      if (!terminalReadOnly.value) terminalInstance?.focus()
+      terminalInstance?.writeln(terminalReadOnly.value
+        ? '\x1b[36m[CMDB] 已以只读协作者身份接入，仅同步观看远程终端输出。\x1b[0m'
+        : '\x1b[32m[CMDB] 安全终端已连接，高风险命令将进入审批流程。\x1b[0m')
     }
     socket.onmessage = event => {
       let socketMessage: TerminalSocketMessage
       try { socketMessage = JSON.parse(String(event.data)) as TerminalSocketMessage } catch { terminalInstance?.write(String(event.data)); return }
       if (socketMessage.type === 'output' && socketMessage.data) terminalInstance?.write(decodeTerminalData(socketMessage.data))
+      if (socketMessage.type === 'ready') {
+        terminalAccess.value = socketMessage.access === 'readonly' ? 'readonly' : 'control'
+        if (terminalInstance) terminalInstance.options.disableStdin = terminalReadOnly.value
+      }
       if (socketMessage.type === 'blocked') terminalInstance?.writeln(`\r\n\x1b[31m[已阻止] ${socketMessage.message}\x1b[0m\r\n`)
       if (socketMessage.type === 'approval_required' && socketMessage.approval) {
         upsertApproval(socketMessage.approval)
@@ -447,8 +513,20 @@ function commandCount(item:Session) {
   return item.logs.filter(log => log.kind === 'command' || log.kind === 'interactive-command' || log.message.startsWith('$ ')).length
 }
 
-onMounted(async () => { await load(); startApprovalPolling() })
-onBeforeUnmount(() => { if (approvalPoll) clearInterval(approvalPoll); stopReplay(); closeInteractiveTerminal(false); clearRecordingTimers(); terminalInstance?.dispose(); replayTerminal?.dispose() })
+onMounted(async () => {
+  await load()
+  startApprovalPolling()
+  watermarkTimer = setInterval(() => { watermarkTime.value = new Date().toLocaleString('zh-CN', { hour12:false }) }, 15000)
+})
+onBeforeUnmount(() => {
+  if (approvalPoll) clearInterval(approvalPoll)
+  if (watermarkTimer) clearInterval(watermarkTimer)
+  stopReplay()
+  closeInteractiveTerminal(false)
+  clearRecordingTimers()
+  terminalInstance?.dispose()
+  replayTerminal?.dispose()
+})
 </script>
 
 <template>
@@ -495,12 +573,31 @@ onBeforeUnmount(() => { if (approvalPoll) clearInterval(approvalPoll); stopRepla
           <select v-model="credentialId"><option value="">默认凭据</option><option v-for="credential in credentials.filter(item=>item.kind==='ssh')" :key="credential.id" :value="credential.id">{{credential.name}}</option></select>
           <button class="primary" :disabled="!selectedAssetId" @click="createSession">建立会话</button>
           <select v-model="selectedSessionId"><option value="">选择会话</option><option v-for="session in sessions" :key="session.id" :value="session.id">{{session.assetName}} · {{session.operator}} · {{session.status}}</option></select>
-          <button :disabled="!selectedSessionId" @click="closeSession"><X/>关闭</button>
+          <button :disabled="!selectedSessionId||!canManageSelectedSession" @click="closeSession"><X/>关闭</button>
+          <button v-if="isPlatformAdmin" class="danger" :disabled="!selectedSessionId" @click="forceDisconnectSession"><Ban/>强制断开</button>
           <button class="primary" :disabled="!selectedSessionId||terminalConnecting" @click="openInteractiveTerminal"><TerminalIcon/>{{terminalConnected?'重新连接交互终端':'连接交互终端'}}</button>
           <button v-if="terminalConnected" @click="closeInteractiveTerminal()">断开交互终端</button>
         </div>
+        <div v-if="selectedSession" class="session-participants">
+          <header>
+            <div><strong>会话协作者</strong><span>{{selectedSession.accessMode==='readonly'?'当前身份：只读协作者':'当前身份：控制者'}} · {{selectedSession.activeConnections||0}} 人在线</span></div>
+            <b :data-online="selectedSession.controllerOnline">{{selectedSession.controllerOnline?'控制端在线':'等待控制端'}}</b>
+          </header>
+          <div v-if="canManageSelectedSession" class="collaborator-form">
+            <input v-model="collaboratorForm.username" placeholder="平台用户名" @keyup.enter="addCollaborator">
+            <select v-model="collaboratorForm.access"><option value="readonly">只读观看</option><option value="control">允许控制</option></select>
+            <button :disabled="!collaboratorForm.username.trim()" @click="addCollaborator">添加协作者</button>
+          </div>
+          <div class="collaborator-list">
+            <article v-for="item in selectedSession.collaborators" :key="item.username">
+              <KeyRound/><div><strong>{{item.username}}</strong><span>{{item.access==='readonly'?'只读观看':'允许控制'}} · 由 {{item.addedBy}} 添加</span></div>
+              <button v-if="canManageSelectedSession" @click="removeCollaborator(item)">移除</button>
+            </article>
+            <div v-if="!selectedSession.collaborators.length" class="participant-empty">尚未添加协作者，可邀请其他平台用户实时观看或共同处理。</div>
+          </div>
+        </div>
         <div class="terminal-box">
-          <div class="command-row"><input v-model="command" @keyup.enter="execute" placeholder="输入远程命令"><button :disabled="!selectedSessionId" @click="execute"><Play/>执行</button></div>
+          <div class="command-row"><input v-model="command" :disabled="terminalReadOnly" @keyup.enter="execute" placeholder="输入远程命令"><button :disabled="!selectedSessionId||terminalReadOnly" @click="execute"><Play/>执行</button></div>
           <pre v-if="selectedSession"><span v-for="log in selectedSession.logs" :key="log.time+log.message" :data-level="log.level"><em>{{log.time}}</em>{{log.message}}</span></pre>
           <div v-else class="empty-access">建立或选择会话后开始执行</div>
         </div>
@@ -510,9 +607,9 @@ onBeforeUnmount(() => { if (approvalPoll) clearInterval(approvalPoll); stopRepla
         <h3><FileUp/>文件传输</h3>
         <label>上传目标路径<input v-model="uploadPath"></label>
         <input type="file" @change="uploadFile=($event.target as HTMLInputElement).files?.[0]">
-        <button :disabled="!selectedSessionId||!uploadFile" @click="upload"><Upload/>上传</button>
+        <button :disabled="!selectedSessionId||!uploadFile||terminalReadOnly" @click="upload"><Upload/>上传</button>
         <label>下载远程路径<input v-model="downloadPath"></label>
-        <button :disabled="!selectedSessionId" @click="download">下载</button>
+        <button :disabled="!selectedSessionId||terminalReadOnly" @click="download">下载</button>
         <p>单文件限制：上传 50MB，下载 25MB。路径不允许包含 `..`。</p>
       </section>
 
@@ -520,13 +617,15 @@ onBeforeUnmount(() => { if (approvalPoll) clearInterval(approvalPoll); stopRepla
         <header class="live-terminal-head">
           <div><h3><TerminalIcon/>交互式 WebSSH</h3><span>PTY 实时终端，逐屏录像写入 PostgreSQL；高风险命令在执行前自动阻止</span></div>
           <div class="terminal-actions">
-            <b :data-state="terminalConnected?'online':terminalConnecting?'connecting':'offline'">{{terminalConnected?'已连接':terminalConnecting?'连接中':'未连接'}}</b>
+            <button :disabled="!selectedSessionId" @click="downloadExport('terminal-recording')">导出录像</button>
+            <button :disabled="!selectedSessionId" @click="downloadExport('command-log')">导出命令日志</button>
+            <b :data-state="terminalConnected?'online':terminalConnecting?'connecting':'offline'">{{terminalConnected?(terminalAccess==='readonly'?'只读在线':'控制在线'):terminalConnecting?'连接中':'未连接'}}</b>
             <button v-if="terminalConnected" @click="closeInteractiveTerminal()"><X/>断开</button>
             <button v-else class="primary" :disabled="!selectedSessionId||terminalConnecting" @click="openInteractiveTerminal"><Play/>连接</button>
           </div>
         </header>
         <div v-if="terminalError" class="access-error">{{terminalError}}</div>
-        <div ref="interactiveTerminalElement" v-show="terminalMode" class="xterm-shell" @click="focusInteractiveTerminal"></div>
+        <div ref="interactiveTerminalElement" v-show="terminalMode" class="xterm-shell" @click="focusInteractiveTerminal"><span class="terminal-watermark">{{watermarkText}}</span></div>
         <div v-if="!terminalMode" class="terminal-empty"><TerminalIcon/><strong>选择或新建远程会话后连接</strong><span>支持交互输入、窗口缩放、逐屏录像与风险命令阻断</span></div>
       </section>
 
@@ -605,4 +704,4 @@ onBeforeUnmount(() => { if (approvalPoll) clearInterval(approvalPoll); stopRepla
 
 <style scoped>
 .remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}.live-terminal-card{grid-column:1/-1}.live-terminal-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.live-terminal-head>div:first-child{display:grid;gap:4px}.live-terminal-head h3{margin:0}.terminal-actions{display:flex;align-items:center;gap:8px}.terminal-actions b{padding:4px 9px;border-radius:999px;font-size:11px}.terminal-actions b[data-state=offline]{background:#2a1721;color:#fda4af}.terminal-actions b[data-state=connecting]{background:#322712;color:#fcd34d}.terminal-actions b[data-state=online]{background:#0b2f2b;color:#5eead4}.terminal-actions button{display:flex;align-items:center;gap:5px}.xterm-shell{height:430px;margin-top:12px;padding:8px;border:1px solid #16445c;border-radius:8px;background:#020b12;overflow:hidden}.xterm-shell .xterm{height:100%}.terminal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;height:180px;margin-top:12px;border:1px dashed #1b4258;color:#64869a}.terminal-empty svg{width:30px;height:30px;color:#22d3ee}.terminal-empty strong{color:#c9e6f5}.terminal-recording{margin-top:12px;border-top:1px solid #123043}.terminal-recording>header{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.terminal-recording>header>div{display:grid;gap:3px}.terminal-recording>header span{color:#6f91a5;font-size:10px}.terminal-recording>header button{display:flex;align-items:center;gap:5px}.replay-xterm{height:300px;margin-top:0}.terminal-recording+.replay-timeline{max-height:220px}.approval-card{grid-column:1/-1}.approval-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.approval-head>div{display:grid;gap:4px}.approval-head h3{margin:0}.approval-head>div>span{color:#6f91a5}.approval-head>b{padding:5px 10px;border-radius:999px;background:#162c38;color:#8fb2c4;font-size:11px}.approval-head>b[data-active=true]{background:#3a2610;color:#fbbf24}.approval-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:10px;margin-top:12px}.approval-list article{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid #443414;background:#171307}.approval-list article[data-status=approved]{border-color:#14564c;background:#071b19}.approval-list article[data-status=rejected],.approval-list article[data-status=failed]{border-color:#692c3a;background:#1d0b11}.approval-list article[data-status=expired]{border-color:#40515d;background:#101820}.approval-main{display:grid;gap:6px;min-width:0}.approval-main header{display:flex;align-items:center;justify-content:space-between;gap:12px}.approval-main header b{font-size:10px;color:#fbbf24}.approval-main header b[data-status=approved]{color:#5eead4}.approval-main header b[data-status=rejected],.approval-main header b[data-status=failed]{color:#fb7185}.approval-main code{overflow-wrap:anywhere;padding:8px;border-radius:6px;background:#020b12;color:#fde68a;font:11px/1.5 monospace}.approval-main p{margin:0;color:#fca5a5;font-size:12px}.approval-main small{color:#7895a6;font-size:10px}.approval-list footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.approval-list footer input{flex:1;min-width:180px;padding:8px 9px;border:1px solid #4a3a1a;border-radius:6px;background:#080f14;color:#e5eef5}.approval-list footer button{display:flex;align-items:center;gap:5px}.approval-list footer span{color:#fbbf24;font-size:11px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
-</style>
+.session-participants{margin-top:12px;padding-top:12px;border-top:1px solid #123043}.session-participants>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.session-participants>header>div{display:grid;gap:3px}.session-participants>header span{color:#6f91a5;font-size:10px}.session-participants>header>b{padding:4px 8px;border-radius:999px;background:#321a22;color:#fda4af;font-size:10px}.session-participants>header>b[data-online=true]{background:#0b2f2b;color:#5eead4}.collaborator-form{display:grid;grid-template-columns:1fr 130px auto;gap:7px;margin-top:10px}.collaborator-form input,.collaborator-form select{min-width:0;padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff}.collaborator-list{display:grid;gap:6px;margin-top:9px}.collaborator-list article{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;padding:8px;border:1px solid #123043;background:#061a29}.collaborator-list article>div{display:grid;gap:2px}.collaborator-list article strong{font-size:12px}.collaborator-list article span{color:#6f91a5;font-size:10px}.participant-empty{padding:10px;border:1px dashed #1b4258;color:#64869a;font-size:11px;text-align:center}.xterm-shell{position:relative}.terminal-watermark{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;transform:rotate(-18deg);pointer-events:none;color:rgba(103,232,249,.09);font:700 24px/1.6 monospace;letter-spacing:3px;text-align:center;white-space:pre-wrap;overflow:hidden}.danger{border-color:#7f1d1d!important;background:#331116!important;color:#fecaca!important}@media(max-width:1200px){.collaborator-form{grid-template-columns:1fr}}</style>
