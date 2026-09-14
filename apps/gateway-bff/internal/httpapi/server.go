@@ -542,6 +542,82 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-health-checks", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in discovery.AgentHealthInput
+		if err := decodeJSON(r, &in); err != nil || len(in.Hosts) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RunAgentHealthCheck(in, user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "HEALTH_CHECK_FAILED", "message": err.Error()})
+			return
+		}
+		if user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.health_check", strings.Join(in.Hosts, ","), "hosts="+strconv.Itoa(len(in.Hosts))+" check="+item.ID+" status="+item.Status)
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-health-checks", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		limit := 50
+		if value := strings.TrimSpace(r.URL.Query().Get("limit")); value != "" {
+			if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		items, err := discoveryService.AgentHealthChecks(limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "HEALTH_CHECKS_LOAD_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-health-checks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		item, err := discoveryService.AgentHealthCheck(r.PathValue("id"))
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "HEALTH_CHECK_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "HEALTH_CHECK_LOAD_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agent-health-checks/{id}/remediate", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in discovery.AgentRemediationInput
+		if err := decodeJSON(r, &in); err != nil || strings.TrimSpace(in.Action) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_INPUT"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RemediateAgentHealth(r.PathValue("id"), in, user.Username)
+		if errors.Is(err, discovery.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "HEALTH_CHECK_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "REMEDIATION_FAILED", "message": err.Error()})
+			return
+		}
+		if user.Username != "" {
+			auditService.Record(user.Username, "discovery.agent.remediate", r.PathValue("id"), "action="+in.Action+" hosts="+strconv.Itoa(len(in.Hosts)))
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/agent-precheck", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return

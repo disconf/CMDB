@@ -79,6 +79,25 @@ CREATE TABLE IF NOT EXISTS agent_deployments (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_deployments_created ON agent_deployments(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_deployments_status ON agent_deployments(status,created_at DESC);
+CREATE TABLE IF NOT EXISTS agent_health_checks (
+ id text PRIMARY KEY,
+ status text NOT NULL,
+ credential_id text NOT NULL DEFAULT '',
+ ssh_port integer NOT NULL DEFAULT 22,
+ gateway_url text NOT NULL DEFAULT '',
+ hosts jsonb NOT NULL DEFAULT '[]',
+ results jsonb NOT NULL DEFAULT '[]',
+ remediation jsonb NOT NULL DEFAULT '[]',
+ total integer NOT NULL DEFAULT 0,
+ healthy integer NOT NULL DEFAULT 0,
+ warning integer NOT NULL DEFAULT 0,
+ critical integer NOT NULL DEFAULT 0,
+ requested_by text NOT NULL DEFAULT '',
+ created_at text NOT NULL,
+ finished_at text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_agent_health_checks_created ON agent_health_checks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_health_checks_status ON agent_health_checks(status,created_at DESC);
 `
 
 const remoteAccessSchema = `

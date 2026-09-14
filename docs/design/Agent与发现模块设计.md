@@ -110,3 +110,15 @@ Agent 与发现页重排为：
 - `GET /api/v1/discovery/agent-deployments/{id}`：查看单个任务的逐台执行结果。
 - `POST /api/v1/discovery/agent-deployments/{id}/retry`：只重试原任务中的失败主机，新任务通过 `retry_of` 关联原任务。
 - 前端 Agent 部署页展示预检查结果表、部署任务历史、状态统计和逐台结果弹窗；失败的安装、升级、卸载任务均可一键重试。
+
+## 10. Agent 健康巡检与异常自愈落地（2026-09-15）
+
+在 Agent 部署任务中心之上，增加“只读巡检 → 问题分级 → 白名单自愈 → 复检留痕”闭环：
+
+- 巡检采集 Agent 服务运行/开机自启状态、二进制版本、systemd 重启次数、系统运行时间、根分区使用率、内存使用率、1 分钟负载、Gateway 健康检查、node_exporter 进程/端口以及最近 5 条 journal。
+- 支持单 IP 和 IPv4 CIDR 输入；CIDR 在服务端展开后按 IP 去重，单个 CIDR 最多 1024 台、单次最多 2048 台，避免误操作导致大规模连接。
+- 评分范围为 0–100：`>=85` 健康、`60–84` 警告、`<60` 严重；Agent 二进制/服务、Gateway 可达性和磁盘等关键异常会直接降低评分。
+- `agent_health_checks` 表持久化巡检参数、逐台结果、问题明细、评分、汇总统计、发起人与自愈历史。
+- 安全自愈仅允许白名单动作：重启 Agent、启用 Agent、重置 systemd 失败状态、重启 node_exporter、按当前 Gateway 版本重装 Agent；不支持任意 Shell 命令。
+- 自愈完成后自动对目标主机复检，并在同一次巡检记录中保存 `beforeStatus`、`afterStatus`、命令结果和执行时间。
+- 前端“健康巡检”标签页提供总览指标、巡检参数、历史记录、逐台详情、问题建议和自愈按钮。
