@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS remote_access_grants(
  subject text NOT NULL,
  asset_id text NOT NULL DEFAULT '',
  project_group text NOT NULL DEFAULT '',
+ asset_ids jsonb NOT NULL DEFAULT '[]',
+ project_groups jsonb NOT NULL DEFAULT '[]',
+ tags jsonb NOT NULL DEFAULT '[]',
  permissions jsonb NOT NULL DEFAULT '[]',
  enabled boolean NOT NULL DEFAULT true,
  created_by text NOT NULL DEFAULT '',
@@ -59,6 +62,9 @@ CREATE TABLE IF NOT EXISTS remote_access_grants(
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remote_access_grants_subject ON remote_access_grants(subject_type,subject);
+ALTER TABLE remote_access_grants ADD COLUMN IF NOT EXISTS asset_ids jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE remote_access_grants ADD COLUMN IF NOT EXISTS project_groups jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE remote_access_grants ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS remote_host_keys(id text PRIMARY KEY,asset_id text NOT NULL,host text NOT NULL,port integer NOT NULL DEFAULT 22,key_type text NOT NULL,fingerprint text NOT NULL,public_key text NOT NULL,added_by text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
 CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_host_keys_asset ON remote_host_keys(asset_id,host,port);
 CREATE TABLE IF NOT EXISTS remote_access_sessions(
@@ -135,6 +141,24 @@ CREATE TABLE IF NOT EXISTS remote_terminal_approvals(
 );
 CREATE INDEX IF NOT EXISTS idx_remote_terminal_approvals_status ON remote_terminal_approvals(status,updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_remote_terminal_approvals_session ON remote_terminal_approvals(session_id,updated_at DESC);
+CREATE TABLE IF NOT EXISTS remote_security_policy_templates(
+ id text PRIMARY KEY, name text NOT NULL, description text NOT NULL DEFAULT '', enabled boolean NOT NULL DEFAULT true,
+ current_version integer NOT NULL DEFAULT 1, created_by text NOT NULL DEFAULT '', updated_by text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS remote_security_policy_template_versions(
+ template_id text NOT NULL REFERENCES remote_security_policy_templates(id) ON DELETE CASCADE, version integer NOT NULL,
+ name text NOT NULL, description text NOT NULL DEFAULT '', policy_values jsonb NOT NULL DEFAULT '{}', change_note text NOT NULL DEFAULT '',
+ created_by text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(template_id,version)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_security_policy_template_versions_time ON remote_security_policy_template_versions(template_id,created_at DESC);
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_status text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_bucket text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_key text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_sha256 text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_size bigint NOT NULL DEFAULT 0;
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archived_at text NOT NULL DEFAULT '';
+ALTER TABLE remote_access_sessions ADD COLUMN IF NOT EXISTS archive_error text NOT NULL DEFAULT '';
 `
 
 func openPostgres(databaseURL string) (*sql.DB, []Task, error) {

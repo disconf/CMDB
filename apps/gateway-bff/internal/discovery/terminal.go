@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -370,34 +371,52 @@ func (s *Service) AppendTerminalEvent(sessionID, direction, data string) error {
 }
 
 func (s *Service) TerminalRecording(sessionID, username string, roles []string) (TerminalRecording, error) {
-	if _, err := s.RemoteSessionReplay(sessionID, username, roles); err != nil {
+	item, err := s.RemoteSessionReplay(sessionID, username, roles)
+	if err != nil {
 		return TerminalRecording{}, err
 	}
 	result := TerminalRecording{Events: []RemoteTerminalEvent{}}
 	if s.db == nil {
-		return result, nil
+		return s.terminalRecordingFromArchive(item)
 	}
 	rows, err := s.db.Query(`SELECT sequence,direction,data,created_at FROM remote_terminal_events WHERE session_id=$1 ORDER BY sequence LIMIT 20001`, sessionID)
 	if err != nil {
 		return TerminalRecording{}, err
 	}
-	defer rows.Close()
 	for rows.Next() {
-		var item RemoteTerminalEvent
+		var event RemoteTerminalEvent
 		var encoded string
 		var created time.Time
-		if err = rows.Scan(&item.Sequence, &item.Direction, &encoded, &created); err != nil {
+		if err = rows.Scan(&event.Sequence, &event.Direction, &encoded, &created); err != nil {
+			_ = rows.Close()
 			return TerminalRecording{}, err
 		}
-		item.Data = encoded
-		item.CreatedAt = created.Local().Format("2006-01-02 15:04:05.000")
+		event.Data = encoded
+		event.CreatedAt = created.Local().Format("2006-01-02 15:04:05.000")
 		if len(result.Events) >= 20000 {
 			result.Truncated = true
 			break
 		}
-		result.Events = append(result.Events, item)
+		result.Events = append(result.Events, event)
 	}
-	return result, rows.Err()
+	if err = rows.Close(); err != nil {
+		return TerminalRecording{}, err
+	}
+	if len(result.Events) > 0 || item.ArchiveKey == "" || s.objectStore == nil {
+		return result, nil
+	}
+	return s.terminalRecordingFromArchive(item)
+}
+
+func (s *Service) terminalRecordingFromArchive(item RemoteSession) (TerminalRecording, error) {
+	if item.ArchiveKey == "" || s.objectStore == nil {
+		return TerminalRecording{Events: []RemoteTerminalEvent{}}, nil
+	}
+	content, err := s.objectStore.Get(context.Background(), item.ArchiveKey)
+	if err != nil {
+		return TerminalRecording{}, err
+	}
+	return decodeRecordingArchive(content)
 }
 
 func (s *Service) RecordRemoteSessionEvent(sessionID, level, kind, message string) {

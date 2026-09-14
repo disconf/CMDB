@@ -17,23 +17,29 @@ import (
 )
 
 type AccessGrant struct {
-	ID           string   `json:"id"`
-	SubjectType  string   `json:"subjectType"`
-	Subject      string   `json:"subject"`
-	AssetID      string   `json:"assetId"`
-	ProjectGroup string   `json:"projectGroup"`
-	Permissions  []string `json:"permissions"`
-	Enabled      bool     `json:"enabled"`
-	CreatedBy    string   `json:"createdBy"`
+	ID            string   `json:"id"`
+	SubjectType   string   `json:"subjectType"`
+	Subject       string   `json:"subject"`
+	AssetID       string   `json:"assetId"`
+	ProjectGroup  string   `json:"projectGroup"`
+	AssetIDs      []string `json:"assetIds,omitempty"`
+	ProjectGroups []string `json:"projectGroups,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Permissions   []string `json:"permissions"`
+	Enabled       bool     `json:"enabled"`
+	CreatedBy     string   `json:"createdBy"`
 }
 
 type AccessGrantInput struct {
-	SubjectType  string   `json:"subjectType"`
-	Subject      string   `json:"subject"`
-	AssetID      string   `json:"assetId"`
-	ProjectGroup string   `json:"projectGroup"`
-	Permissions  []string `json:"permissions"`
-	Enabled      *bool    `json:"enabled"`
+	SubjectType   string   `json:"subjectType"`
+	Subject       string   `json:"subject"`
+	AssetID       string   `json:"assetId"`
+	ProjectGroup  string   `json:"projectGroup"`
+	AssetIDs      []string `json:"assetIds,omitempty"`
+	ProjectGroups []string `json:"projectGroups,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Permissions   []string `json:"permissions"`
+	Enabled       *bool    `json:"enabled"`
 }
 
 type RemoteHostKey struct {
@@ -101,6 +107,13 @@ type RemoteSession struct {
 	ExpiresAt              string                      `json:"expiresAt"`
 	RecordingRetentionDays int                         `json:"recordingRetentionDays,omitempty"`
 	ClosedAt               string                      `json:"closedAt,omitempty"`
+	ArchiveStatus          string                      `json:"archiveStatus,omitempty"`
+	ArchiveBucket          string                      `json:"archiveBucket,omitempty"`
+	ArchiveKey             string                      `json:"archiveKey,omitempty"`
+	ArchiveSHA256          string                      `json:"archiveSha256,omitempty"`
+	ArchiveSize            int64                       `json:"archiveSize,omitempty"`
+	ArchivedAt             string                      `json:"archivedAt,omitempty"`
+	ArchiveError           string                      `json:"archiveError,omitempty"`
 	Logs                   []RemoteSessionLog          `json:"logs"`
 	AccessMode             string                      `json:"accessMode,omitempty"`
 	ActiveConnections      int                         `json:"activeConnections"`
@@ -144,7 +157,9 @@ func (s *Service) CreateAccessGrant(input AccessGrantInput, createdBy string) (A
 	defer s.mu.Unlock()
 	s.accessGrants = append([]AccessGrant{item}, s.accessGrants...)
 	if s.db != nil {
-		_ = s.persistAccessGrant(item)
+		if err = s.persistAccessGrant(item); err != nil {
+			return AccessGrant{}, err
+		}
 	}
 	return cloneAccessGrant(item), nil
 }
@@ -178,7 +193,10 @@ func (s *Service) DeleteAccessGrant(id string) error {
 }
 func normalizeAccessGrant(input AccessGrantInput) (AccessGrant, error) {
 	input.SubjectType, input.Subject = strings.ToLower(strings.TrimSpace(input.SubjectType)), strings.TrimSpace(input.Subject)
-	if (input.SubjectType != "user" && input.SubjectType != "role") || input.Subject == "" || (strings.TrimSpace(input.AssetID) == "" && strings.TrimSpace(input.ProjectGroup) == "") {
+	assetIDs := normalizeGrantValues(append([]string{input.AssetID}, input.AssetIDs...))
+	projectGroups := normalizeGrantValues(append([]string{input.ProjectGroup}, input.ProjectGroups...))
+	tags := normalizeGrantValues(input.Tags)
+	if (input.SubjectType != "user" && input.SubjectType != "role") || input.Subject == "" || (len(assetIDs) == 0 && len(projectGroups) == 0 && len(tags) == 0) {
 		return AccessGrant{}, ErrRemoteValidation
 	}
 	permissions := []string{}
@@ -199,9 +217,36 @@ func normalizeAccessGrant(input AccessGrantInput) (AccessGrant, error) {
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
-	return AccessGrant{SubjectType: input.SubjectType, Subject: input.Subject, AssetID: strings.TrimSpace(input.AssetID), ProjectGroup: strings.TrimSpace(input.ProjectGroup), Permissions: permissions, Enabled: enabled}, nil
+	item := AccessGrant{SubjectType: input.SubjectType, Subject: input.Subject, AssetIDs: assetIDs, ProjectGroups: projectGroups, Tags: tags, Permissions: permissions, Enabled: enabled}
+	if len(assetIDs) > 0 {
+		item.AssetID = assetIDs[0]
+	}
+	if len(projectGroups) > 0 {
+		item.ProjectGroup = projectGroups[0]
+	}
+	return item, nil
 }
+
+func normalizeGrantValues(values []string) []string {
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 128 || remoteContainsString(out, value) {
+			continue
+		}
+		out = append(out, value)
+		if len(out) >= 100 {
+			break
+		}
+	}
+	return out
+}
+
 func (s *Service) authorizeRemoteAccess(username string, roles []string, assetID, projectGroup, permission string) bool {
+	return s.authorizeRemoteAccessScoped(username, roles, assetID, projectGroup, nil, permission)
+}
+
+func (s *Service) authorizeRemoteAccessScoped(username string, roles []string, assetID, projectGroup string, tags []string, permission string) bool {
 	for _, role := range roles {
 		if role == "admin" || role == "platform-admin" {
 			return true
@@ -214,13 +259,7 @@ func (s *Service) authorizeRemoteAccess(username string, roles []string, assetID
 			continue
 		}
 		match := (grant.SubjectType == "user" && grant.Subject == username) || (grant.SubjectType == "role" && remoteContainsString(roles, grant.Subject))
-		if !match {
-			continue
-		}
-		if grant.AssetID != "" && grant.AssetID != assetID {
-			continue
-		}
-		if grant.ProjectGroup != "" && grant.ProjectGroup != projectGroup {
+		if !match || !accessGrantMatchesScope(grant, assetID, projectGroup, tags) {
 			continue
 		}
 		if remoteContainsString(grant.Permissions, permission) {
@@ -229,7 +268,46 @@ func (s *Service) authorizeRemoteAccess(username string, roles []string, assetID
 	}
 	return false
 }
+
+func accessGrantMatchesScope(grant AccessGrant, assetID, projectGroup string, tags []string) bool {
+	assetIDs := normalizeGrantValues(append([]string{grant.AssetID}, grant.AssetIDs...))
+	projectGroups := normalizeGrantValues(append([]string{grant.ProjectGroup}, grant.ProjectGroups...))
+	if len(assetIDs) > 0 && !remoteContainsString(assetIDs, assetID) {
+		return false
+	}
+	if len(projectGroups) > 0 && !remoteContainsString(projectGroups, projectGroup) {
+		return false
+	}
+	if len(grant.Tags) > 0 {
+		matched := false
+		for _, wanted := range grant.Tags {
+			if remoteContainsString(tags, wanted) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) authorizeRemoteAccessForAsset(username string, roles []string, assetID, permission string) bool {
+	if s.cmdb == nil {
+		return false
+	}
+	asset, err := s.cmdb.GetAsset(assetID)
+	if err != nil {
+		return false
+	}
+	return s.authorizeRemoteAccessScoped(username, roles, asset.ID, asset.ProjectGroup, asset.Tags, permission)
+}
+
 func cloneAccessGrant(item AccessGrant) AccessGrant {
+	item.AssetIDs = append([]string(nil), item.AssetIDs...)
+	item.ProjectGroups = append([]string(nil), item.ProjectGroups...)
+	item.Tags = append([]string(nil), item.Tags...)
 	item.Permissions = append([]string(nil), item.Permissions...)
 	return item
 }
@@ -271,7 +349,7 @@ func (s *Service) CreateRemoteSession(assetID, credentialID, operator string, ro
 	if err != nil || asset.IP == "" {
 		return RemoteSession{}, ErrRemoteValidation
 	}
-	if !s.authorizeRemoteAccess(operator, roles, asset.ID, asset.ProjectGroup, "terminal") {
+	if !s.authorizeRemoteAccessScoped(operator, roles, asset.ID, asset.ProjectGroup, asset.Tags, "terminal") {
 		return RemoteSession{}, ErrRemoteValidation
 	}
 	credentialID = strings.TrimSpace(credentialID)
@@ -377,7 +455,7 @@ func (s *Service) UploadRemoteFile(sessionID, remotePath string, reader io.Reade
 	if item.AccessMode != "control" {
 		return ErrRemoteForbidden
 	}
-	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "file") {
+	if !s.authorizeRemoteAccessForAsset(operator, roles, item.AssetID, "file") {
 		return ErrRemoteValidation
 	}
 	if err = validateRemotePath(remotePath); err != nil {
@@ -423,7 +501,7 @@ func (s *Service) DownloadRemoteFile(sessionID, remotePath, operator string, rol
 	if item.AccessMode != "control" {
 		return nil, ErrRemoteForbidden
 	}
-	if !s.authorizeRemoteAccess(operator, roles, item.AssetID, "", "file") {
+	if !s.authorizeRemoteAccessForAsset(operator, roles, item.AssetID, "file") {
 		return nil, ErrRemoteValidation
 	}
 	if err = s.checkRemoteFilePolicy(item, operator, roles, remotePath, false, 0); err != nil {
@@ -481,6 +559,7 @@ func (s *Service) CloseRemoteSession(sessionID, operator string, roles []string)
 		_ = s.persistRemoteSession(closed)
 	}
 	s.CloseRemoteTerminal(sessionID)
+	s.scheduleTerminalArchive(sessionID)
 	return nil
 }
 
@@ -511,6 +590,7 @@ func (s *Service) ForceDisconnectRemoteSession(sessionID, operator string, roles
 		_ = s.persistRemoteSession(closed)
 	}
 	s.CloseRemoteTerminal(sessionID)
+	s.scheduleTerminalArchive(sessionID)
 	return nil
 }
 
@@ -800,7 +880,7 @@ func (s *Service) loadAccessGrants() error {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT id,subject_type,subject,asset_id,project_group,permissions,enabled,created_by FROM remote_access_grants ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(`SELECT id,subject_type,subject,asset_id,project_group,asset_ids,project_groups,tags,permissions,enabled,created_by FROM remote_access_grants ORDER BY updated_at DESC`)
 	if err != nil {
 		return err
 	}
@@ -808,14 +888,23 @@ func (s *Service) loadAccessGrants() error {
 	out := []AccessGrant{}
 	for rows.Next() {
 		var item AccessGrant
-		var raw []byte
-		if err = rows.Scan(&item.ID, &item.SubjectType, &item.Subject, &item.AssetID, &item.ProjectGroup, &raw, &item.Enabled, &item.CreatedBy); err != nil {
+		var assetIDs, projectGroups, tags, permissions []byte
+		if err = rows.Scan(&item.ID, &item.SubjectType, &item.Subject, &item.AssetID, &item.ProjectGroup, &assetIDs, &projectGroups, &tags, &permissions, &item.Enabled, &item.CreatedBy); err != nil {
 			return err
 		}
-		if json.Unmarshal(raw, &item.Permissions) != nil {
+		_ = json.Unmarshal(assetIDs, &item.AssetIDs)
+		_ = json.Unmarshal(projectGroups, &item.ProjectGroups)
+		_ = json.Unmarshal(tags, &item.Tags)
+		if json.Unmarshal(permissions, &item.Permissions) != nil {
 			item.Permissions = []string{}
 		}
-		out = append(out, item)
+		if item.AssetID != "" && !remoteContainsString(item.AssetIDs, item.AssetID) {
+			item.AssetIDs = append([]string{item.AssetID}, item.AssetIDs...)
+		}
+		if item.ProjectGroup != "" && !remoteContainsString(item.ProjectGroups, item.ProjectGroup) {
+			item.ProjectGroups = append([]string{item.ProjectGroup}, item.ProjectGroups...)
+		}
+		out = append(out, cloneAccessGrant(item))
 	}
 	s.accessGrants = out
 	return rows.Err()
@@ -824,10 +913,14 @@ func (s *Service) persistAccessGrant(item AccessGrant) error {
 	if s.db == nil {
 		return nil
 	}
-	raw, _ := json.Marshal(item.Permissions)
-	_, err := s.db.Exec(`INSERT INTO remote_access_grants(id,subject_type,subject,asset_id,project_group,permissions,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET subject_type=excluded.subject_type,subject=excluded.subject,asset_id=excluded.asset_id,project_group=excluded.project_group,permissions=excluded.permissions,enabled=excluded.enabled,updated_at=now()`, item.ID, item.SubjectType, item.Subject, item.AssetID, item.ProjectGroup, raw, item.Enabled, item.CreatedBy)
+	assetIDs, _ := json.Marshal(item.AssetIDs)
+	projectGroups, _ := json.Marshal(item.ProjectGroups)
+	tags, _ := json.Marshal(item.Tags)
+	permissions, _ := json.Marshal(item.Permissions)
+	_, err := s.db.Exec(`INSERT INTO remote_access_grants(id,subject_type,subject,asset_id,project_group,asset_ids,project_groups,tags,permissions,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()) ON CONFLICT(id) DO UPDATE SET subject_type=excluded.subject_type,subject=excluded.subject,asset_id=excluded.asset_id,project_group=excluded.project_group,asset_ids=excluded.asset_ids,project_groups=excluded.project_groups,tags=excluded.tags,permissions=excluded.permissions,enabled=excluded.enabled,updated_at=now()`, item.ID, item.SubjectType, item.Subject, item.AssetID, item.ProjectGroup, assetIDs, projectGroups, tags, permissions, item.Enabled, item.CreatedBy)
 	return err
 }
+
 func (s *Service) deleteAccessGrantRow(id string) error {
 	if s.db == nil {
 		return nil
@@ -849,7 +942,7 @@ func (s *Service) ProbeRemoteHostKey(assetID, credentialID, operator string, rol
 	if err != nil || asset.IP == "" {
 		return RemoteHostKeyProbe{}, ErrRemoteValidation
 	}
-	if !s.authorizeRemoteAccess(operator, roles, asset.ID, asset.ProjectGroup, "terminal") {
+	if !s.authorizeRemoteAccessScoped(operator, roles, asset.ID, asset.ProjectGroup, asset.Tags, "terminal") {
 		return RemoteHostKeyProbe{}, ErrRemoteValidation
 	}
 	username, secret, err := s.resolveRemoteCredential(strings.TrimSpace(credentialID))
@@ -1048,7 +1141,10 @@ func (s *Service) loadRemoteSessions() error {
 	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET status='interrupted', closed_at=CASE WHEN closed_at='' THEN $1 ELSE closed_at END, updated_at=now() WHERE status='active'`, now); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
+	if _, err := s.db.Exec(`UPDATE remote_access_sessions SET archive_status='failed', archive_error='archive task interrupted by service restart' WHERE archive_status='archiving'`); err != nil {
+		return err
+	}
+	rows, err := s.db.Query(`SELECT id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,logs FROM remote_access_sessions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
 		return err
 	}
@@ -1057,7 +1153,7 @@ func (s *Service) loadRemoteSessions() error {
 	for rows.Next() {
 		var item RemoteSession
 		var roles, collaborators, logs []byte
-		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.RecordingRetentionDays, &item.ClosedAt, &logs); err != nil {
+		if err = rows.Scan(&item.ID, &item.AssetID, &item.AssetName, &item.IP, &item.Port, &item.CredentialID, &item.Operator, &roles, &collaborators, &item.Status, &item.CreatedAt, &item.ExpiresAt, &item.RecordingRetentionDays, &item.ClosedAt, &item.ArchiveStatus, &item.ArchiveBucket, &item.ArchiveKey, &item.ArchiveSHA256, &item.ArchiveSize, &item.ArchivedAt, &item.ArchiveError, &logs); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(roles, &item.Roles)
@@ -1094,6 +1190,6 @@ func (s *Service) persistRemoteSession(item RemoteSession) error {
 	roles, _ := json.Marshal(item.Roles)
 	collaborators, _ := json.Marshal(item.Collaborators)
 	logs, _ := json.Marshal(item.Logs)
-	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,recording_retention_days=excluded.recording_retention_days,closed_at=excluded.closed_at,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.RecordingRetentionDays, item.ClosedAt, logs)
+	_, err := s.db.Exec(`INSERT INTO remote_access_sessions(id,asset_id,asset_name,host,port,credential_id,operator_name,roles,collaborators,status,created_at,expires_at,recording_retention_days,closed_at,archive_status,archive_bucket,archive_key,archive_sha256,archive_size,archived_at,archive_error,logs,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now()) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,asset_name=excluded.asset_name,host=excluded.host,port=excluded.port,credential_id=excluded.credential_id,operator_name=excluded.operator_name,roles=excluded.roles,collaborators=excluded.collaborators,status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,recording_retention_days=excluded.recording_retention_days,closed_at=excluded.closed_at,archive_status=excluded.archive_status,archive_bucket=excluded.archive_bucket,archive_key=excluded.archive_key,archive_sha256=excluded.archive_sha256,archive_size=excluded.archive_size,archived_at=excluded.archived_at,archive_error=excluded.archive_error,logs=excluded.logs,updated_at=now()`, item.ID, item.AssetID, item.AssetName, item.IP, item.Port, item.CredentialID, item.Operator, roles, collaborators, item.Status, item.CreatedAt, item.ExpiresAt, item.RecordingRetentionDays, item.ClosedAt, item.ArchiveStatus, item.ArchiveBucket, item.ArchiveKey, item.ArchiveSHA256, item.ArchiveSize, item.ArchivedAt, item.ArchiveError, logs)
 	return err
 }

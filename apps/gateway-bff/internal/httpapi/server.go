@@ -1391,18 +1391,20 @@ func NewServer() *Server {
 			writeJSON(w, 422, map[string]string{"message": err.Error()})
 			return
 		}
-		auditService.Record(user.Username, "remote.grant.create", item.ID, item.Subject+"/"+item.ProjectGroup)
+		auditService.Record(user.Username, "remote.grant.create", item.ID, remoteGrantAuditDetail(item))
 		writeJSON(w, 201, item)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/access-grants/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
 		item, err := discoveryService.ToggleAccessGrant(r.PathValue("id"))
 		if err != nil {
 			writeJSON(w, 404, map[string]string{"message": "access grant not found"})
 			return
 		}
+		auditService.Record(user.Username, "remote.grant.toggle", item.ID, remoteGrantAuditDetail(item)+" | enabled="+strconv.FormatBool(item.Enabled))
 		writeJSON(w, 200, item)
 	})
 	mux.HandleFunc("DELETE /api/v1/discovery/access-grants/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -1413,6 +1415,8 @@ func NewServer() *Server {
 			writeJSON(w, 404, map[string]string{"message": "access grant not found"})
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "remote.grant.delete", r.PathValue("id"), "")
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-sessions", func(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,7 @@ import (
 
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/demo"
+	"cmdb/gateway-bff/internal/objectstore"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -144,6 +145,7 @@ type Service struct {
 	tasks             []Task
 	db                *sql.DB
 	cmdb              *cmdb.Service
+	objectStore       *objectstore.Store
 	agentToken        string
 	agentSeen         map[string]time.Time
 	offlineAfter      time.Duration
@@ -156,6 +158,7 @@ type Service struct {
 	hostKeys          []RemoteHostKey
 	remoteSessions    []RemoteSession
 	remotePolicies    []RemoteSecurityPolicy
+	policyTemplates   []RemoteSecurityPolicyTemplate
 	terminalApprovals []TerminalApproval
 	terminalTickets   map[string]terminalTicketRecord
 	terminalSequences map[string]uint64
@@ -167,6 +170,11 @@ func NewService() *Service {
 }
 func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s := &Service{cmdb: cmdbService, agents: []Agent{}, tasks: []Task{}}
+	store, err := objectstore.NewFromEnv()
+	if err != nil {
+		panic(fmt.Sprintf("initialize object storage: %v", err))
+	}
+	s.objectStore = store
 	if demo.Enabled() {
 		s.tasks = []Task{{ID: "disc-001", Name: "生产区主机发现", Source: "agent", Scope: "华东生产区", Status: "completed", CreatedAt: "2026-07-15 12:30", Discovered: 3, Items: sampleItems()}}
 	}
@@ -180,6 +188,7 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s.terminals = map[string]*RemoteTerminalChannel{}
 	s.terminalApprovals = []TerminalApproval{}
 	s.remotePolicies = []RemoteSecurityPolicy{defaultRemoteSecurityPolicy()}
+	s.policyTemplates = defaultPolicyTemplates()
 	s.remoteRunner = sshRemoteRunner
 	s.offlineAfter = 3 * time.Minute
 	if value := os.Getenv("AGENT_OFFLINE_AFTER"); value != "" {
@@ -211,6 +220,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		}
 		if err := s.loadRemoteSecurityPolicies(); err != nil {
 			panic(fmt.Sprintf("load remote security policies: %v", err))
+		}
+		if err := s.loadRemoteSecurityPolicyTemplates(); err != nil {
+			panic(fmt.Sprintf("load remote security policy templates: %v", err))
 		}
 	}
 	demoAgents := []Agent{{"agt-01", "上海区域 Agent", "sh-agent-01", "10.8.0.11", "linux", "华东", "online", "1.2.0", "刚刚"}, {"agt-02", "K8s 采集 Agent", "k8s-collector", "10.8.0.12", "linux", "华东", "online", "1.2.0", "12 秒前"}, {"agt-03", "北京网络 Agent", "bj-net-agent", "10.9.0.21", "linux", "华北", "offline", "1.1.8", "18 分钟前"}}

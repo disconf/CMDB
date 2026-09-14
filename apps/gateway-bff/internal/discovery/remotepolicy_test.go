@@ -126,3 +126,25 @@ func TestRemoteSecurityPolicyBatchRejectsInvalidSubjects(t *testing.T) {
 		t.Fatalf("unexpected invalid batch result: %+v", result)
 	}
 }
+
+func TestRemoteSecurityPolicyTemplateLifecycle(t *testing.T) {
+	service := NewService()
+	templates := service.RemoteSecurityPolicyTemplates()
+	if len(templates) < 3 {
+		t.Fatalf("expected built-in templates, got %d", len(templates))
+	}
+	item := templates[0]
+	values := item.Values
+	values.MaxSessionMinutes = 20
+	updated, err := service.SaveRemoteSecurityPolicyTemplate(RemoteSecurityPolicyTemplateInput{ID: item.ID, Name: item.Name, Description: item.Description, Values: values, ChangeNote: "test update"}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CurrentVersion != item.CurrentVersion+1 || updated.Values.MaxSessionMinutes != 20 {
+		t.Fatalf("unexpected template update: %+v", updated)
+	}
+	created, err := service.SaveRemoteSecurityPolicyTemplate(RemoteSecurityPolicyTemplateInput{Name: "自定义模板", Description: "test", Values: values}, "tester")
+	if err != nil || created.ID == "" || created.CurrentVersion != 1 {
+		t.Fatalf("unexpected template create: %+v err=%v", created, err)
+	}
+}

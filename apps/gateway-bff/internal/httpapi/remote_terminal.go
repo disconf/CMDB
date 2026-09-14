@@ -108,6 +108,22 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		}
 		writeJSON(w, http.StatusOK, recording)
 	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-sessions/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if _, err := discoveryService.RemoteSessionReplay(r.PathValue("id"), user.Username, user.Roles); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"message": "remote session is not accessible"})
+			return
+		}
+		if err := discoveryService.ArchiveRemoteSessionRecording(r.Context(), r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.recording.archive", r.PathValue("id"), "terminal recording archived to object storage")
+		w.WriteHeader(http.StatusAccepted)
+	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/terminal", func(w http.ResponseWriter, r *http.Request) {
 		item, err := discoveryService.ConsumeTerminalTicket(r.URL.Query().Get("ticket"))
 		if err != nil || item.ID != r.PathValue("id") {
@@ -387,7 +403,7 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		}
 		filtered := make([]audit.Entry, 0, limit)
 		for _, entry := range entries {
-			if !strings.HasPrefix(entry.Action, "remote.policy.") {
+			if !strings.HasPrefix(entry.Action, "remote.policy.") && !strings.HasPrefix(entry.Action, "remote.policy_template.") {
 				continue
 			}
 			filtered = append(filtered, entry)
@@ -417,6 +433,91 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		}
 		writeJSON(w, http.StatusOK, result)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-security-policy-templates", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.RemoteSecurityPolicyTemplates())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-security-policy-templates", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input discovery.RemoteSecurityPolicyTemplateInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid security policy template"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.SaveRemoteSecurityPolicyTemplate(input, user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		action := "remote.policy_template.create"
+		if input.ID != "" {
+			action = "remote.policy_template.update"
+		}
+		auditService.Record(user.Username, action, item.ID, item.Name+" | v"+strconv.Itoa(item.CurrentVersion))
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-security-policy-templates/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		versions, err := discoveryService.RemoteSecurityPolicyTemplateVersions(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "security policy template not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, versions)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-security-policy-templates/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.ToggleRemoteSecurityPolicyTemplate(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "security policy template not found"})
+			return
+		}
+		auditService.Record(user.Username, "remote.policy_template.toggle", item.ID, item.Name+" | enabled="+strconv.FormatBool(item.Enabled))
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-security-policy-templates/{id}/rollback", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input struct {
+			Version    int    `json:"version"`
+			ChangeNote string `json:"changeNote"`
+		}
+		if decodeJSON(r, &input) != nil || input.Version < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid rollback request"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := discoveryService.RollbackRemoteSecurityPolicyTemplate(r.PathValue("id"), input.Version, input.ChangeNote, user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.policy_template.rollback", item.ID, "v"+strconv.Itoa(input.Version)+" -> v"+strconv.Itoa(item.CurrentVersion))
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/discovery/remote-security-policy-templates/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := discoveryService.DeleteRemoteSecurityPolicyTemplate(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "remote.policy_template.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("DELETE /api/v1/discovery/remote-security-policies/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return
@@ -429,6 +530,27 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		auditService.Record(user.Username, "remote.policy.delete", r.PathValue("id"), "")
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+func remoteGrantAuditDetail(item discovery.AccessGrant) string {
+	scope := []string{}
+	if len(item.ProjectGroups) > 0 {
+		scope = append(scope, "groups="+strings.Join(item.ProjectGroups, ","))
+	} else if item.ProjectGroup != "" {
+		scope = append(scope, "group="+item.ProjectGroup)
+	}
+	if len(item.Tags) > 0 {
+		scope = append(scope, "tags="+strings.Join(item.Tags, ","))
+	}
+	if len(item.AssetIDs) > 0 {
+		scope = append(scope, "assets="+strings.Join(item.AssetIDs, ","))
+	} else if item.AssetID != "" {
+		scope = append(scope, "asset="+item.AssetID)
+	}
+	if len(scope) == 0 {
+		scope = append(scope, "all")
+	}
+	return item.Subject + " | " + strings.Join(scope, " | ")
 }
 
 func writeTerminalExport(w http.ResponseWriter, filename string, content []byte) {

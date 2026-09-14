@@ -422,7 +422,7 @@ func (s *Service) PurgeExpiredTerminalEvents() (int64, error) {
 	if s.db == nil {
 		return 0, nil
 	}
-	result, err := s.db.Exec(`DELETE FROM remote_terminal_events e USING remote_access_sessions a WHERE e.session_id=a.id AND a.status<>'active' AND a.updated_at < now() - make_interval(days => GREATEST(a.recording_retention_days,1))`)
+	result, err := s.db.Exec(`DELETE FROM remote_terminal_events e USING remote_access_sessions a WHERE e.session_id=a.id AND a.status<>'active' AND a.archive_status='archived' AND a.updated_at < now() - make_interval(days => GREATEST(a.recording_retention_days,1))`)
 	if err != nil {
 		return 0, err
 	}
@@ -430,7 +430,13 @@ func (s *Service) PurgeExpiredTerminalEvents() (int64, error) {
 }
 
 func (s *Service) RunTerminalRetention(ctx context.Context) {
-	purge := func() {
+	maintain := func() {
+		archived, err := s.ArchivePendingRemoteSessions(ctx)
+		if err != nil {
+			slog.Error("archive terminal recordings", "error", err)
+		} else if archived > 0 {
+			slog.Info("archived terminal recordings", "count", archived)
+		}
 		removed, err := s.PurgeExpiredTerminalEvents()
 		if err != nil {
 			slog.Error("purge expired terminal events", "error", err)
@@ -440,15 +446,15 @@ func (s *Service) RunTerminalRetention(ctx context.Context) {
 			slog.Info("purged expired terminal events", "count", removed)
 		}
 	}
-	purge()
-	ticker := time.NewTicker(24 * time.Hour)
+	maintain()
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			purge()
+			maintain()
 		}
 	}
 }

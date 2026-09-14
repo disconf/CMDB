@@ -7,18 +7,22 @@ import '@xterm/xterm/css/xterm.css'
 import { listCredentials, type Credential } from '@/api/cmdb'
 import { useAuthStore } from '@/stores/useAuthStore'
 
-type Asset = { id:string; name:string; ip:string; projectGroup:string; status:string }
+type Asset = { id:string; name:string; ip:string; projectGroup:string; status:string; tags?:string[] }
 type HostKey = { id:string; assetId:string; host:string; port:number; keyType:string; fingerprint:string; addedBy:string; createdAt:string }
 type HostKeyProbe = { assetId:string; host:string; port:number; keyType:string; fingerprint:string; publicKey:string; trusted:boolean; changed:boolean; trustedFingerprint:string }
-type Grant = { id:string; subjectType:string; subject:string; assetId:string; projectGroup:string; permissions:string[]; enabled:boolean; createdBy:string }
+type Grant = { id:string; subjectType:string; subject:string; assetId:string; projectGroup:string; assetIds?:string[]; projectGroups?:string[]; tags?:string[]; permissions:string[]; enabled:boolean; createdBy:string }
 type SessionLog = { time:string; level:string; kind?:string; message:string; durationMs?:number }
 type Collaborator = { username:string; access:'control'|'readonly'; addedBy:string; addedAt:string }
-type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; collaborators:Collaborator[]; accessMode?:'control'|'readonly'; activeConnections:number; controllerOnline:boolean; logs:SessionLog[] }
+type Session = { id:string; assetId:string; assetName:string; ip:string; credentialId:string; operator:string; status:string; createdAt:string; expiresAt:string; closedAt?:string; archiveStatus?:string; archiveBucket?:string; archiveKey?:string; archiveSha256?:string; archiveSize?:number; archivedAt?:string; archiveError?:string; collaborators:Collaborator[]; accessMode?:'control'|'readonly'; activeConnections:number; controllerOnline:boolean; logs:SessionLog[] }
 type TerminalEvent = { sequence:number; direction:string; data:string; createdAt:string }
 type TerminalRecording = { events:TerminalEvent[]; truncated:boolean }
 type TerminalApproval = { id:string; sessionId:string; assetId:string; assetName:string; ip:string; operator:string; command:string; reason:string; status:string; requestedAt:string; expiresAt:string; decidedAt?:string; approver?:string; decisionComment?:string }
 type TerminalSocketMessage = { type:string; data?:string; message?:string; access?:'control'|'readonly'; cols?:number; rows?:number; approval?:TerminalApproval }
 type SecurityPolicy = { id:string; name:string; subjectType:'global'|'user'|'role'; subject:string; enabled:boolean; priority:number; maxSessionMinutes:number; maxConcurrentSessions:number; recordingRetentionDays:number; fileTransferEnabled:boolean; uploadMaxMB:number; downloadMaxMB:number; allowedUploadPaths:string[]; allowedDownloadPaths:string[]; allowControlCollaborators:boolean; approvalMode:'risk'|'all'; approvalTtlMinutes:number; createdBy:string; updatedBy:string; updatedAt:string }
+
+type PolicyTemplateValues = { enabled:boolean; maxSessionMinutes:number; maxConcurrentSessions:number; recordingRetentionDays:number; fileTransferEnabled:boolean; uploadMaxMB:number; downloadMaxMB:number; allowedUploadPaths:string[]; allowedDownloadPaths:string[]; allowControlCollaborators:boolean; approvalMode:'risk'|'all'; approvalTtlMinutes:number }
+type PolicyTemplate = { id:string; name:string; description:string; enabled:boolean; currentVersion:number; values:PolicyTemplateValues; createdBy:string; updatedBy:string; createdAt:string; updatedAt:string }
+type PolicyTemplateVersion = { templateId:string; version:number; name:string; description:string; values:PolicyTemplateValues; changeNote:string; createdBy:string; createdAt:string }
 type PolicyUser = { id:string; username:string; displayName:string; department:string; roles:string[] }
 type PolicyRole = { id:string; name:string; description:string }
 type PolicyAudit = { id:string; actor:string; action:string; target:string; detail:string; occurredAt:string }
@@ -78,19 +82,20 @@ let terminalFit: FitAddon | undefined
 let terminalSocket: WebSocket | undefined
 let replayTerminal: XTerm | undefined
 let replayFit: FitAddon | undefined
-const grantForm = ref({ subjectType:'user', subject:'admin', scopeType:'project', assetId:'', projectGroup:'', permissions:['terminal', 'file'] })
+const grantForm = ref({ subjectType:'user', subject:'admin', scopeType:'project' as 'project'|'tag'|'asset', assetId:'', projectGroups:[] as string[], tags:[] as string[], permissions:['terminal', 'file'] })
 const collaboratorForm = ref({ username:'', access:'readonly' as 'control'|'readonly' })
 const defaultPolicyForm = () => ({ id:'', name:'自定义远程运维策略', subjectType:'user' as 'global'|'user'|'role', subject:'', enabled:true, maxSessionMinutes:30, maxConcurrentSessions:20, recordingRetentionDays:180, fileTransferEnabled:true, uploadMaxMB:50, downloadMaxMB:25, allowedUploadPaths:'/**', allowedDownloadPaths:'/**', allowControlCollaborators:true, approvalMode:'risk' as 'risk'|'all', approvalTtlMinutes:10 })
 const policyForm = ref(defaultPolicyForm())
-const policyTemplates: { id:string; name:string; description:string; values:Partial<ReturnType<typeof defaultPolicyForm>> }[] = [
-  { id:'standard', name:'标准运维', description:'30 分钟、风险审批、允许文件传输', values:{ maxSessionMinutes:30, maxConcurrentSessions:20, recordingRetentionDays:180, fileTransferEnabled:true, uploadMaxMB:50, downloadMaxMB:25, allowedUploadPaths:'/**', allowedDownloadPaths:'/**', allowControlCollaborators:true, approvalMode:'risk', approvalTtlMinutes:10 } },
-  { id:'strict', name:'严格审计', description:'全部命令审批、限制文件传输、缩短录像保留', values:{ maxSessionMinutes:15, maxConcurrentSessions:5, recordingRetentionDays:90, fileTransferEnabled:false, uploadMaxMB:10, downloadMaxMB:10, allowedUploadPaths:'/tmp/**', allowedDownloadPaths:'/var/log/**', allowControlCollaborators:false, approvalMode:'all', approvalTtlMinutes:5 } },
-  { id:'break-glass', name:'应急运维', description:'短时高并发、风险审批、仅关键人员使用', values:{ maxSessionMinutes:10, maxConcurrentSessions:10, recordingRetentionDays:365, fileTransferEnabled:true, uploadMaxMB:50, downloadMaxMB:25, allowedUploadPaths:'/tmp/**', allowedDownloadPaths:'/var/log/**', allowControlCollaborators:true, approvalMode:'risk', approvalTtlMinutes:3 } },
-]
+const policyTemplates = ref<PolicyTemplate[]>([])
+const policyTemplateForm = ref({ id:'', name:'', description:'', changeNote:'', enabled:true })
+const policyTemplateEditorOpen = ref(false)
+const policyTemplateVersions = ref<PolicyTemplateVersion[]>([])
+const policyTemplateHistoryId = ref('')
 
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
 const selectedSession = computed(() => sessions.value.find(item => item.id === selectedSessionId.value))
 const projectGroups = computed(() => [...new Set(assets.value.map(item => item.projectGroup).filter(Boolean))])
+const assetTags = computed(() => [...new Set(assets.value.flatMap(item => item.tags || []).filter(Boolean))])
 const visibleReplayLogs = computed(() => replaySession.value?.logs.slice(0, replayVisible.value) ?? [])
 const filteredHistory = computed(() => {
   const query = historyQuery.value.trim().toLowerCase()
@@ -192,11 +197,94 @@ function policyPayload(form = policyForm.value) {
   }
 }
 
+function applyTemplateValues(values:PolicyTemplateValues) {
+  policyForm.value = {
+    ...defaultPolicyForm(), ...values, id:'', subjectType:'user', subject:'',
+    allowedUploadPaths:values.allowedUploadPaths.join('\n'), allowedDownloadPaths:values.allowedDownloadPaths.join('\n'),
+  }
+}
+
 function applyPolicyTemplate(id:string) {
-  const template = policyTemplates.find(item => item.id === id)
+  const template = policyTemplates.value.find(item => item.id === id)
   if (!template) return
-  policyForm.value = { ...defaultPolicyForm(), ...template.values, id:'', subjectType:'user', subject:'' }
-  message.value = `已载入“${template.name}”模板，可调整后保存或批量分发`
+  applyTemplateValues(template.values)
+  message.value = `已载入“${template.name}”模板 v${template.currentVersion}，可调整后保存或批量分发`
+}
+
+function policyTemplateValues(form = policyForm.value):PolicyTemplateValues {
+  return {
+    enabled:form.enabled, maxSessionMinutes:Number(form.maxSessionMinutes), maxConcurrentSessions:Number(form.maxConcurrentSessions),
+    recordingRetentionDays:Number(form.recordingRetentionDays), fileTransferEnabled:form.fileTransferEnabled,
+    uploadMaxMB:Number(form.uploadMaxMB), downloadMaxMB:Number(form.downloadMaxMB),
+    allowedUploadPaths:form.allowedUploadPaths.split(/[\n,]+/).map(value => value.trim()).filter(Boolean),
+    allowedDownloadPaths:form.allowedDownloadPaths.split(/[\n,]+/).map(value => value.trim()).filter(Boolean),
+    allowControlCollaborators:form.allowControlCollaborators, approvalMode:form.approvalMode, approvalTtlMinutes:Number(form.approvalTtlMinutes),
+  }
+}
+
+function startCreatePolicyTemplate() {
+  policyTemplateForm.value = { id:'', name:'', description:'', changeNote:'新建模板', enabled:true }
+  policyTemplateEditorOpen.value = true
+  policyTemplateVersions.value = []
+  policyTemplateHistoryId.value = ''
+  message.value = '已进入模板新建模式，模板参数沿用上方当前策略配置'
+}
+
+function editPolicyTemplate(item:PolicyTemplate) {
+  policyTemplateForm.value = { id:item.id, name:item.name, description:item.description, changeNote:'', enabled:item.enabled }
+  policyTemplateEditorOpen.value = true
+  applyTemplateValues(item.values)
+  message.value = `正在编辑模板“${item.name}”，保存后生成 v${item.currentVersion + 1}`
+}
+
+async function savePolicyTemplate() {
+  const form = policyTemplateForm.value
+  if (!form.name.trim()) { error.value = '请输入模板名称'; return }
+  try {
+    const item = await request<PolicyTemplate>('/api/v1/discovery/remote-security-policy-templates', { method:'POST', body:JSON.stringify({
+      id:form.id, name:form.name, description:form.description, enabled:form.enabled, changeNote:form.changeNote || (form.id ? '更新模板参数' : '新建模板'), values:policyTemplateValues(),
+    }) })
+    message.value = `模板“${item.name}”已保存为 v${item.currentVersion}`
+    policyTemplateForm.value = { id:'', name:'', description:'', changeNote:'', enabled:true }
+    policyTemplateEditorOpen.value = false
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '模板保存失败' }
+}
+
+async function togglePolicyTemplate(item:PolicyTemplate) {
+  try {
+    await request(`/api/v1/discovery/remote-security-policy-templates/${encodeURIComponent(item.id)}/toggle`, { method:'POST' })
+    message.value = item.enabled ? `模板“${item.name}”已停用` : `模板“${item.name}”已启用`
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '模板状态更新失败' }
+}
+
+async function showPolicyTemplateVersions(item:PolicyTemplate) {
+  try {
+    policyTemplateVersions.value = await request<PolicyTemplateVersion[]>(`/api/v1/discovery/remote-security-policy-templates/${encodeURIComponent(item.id)}/versions`)
+    policyTemplateHistoryId.value = item.id
+    message.value = `已加载模板“${item.name}”的 ${policyTemplateVersions.value.length} 个历史版本`
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '模板版本加载失败' }
+}
+
+async function rollbackPolicyTemplate(item:PolicyTemplate, version:number) {
+  if (!confirm(`将模板“${item.name}”回滚到 v${version}？当前版本会保留在历史中。`)) return
+  try {
+    const updated = await request<PolicyTemplate>(`/api/v1/discovery/remote-security-policy-templates/${encodeURIComponent(item.id)}/rollback`, { method:'POST', body:JSON.stringify({ version, changeNote:`回滚到 v${version}` }) })
+    message.value = `模板已回滚并生成 v${updated.currentVersion}`
+    await load()
+    await showPolicyTemplateVersions(updated)
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '模板回滚失败' }
+}
+
+function grantScopeSummary(item:Grant) {
+  const scopes:string[] = []
+  const groups = item.projectGroups?.length ? item.projectGroups : item.projectGroup ? [item.projectGroup] : []
+  const assets = item.assetIds?.length ? item.assetIds : item.assetId ? [item.assetId] : []
+  if (groups.length) scopes.push(`项目组 ${groups.join(' / ')}`)
+  if (item.tags?.length) scopes.push(`标签 ${item.tags.join(' / ')}`)
+  if (assets.length) scopes.push(`资产 ${assets.join(' / ')}`)
+  return scopes.join(' + ') || '未限定范围'
 }
 
 async function batchApplyPolicy() {
@@ -225,6 +313,15 @@ function policyAuditLabel(action:string) {
     'remote.policy.save':'策略保存',
     'remote.policy.delete':'策略删除',
     'remote.policy.batch_apply':'策略批量分发',
+    'remote.policy_template.create':'模板新建',
+    'remote.policy_template.update':'模板版本更新',
+    'remote.policy_template.toggle':'模板启停',
+    'remote.policy_template.rollback':'模板版本回滚',
+    'remote.policy_template.delete':'模板删除',
+    'remote.recording.archive':'录像归档',
+    'remote.grant.create':'授权创建',
+    'remote.grant.toggle':'授权启停',
+    'remote.grant.delete':'授权删除',
   } as Record<string,string>)[action] || action
 }
 
@@ -270,7 +367,7 @@ async function load() {
   busy.value = true
   error.value = ''
   try {
-    const [assetPage, gs, ss, cs, hks, hs, approvals, effective, policies, audits, users, roles] = await Promise.all([
+    const [assetPage, gs, ss, cs, hks, hs, approvals, effective, policies, templates, audits, users, roles] = await Promise.all([
       request<{data:Asset[]}>('/api/v1/cmdb/assets?page=1&pageSize=100&type=server'),
       request<Grant[]>('/api/v1/discovery/access-grants'),
       request<Session[]>('/api/v1/discovery/remote-sessions'),
@@ -280,6 +377,7 @@ async function load() {
       request<TerminalApproval[]>('/api/v1/discovery/remote-terminal-approvals'),
       request<SecurityPolicy>('/api/v1/discovery/remote-security-policies/effective'),
       isPlatformAdmin.value ? request<SecurityPolicy[]>('/api/v1/discovery/remote-security-policies') : Promise.resolve([] as SecurityPolicy[]),
+      isPlatformAdmin.value ? request<PolicyTemplate[]>('/api/v1/discovery/remote-security-policy-templates') : Promise.resolve([] as PolicyTemplate[]),
       isPlatformAdmin.value ? request<PolicyAudit[]>('/api/v1/discovery/remote-security-policies/audit?limit=80') : Promise.resolve([] as PolicyAudit[]),
       isPlatformAdmin.value ? request<PolicyUser[]>('/api/v1/system/users') : Promise.resolve([] as PolicyUser[]),
       isPlatformAdmin.value ? request<PolicyRole[]>('/api/v1/system/roles') : Promise.resolve([] as PolicyRole[]),
@@ -293,6 +391,7 @@ async function load() {
     terminalApprovals.value = approvals
     effectivePolicy.value = effective
     securityPolicies.value = policies
+    policyTemplates.value = templates
     policyAudits.value = audits
     policyUsers.value = users
     policyRoles.value = roles
@@ -308,8 +407,15 @@ async function load() {
 
 async function createGrant() {
   try {
-    const scope = grantForm.value.scopeType === 'project' ? { projectGroup:grantForm.value.projectGroup, assetId:'' } : { assetId:grantForm.value.assetId, projectGroup:'' }
-    await request('/api/v1/discovery/access-grants', { method:'POST', body:JSON.stringify({ subjectType:grantForm.value.subjectType, subject:grantForm.value.subject, permissions:grantForm.value.permissions, ...scope }) })
+    const form = grantForm.value
+    const scope = form.scopeType === 'project'
+      ? { projectGroups:form.projectGroups, assetIds:[], tags:[] }
+      : form.scopeType === 'tag'
+        ? { tags:form.tags, projectGroups:[], assetIds:[] }
+        : { assetIds:form.assetId ? [form.assetId] : [], projectGroups:[], tags:[] }
+    await request('/api/v1/discovery/access-grants', { method:'POST', body:JSON.stringify({ subjectType:form.subjectType, subject:form.subject, permissions:form.permissions, ...scope }) })
+    grantForm.value.projectGroups = []
+    grantForm.value.tags = []
     message.value = '授权已创建'
     await load()
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '授权创建失败' }
@@ -390,7 +496,7 @@ async function download() {
 }
 
 async function closeSession() {
-  try { await request(`/api/v1/discovery/remote-sessions/${selectedSessionId.value}`, { method:'DELETE' }); message.value = '远程会话已关闭，录像已归档'; await load() }
+  try { await request(`/api/v1/discovery/remote-sessions/${selectedSessionId.value}`, { method:'DELETE' }); message.value = '远程会话已关闭，后台正在归档录像'; await load() }
   catch (reason) { error.value = reason instanceof Error ? reason.message : '关闭会话失败' }
 }
 
@@ -424,6 +530,14 @@ async function forceDisconnectSession() {
     message.value = '远程会话已由管理员强制断开'
     await load()
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '强制断开失败' }
+}
+
+async function archiveSession(item:Session) {
+  try {
+    await request(`/api/v1/discovery/remote-sessions/${encodeURIComponent(item.id)}/archive`, { method:'POST' })
+    message.value = `会话 ${item.assetName} 的录像已归档到对象存储`
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '录像归档失败' }
 }
 
 async function downloadExport(kind:'terminal-recording'|'command-log') {
@@ -638,6 +752,13 @@ function resetReplay() {
   replayVisible.value = replaySession.value?.logs.length ?? 0
 }
 
+function archiveStatusLabel(item:Session) {
+  if (item.archiveStatus === 'archived') return `已归档 ${Math.max(1, Math.round((item.archiveSize || 0) / 1024))} KB`
+  if (item.archiveStatus === 'archiving') return '归档中'
+  if (item.archiveStatus === 'failed') return '归档失败'
+  return item.status === 'active' ? '会话中' : '待归档'
+}
+
 function statusLabel(status:string) {
   return ({ active:'进行中', closed:'已关闭', interrupted:'已中断' } as Record<string,string>)[status] || status
 }
@@ -676,19 +797,28 @@ onBeforeUnmount(() => {
     <div class="access-grid">
       <section class="access-card">
         <h3><ShieldCheck/>账户授权</h3>
-        <div class="access-form">
-          <select v-model="grantForm.subjectType"><option value="user">用户</option><option value="role">角色</option></select>
-          <input v-model="grantForm.subject" placeholder="用户或角色">
-          <select v-model="grantForm.scopeType"><option value="project">项目组</option><option value="asset">指定资产</option></select>
-          <select v-if="grantForm.scopeType==='project'" v-model="grantForm.projectGroup"><option value="">选择项目组</option><option v-for="group in projectGroups" :key="group">{{group}}</option></select>
+        <div class="access-form grant-form">
+          <div class="grant-main-row">
+            <select v-model="grantForm.subjectType"><option value="user">用户</option><option value="role">角色</option></select>
+            <input v-model="grantForm.subject" placeholder="用户或角色">
+            <select v-model="grantForm.scopeType"><option value="project">项目组（可多选）</option><option value="tag">资产标签（可多选）</option><option value="asset">指定资产</option></select>
+            <label><input v-model="grantForm.permissions" type="checkbox" value="terminal">终端</label>
+            <label><input v-model="grantForm.permissions" type="checkbox" value="file">文件</label>
+            <button class="primary" @click="createGrant">新增授权</button>
+          </div>
+          <div v-if="grantForm.scopeType==='project'" class="grant-scope-picker">
+            <label v-for="group in projectGroups" :key="group"><input v-model="grantForm.projectGroups" type="checkbox" :value="group"><span>{{group}}</span></label>
+            <em v-if="!projectGroups.length">暂无项目组</em>
+          </div>
+          <div v-else-if="grantForm.scopeType==='tag'" class="grant-scope-picker">
+            <label v-for="tag in assetTags" :key="tag"><input v-model="grantForm.tags" type="checkbox" :value="tag"><span>{{tag}}</span></label>
+            <em v-if="!assetTags.length">暂无资产标签</em>
+          </div>
           <select v-else v-model="grantForm.assetId"><option value="">选择资产</option><option v-for="asset in assets" :key="asset.id" :value="asset.id">{{asset.name}} · {{asset.ip}}</option></select>
-          <label><input v-model="grantForm.permissions" type="checkbox" value="terminal">终端</label>
-          <label><input v-model="grantForm.permissions" type="checkbox" value="file">文件</label>
-          <button class="primary" @click="createGrant">新增授权</button>
         </div>
         <div class="grant-list">
           <article v-for="item in grants" :key="item.id" :class="{disabled:!item.enabled}">
-            <KeyRound/><div><strong>{{item.subjectType}} · {{item.subject}}</strong><span>{{item.projectGroup||item.assetId}} · {{item.permissions.join(' / ')}}</span></div>
+            <KeyRound/><div><strong>{{item.subjectType}} · {{item.subject}}</strong><span>{{grantScopeSummary(item)}} · {{item.permissions.join(' / ')}}</span></div>
             <button @click="toggleGrant(item)">{{item.enabled?'停用':'启用'}}</button><button @click="removeGrant(item)">删除</button>
           </article>
         </div>
@@ -769,10 +899,37 @@ onBeforeUnmount(() => {
 
       <section v-if="isPlatformAdmin" class="access-card policy-card">
         <header class="policy-head"><div><h3><ShieldCheck/>终端安全策略中心</h3><span>用户策略优先于角色策略，角色策略优先于全局默认策略；修改与批量分发全程审计</span></div><b>{{securityPolicies.length}} 条策略</b></header>
-        <div class="policy-templates">
-          <span>快捷模板</span>
-          <button v-for="item in policyTemplates" :key="item.id" type="button" @click="applyPolicyTemplate(item.id)"><strong>{{item.name}}</strong><small>{{item.description}}</small></button>
-          <em>模板只填充左侧参数，不会立即修改线上策略</em>
+        <div class="policy-template-center">
+          <header><div><h4><History/>策略模板与版本</h4><span>模板持久化保存，每次编辑自动生成不可变版本；应用模板只填充参数，不会直接修改线上策略</span></div><button class="primary" @click="startCreatePolicyTemplate">将当前配置存为模板</button></header>
+          <div class="policy-template-grid">
+            <article v-for="item in policyTemplates" :key="item.id" :class="{disabled:!item.enabled}">
+              <header><strong>{{item.name}}</strong><b>v{{item.currentVersion}}</b></header>
+              <p>{{item.description || '暂无模板说明'}}</p>
+              <small>{{item.values.maxSessionMinutes}} 分钟 · {{item.values.approvalMode==='all'?'全部审批':'风险审批'}} · 录像 {{item.values.recordingRetentionDays}} 天</small>
+              <footer>
+                <button class="primary" @click="applyPolicyTemplate(item.id)">应用</button>
+                <button @click="editPolicyTemplate(item)">编辑</button>
+                <button @click="showPolicyTemplateVersions(item)">历史</button>
+                <button @click="togglePolicyTemplate(item)">{{item.enabled?'停用':'启用'}}</button>
+              </footer>
+            </article>
+            <div v-if="!policyTemplates.length" class="policy-template-empty">暂无可用模板，可将当前策略配置保存为模板</div>
+          </div>
+          <div v-if="policyTemplateEditorOpen" class="policy-template-editor">
+            <header><strong>{{policyTemplateForm.id?'保存模板新版本':'新建策略模板'}}</strong><span>参数沿用上方当前策略配置，可先调整参数再保存</span></header>
+            <input v-model="policyTemplateForm.name" maxlength="100" placeholder="模板名称">
+            <input v-model="policyTemplateForm.description" maxlength="500" placeholder="模板说明">
+            <input v-model="policyTemplateForm.changeNote" maxlength="500" placeholder="版本说明（可选）">
+            <label><input v-model="policyTemplateForm.enabled" type="checkbox">模板启用</label>
+            <footer><button class="primary" @click="savePolicyTemplate">保存模板版本</button><button @click="policyTemplateEditorOpen=false;policyTemplateForm={id:'',name:'',description:'',changeNote:'',enabled:true}">取消</button></footer>
+          </div>
+          <div v-if="policyTemplateVersions.length" class="policy-template-history">
+            <header><strong>版本历史</strong><button @click="policyTemplateVersions=[];policyTemplateHistoryId=''">关闭</button></header>
+            <article v-for="version in policyTemplateVersions" :key="`${version.templateId}-${version.version}`">
+              <div><strong>v{{version.version}}</strong><span>{{version.changeNote || '无版本说明'}}</span><small>{{version.createdBy}} · {{version.createdAt}}</small></div>
+              <button v-if="version.templateId===policyTemplateHistoryId" @click="rollbackPolicyTemplate(policyTemplates.find(item=>item.id===version.templateId)!, version.version)">回滚</button>
+            </article>
+          </div>
         </div>
         <div class="policy-layout">
           <div class="policy-form">
@@ -848,13 +1005,13 @@ onBeforeUnmount(() => {
           <div class="history-list">
             <button v-for="item in filteredHistory.slice(0,80)" :key="item.id" :class="{selected:replaySession?.id===item.id}" @click="openReplay(item.id)">
               <span class="history-main"><strong>{{item.assetName}}</strong><small>{{item.ip}} · {{item.operator}}</small></span>
-              <span class="history-meta"><b :data-status="item.status">{{statusLabel(item.status)}}</b><small>{{item.createdAt}} · {{commandCount(item)}} 条命令</small></span>
+              <span class="history-meta"><b :data-status="item.status">{{statusLabel(item.status)}}</b><small>{{item.createdAt}} · {{commandCount(item)}} 条命令 · {{archiveStatusLabel(item)}}</small></span>
             </button>
             <div v-if="!filteredHistory.length" class="empty-access">暂无匹配的历史会话</div>
           </div>
           <div v-if="replaySession" class="replay-panel">
             <header>
-              <div><strong>{{replaySession.assetName}}</strong><span>{{replaySession.ip}} · {{replaySession.operator}} · {{replaySession.createdAt}}</span></div>
+              <div><strong>{{replaySession.assetName}}</strong><span>{{replaySession.ip}} · {{replaySession.operator}} · {{replaySession.createdAt}} · {{archiveStatusLabel(replaySession)}}</span></div>
               <b :data-status="replaySession.status">{{statusLabel(replaySession.status)}}</b>
             </header>
             <div class="replay-actions">
@@ -862,6 +1019,7 @@ onBeforeUnmount(() => {
               <button v-else @click="stopReplay"><Pause/>暂停</button>
               <button @click="resetReplay"><RotateCcw/>显示全部</button>
               <button :disabled="recordingLoading" @click="loadTerminalRecording"><TerminalIcon/>{{recordingLoading?'加载中':'逐屏录像'}}</button>
+              <button v-if="replaySession.status!=='active' && replaySession.archiveStatus!=='archived'" @click="archiveSession(replaySession)">归档录像</button>
               <span>{{replayVisible}} / {{replaySession.logs.length}} 个事件</span>
             </div>
             <div class="replay-timeline">
@@ -886,7 +1044,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}.live-terminal-card{grid-column:1/-1}.live-terminal-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.live-terminal-head>div:first-child{display:grid;gap:4px}.live-terminal-head h3{margin:0}.terminal-actions{display:flex;align-items:center;gap:8px}.terminal-actions b{padding:4px 9px;border-radius:999px;font-size:11px}.terminal-actions b[data-state=offline]{background:#2a1721;color:#fda4af}.terminal-actions b[data-state=connecting]{background:#322712;color:#fcd34d}.terminal-actions b[data-state=online]{background:#0b2f2b;color:#5eead4}.terminal-actions button{display:flex;align-items:center;gap:5px}.xterm-shell{height:430px;margin-top:12px;padding:8px;border:1px solid #16445c;border-radius:8px;background:#020b12;overflow:hidden}.xterm-shell .xterm{height:100%}.terminal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;height:180px;margin-top:12px;border:1px dashed #1b4258;color:#64869a}.terminal-empty svg{width:30px;height:30px;color:#22d3ee}.terminal-empty strong{color:#c9e6f5}.terminal-recording{margin-top:12px;border-top:1px solid #123043}.terminal-recording>header{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.terminal-recording>header>div{display:grid;gap:3px}.terminal-recording>header span{color:#6f91a5;font-size:10px}.terminal-recording>header button{display:flex;align-items:center;gap:5px}.replay-xterm{height:300px;margin-top:0}.terminal-recording+.replay-timeline{max-height:220px}.approval-card{grid-column:1/-1}.approval-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.approval-head>div{display:grid;gap:4px}.approval-head h3{margin:0}.approval-head>div>span{color:#6f91a5}.approval-head>b{padding:5px 10px;border-radius:999px;background:#162c38;color:#8fb2c4;font-size:11px}.approval-head>b[data-active=true]{background:#3a2610;color:#fbbf24}.approval-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:10px;margin-top:12px}.approval-list article{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid #443414;background:#171307}.approval-list article[data-status=approved]{border-color:#14564c;background:#071b19}.approval-list article[data-status=rejected],.approval-list article[data-status=failed]{border-color:#692c3a;background:#1d0b11}.approval-list article[data-status=expired]{border-color:#40515d;background:#101820}.approval-main{display:grid;gap:6px;min-width:0}.approval-main header{display:flex;align-items:center;justify-content:space-between;gap:12px}.approval-main header b{font-size:10px;color:#fbbf24}.approval-main header b[data-status=approved]{color:#5eead4}.approval-main header b[data-status=rejected],.approval-main header b[data-status=failed]{color:#fb7185}.approval-main code{overflow-wrap:anywhere;padding:8px;border-radius:6px;background:#020b12;color:#fde68a;font:11px/1.5 monospace}.approval-main p{margin:0;color:#fca5a5;font-size:12px}.approval-main small{color:#7895a6;font-size:10px}.approval-list footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.approval-list footer input{flex:1;min-width:180px;padding:8px 9px;border:1px solid #4a3a1a;border-radius:6px;background:#080f14;color:#e5eef5}.approval-list footer button{display:flex;align-items:center;gap:5px}.approval-list footer span{color:#fbbf24;font-size:11px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
-.session-participants{margin-top:12px;padding-top:12px;border-top:1px solid #123043}.session-participants>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.session-participants>header>div{display:grid;gap:3px}.session-participants>header span{color:#6f91a5;font-size:10px}.session-participants>header>b{padding:4px 8px;border-radius:999px;background:#321a22;color:#fda4af;font-size:10px}.session-participants>header>b[data-online=true]{background:#0b2f2b;color:#5eead4}.collaborator-form{display:grid;grid-template-columns:1fr 130px auto;gap:7px;margin-top:10px}.collaborator-form input,.collaborator-form select{min-width:0;padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff}.collaborator-list{display:grid;gap:6px;margin-top:9px}.collaborator-list article{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;padding:8px;border:1px solid #123043;background:#061a29}.collaborator-list article>div{display:grid;gap:2px}.collaborator-list article strong{font-size:12px}.collaborator-list article span{color:#6f91a5;font-size:10px}.participant-empty{padding:10px;border:1px dashed #1b4258;color:#64869a;font-size:11px;text-align:center}.xterm-shell{position:relative}.terminal-watermark{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;transform:rotate(-18deg);pointer-events:none;color:rgba(103,232,249,.09);font:700 24px/1.6 monospace;letter-spacing:3px;text-align:center;white-space:pre-wrap;overflow:hidden}.danger{border-color:#7f1d1d!important;background:#331116!important;color:#fecaca!important}@media(max-width:1200px){.collaborator-form{grid-template-columns:1fr}}</style>
+.session-participants{margin-top:12px;padding-top:12px;border-top:1px solid #123043}.session-participants>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.session-participants>header>div{display:grid;gap:3px}.session-participants>header span{color:#6f91a5;font-size:10px}.session-participants>header>b{padding:4px 8px;border-radius:999px;background:#321a22;color:#fda4af;font-size:10px}.session-participants>header>b[data-online=true]{background:#0b2f2b;color:#5eead4}.collaborator-form{display:grid;grid-template-columns:1fr 130px auto;gap:7px;margin-top:10px}.collaborator-form input,.collaborator-form select{min-width:0;padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff}.collaborator-list{display:grid;gap:6px;margin-top:9px}.collaborator-list article{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;padding:8px;border:1px solid #123043;background:#061a29}.collaborator-list article>div{display:grid;gap:2px}.collaborator-list article strong{font-size:12px}.collaborator-list article span{color:#6f91a5;font-size:10px}.participant-empty{padding:10px;border:1px dashed #1b4258;color:#64869a;font-size:11px;text-align:center}.xterm-shell{position:relative}.terminal-watermark{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;transform:rotate(-18deg);pointer-events:none;color:rgba(103,232,249,.09);font:700 24px/1.6 monospace;letter-spacing:3px;text-align:center;white-space:pre-wrap;overflow:hidden}.danger{border-color:#7f1d1d!important;background:#331116!important;color:#fecaca!important}@media(max-width:1200px){.collaborator-form{grid-template-columns:1fr}}
+.grant-form{gap:9px}.grant-main-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grant-main-row input:not([type=checkbox]){min-width:150px}.grant-scope-picker{display:flex;gap:6px;max-height:150px;overflow:auto;padding:8px;border:1px solid #16445c;background:#04121c;flex-wrap:wrap}.grant-scope-picker label{display:flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid #17415a;background:#082638;color:#dcecff;font-size:11px;cursor:pointer}.grant-scope-picker label:hover{border-color:#22d3ee}.grant-scope-picker em{color:#64748b;font-size:10px;font-style:normal}.policy-template-center{margin-top:12px;padding:11px;border:1px solid #16445c;background:#061620}.policy-template-center>header,.policy-template-history>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.policy-template-center h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-template-center>header span,.policy-template-editor>header span{display:block;margin-top:3px;color:#6f91a5;font-size:10px}.policy-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin-top:9px}.policy-template-grid article{display:grid;gap:6px;padding:10px;border:1px solid #17415a;background:#082638}.policy-template-grid article.disabled{opacity:.5}.policy-template-grid article>header{display:flex;justify-content:space-between;gap:8px}.policy-template-grid article p{margin:0;color:#8fb2c4;font-size:10px}.policy-template-grid article small{color:#6f91a5;font-size:9px}.policy-template-grid article footer,.policy-template-editor footer{display:flex;gap:6px;flex-wrap:wrap}.policy-template-empty{display:grid;place-items:center;min-height:110px;color:#64748b;font-size:11px;border:1px dashed #17415a}.policy-template-editor{display:grid;gap:7px;margin-top:10px;padding:10px;border:1px solid #155e75;background:#04121c}.policy-template-editor input{padding:7px;border:1px solid #22465f;background:#061725;color:#dcecff}.policy-template-editor label{color:#8fb2c4;font-size:10px}.policy-template-history{display:grid;gap:5px;margin-top:10px;padding:9px;border:1px solid #123043;background:#040f17}.policy-template-history article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 5px;border-top:1px solid #123043}.policy-template-history article>div{display:grid;gap:2px}.policy-template-history span,.policy-template-history small{color:#7894a8;font-size:9px}
+</style>
 <style scoped>
 .policy-card{grid-column:1/-1}.policy-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.policy-head>div{display:grid;gap:4px}.policy-head h3{margin:0}.policy-head>div>span{color:#6f91a5;font-size:10px}.policy-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:10px}.policy-layout{display:grid;grid-template-columns:minmax(420px,1fr) minmax(420px,1.15fr);gap:14px;margin-top:12px}.policy-form{display:grid;gap:8px;padding:12px;border:1px solid #123043;background:#061620}.policy-form input,.policy-form select,.policy-form textarea{padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff;font:inherit}.policy-form textarea{resize:vertical}.policy-row,.policy-limits{display:grid;grid-template-columns:1fr 1fr;gap:8px}.policy-numbers{display:grid;grid-template-columns:1fr 1fr;gap:8px}.policy-numbers label,.policy-limits label,.policy-path{display:grid;gap:4px;color:#7894a8;font-size:10px}.policy-switches{display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:#8fb2c4;font-size:11px}.policy-switches label{display:flex;align-items:center;gap:4px}.policy-switches select{margin-left:auto}.policy-actions{display:flex;gap:8px}.policy-list{display:grid;gap:8px;max-height:520px;overflow:auto}.policy-list article{display:grid;gap:7px;padding:11px;border:1px solid #16445c;background:#061a29}.policy-list article.disabled{opacity:.55}.policy-list article>header{display:flex;justify-content:space-between;gap:12px}.policy-list article>header>div{display:grid;gap:2px}.policy-list article>header span,.policy-list article p{color:#6f91a5;font-size:10px;margin:0}.policy-list article>header>b{color:#5eead4;font-size:10px}.policy-list article.disabled>header>b{color:#94a3b8}.policy-list footer{display:flex;gap:7px}.policy-effective{margin:9px 0 0;padding:7px 9px;border:1px solid #155e75;background:#082b38;color:#a5f3fc!important}.policy-list article>p:first-of-type{color:#8fb2c4}.policy-list article>p:last-of-type{color:#64748b}@media(max-width:1200px){.policy-layout{grid-template-columns:1fr}.policy-numbers{grid-template-columns:1fr 1fr}}.policy-templates{display:flex;align-items:stretch;gap:8px;margin-top:12px;padding:9px;border:1px solid #16445c;background:#061620;flex-wrap:wrap}.policy-templates>span{align-self:center;color:#67e8f9;font-size:10px;font-weight:700;letter-spacing:1px}.policy-templates button{display:grid;gap:2px;min-width:170px;padding:8px 10px;border:1px solid #17415a;background:#082638;color:#dcecff;text-align:left;cursor:pointer}.policy-templates button:hover{border-color:#22d3ee;background:#0b3045}.policy-templates strong{font-size:11px}.policy-templates small{color:#7894a8;font-size:9px}.policy-templates em{margin-left:auto;align-self:center;color:#64748b;font-size:10px;font-style:normal}.policy-list article>small{color:#64748b;font-size:9px}.policy-batch{margin-top:14px;padding:12px;border:1px solid #16445c;background:#061620}.policy-batch>header,.policy-audit>header{display:flex;justify-content:space-between;align-items:center;gap:12px}.policy-batch h4,.policy-audit h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-batch>header>div,.policy-audit>header{display:grid;gap:3px}.policy-batch>header span,.policy-audit>header span{color:#6f91a5;font-size:10px}.policy-batch>header>b{padding:4px 8px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:10px}.policy-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.policy-target-grid>section{min-width:0;padding:9px;border:1px solid #123043;background:#040f17}.policy-target-grid>section>strong{display:block;margin-bottom:7px;color:#8fb2c4;font-size:10px}.policy-target-list{display:grid;gap:5px;max-height:180px;overflow:auto}.policy-target-list label{display:flex;align-items:flex-start;gap:7px;padding:6px;border:1px solid transparent;color:#dcecff;cursor:pointer}.policy-target-list label:hover{border-color:#1b5069;background:#071c29}.policy-target-list input{margin-top:2px}.policy-target-list span{display:grid;gap:2px;min-width:0;font-size:11px}.policy-target-list small{overflow:hidden;color:#6f91a5;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.policy-target-list em{color:#64748b;font-size:10px;font-style:normal}.policy-batch>footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}.policy-batch>footer span{color:#7894a8;font-size:10px}.policy-audit{margin-top:14px;padding:12px;border:1px solid #16445c;background:#040f17}.policy-audit ul{display:grid;gap:0;max-height:240px;overflow:auto;margin:9px 0 0;padding:0;list-style:none}.policy-audit li{display:grid;grid-template-columns:145px 180px 1fr;gap:10px;padding:8px 4px;border-top:1px solid #123043;color:#8fb2c4;font-size:10px}.policy-audit time{color:#64748b}.policy-audit strong{color:#a5f3fc}.policy-audit-empty{display:block!important;color:#64748b!important;text-align:center}.policy-list article>p:last-of-type{color:#64748b}@media(max-width:1200px){.policy-layout{grid-template-columns:1fr}.policy-numbers{grid-template-columns:1fr 1fr}.policy-target-grid{grid-template-columns:1fr}.policy-audit li{grid-template-columns:1fr}.policy-templates em{width:100%;margin-left:0}}
+
+.grant-form{gap:9px}.grant-main-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grant-main-row input:not([type=checkbox]){min-width:150px}.grant-scope-picker{display:flex;gap:6px;max-height:150px;overflow:auto;padding:8px;border:1px solid #16445c;background:#04121c;flex-wrap:wrap}.grant-scope-picker label{display:flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid #17415a;background:#082638;color:#dcecff;font-size:11px;cursor:pointer}.grant-scope-picker label:hover{border-color:#22d3ee}.grant-scope-picker em{color:#64748b;font-size:10px;font-style:normal}.policy-template-center{margin-top:12px;padding:11px;border:1px solid #16445c;background:#061620}.policy-template-center>header,.policy-template-history>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.policy-template-center h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-template-center>header span,.policy-template-editor>header span{display:block;margin-top:3px;color:#6f91a5;font-size:10px}.policy-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin-top:9px}.policy-template-grid article{display:grid;gap:6px;padding:10px;border:1px solid #17415a;background:#082638}.policy-template-grid article.disabled{opacity:.5}.policy-template-grid article>header{display:flex;justify-content:space-between;gap:8px}.policy-template-grid article p{margin:0;color:#8fb2c4;font-size:10px}.policy-template-grid article small{color:#6f91a5;font-size:9px}.policy-template-grid article footer,.policy-template-editor footer{display:flex;gap:6px;flex-wrap:wrap}.policy-template-empty{display:grid;place-items:center;min-height:110px;color:#64748b;font-size:11px;border:1px dashed #17415a}.policy-template-editor{display:grid;gap:7px;margin-top:10px;padding:10px;border:1px solid #155e75;background:#04121c}.policy-template-editor input{padding:7px;border:1px solid #22465f;background:#061725;color:#dcecff}.policy-template-editor label{color:#8fb2c4;font-size:10px}.policy-template-history{display:grid;gap:5px;margin-top:10px;padding:9px;border:1px solid #123043;background:#040f17}.policy-template-history article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 5px;border-top:1px solid #123043}.policy-template-history article>div{display:grid;gap:2px}.policy-template-history span,.policy-template-history small{color:#7894a8;font-size:9px}
 </style>

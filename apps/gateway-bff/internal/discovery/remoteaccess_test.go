@@ -74,3 +74,17 @@ func TestAppendRemoteSessionLogPersistsStructuredEntry(t *testing.T) {
 		t.Fatalf("unexpected structured log: %+v", updated.Logs)
 	}
 }
+
+func TestAccessGrantMultipleProjectsAndTags(t *testing.T) {
+	service := NewService()
+	service.accessGrants = []AccessGrant{{ID: "g1", SubjectType: "user", Subject: "alice", ProjectGroups: []string{"ops", "core"}, Tags: []string{"prod"}, Permissions: []string{"terminal"}, Enabled: true}}
+	if !service.authorizeRemoteAccessScoped("alice", nil, "host-1", "core", []string{"prod"}, "terminal") {
+		t.Fatal("expected project and tag scoped grant to match")
+	}
+	if service.authorizeRemoteAccessScoped("alice", nil, "host-1", "core", []string{"dev"}, "terminal") {
+		t.Fatal("tag mismatch should not match")
+	}
+	if service.authorizeRemoteAccessScoped("alice", nil, "host-1", "other", []string{"prod"}, "terminal") {
+		t.Fatal("project mismatch should not match")
+	}
+}
