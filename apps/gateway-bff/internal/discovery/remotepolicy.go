@@ -1,10 +1,12 @@
 package discovery
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path"
 	"strconv"
 	"strings"
@@ -51,6 +53,27 @@ type RemoteSecurityPolicyInput struct {
 	AllowControlCollaborators bool     `json:"allowControlCollaborators"`
 	ApprovalMode              string   `json:"approvalMode"`
 	ApprovalTTLMinutes        int      `json:"approvalTtlMinutes"`
+}
+
+type RemoteSecurityPolicySubjectInput struct {
+	SubjectType string `json:"subjectType"`
+	Subject     string `json:"subject"`
+}
+
+type RemoteSecurityPolicyBatchInput struct {
+	Policy   RemoteSecurityPolicyInput          `json:"policy"`
+	Subjects []RemoteSecurityPolicySubjectInput `json:"subjects"`
+}
+
+type RemoteSecurityPolicyBatchError struct {
+	SubjectType string `json:"subjectType"`
+	Subject     string `json:"subject"`
+	Message     string `json:"message"`
+}
+
+type RemoteSecurityPolicyBatchResult struct {
+	Applied []RemoteSecurityPolicy           `json:"applied"`
+	Errors  []RemoteSecurityPolicyBatchError `json:"errors"`
 }
 
 func remoteSecurityPolicyID() string {
@@ -143,6 +166,42 @@ func (s *Service) SaveRemoteSecurityPolicy(input RemoteSecurityPolicyInput, acto
 		err = s.persistRemoteSecurityPolicy(item)
 	}
 	return cloneRemoteSecurityPolicy(item), err
+}
+
+func (s *Service) SaveRemoteSecurityPolicyBatch(input RemoteSecurityPolicyBatchInput, actor string) (RemoteSecurityPolicyBatchResult, error) {
+	result := RemoteSecurityPolicyBatchResult{Applied: []RemoteSecurityPolicy{}, Errors: []RemoteSecurityPolicyBatchError{}}
+	if len(input.Subjects) == 0 || len(input.Subjects) > 100 {
+		return result, fmt.Errorf("%w: batch subjects must contain 1 to 100 items", ErrRemoteValidation)
+	}
+	seen := map[string]struct{}{}
+	for _, subject := range input.Subjects {
+		subjectType := strings.ToLower(strings.TrimSpace(subject.SubjectType))
+		subjectName := strings.ToLower(strings.TrimSpace(subject.Subject))
+		if subjectType != "user" && subjectType != "role" {
+			result.Errors = append(result.Errors, RemoteSecurityPolicyBatchError{SubjectType: subject.SubjectType, Subject: subject.Subject, Message: "只支持用户或角色策略"})
+			continue
+		}
+		if subjectName == "" {
+			result.Errors = append(result.Errors, RemoteSecurityPolicyBatchError{SubjectType: subjectType, Subject: subject.Subject, Message: "策略对象不能为空"})
+			continue
+		}
+		key := subjectType + ":" + subjectName
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		itemInput := input.Policy
+		itemInput.ID = ""
+		itemInput.SubjectType = subjectType
+		itemInput.Subject = subjectName
+		item, err := s.SaveRemoteSecurityPolicy(itemInput, actor)
+		if err != nil {
+			result.Errors = append(result.Errors, RemoteSecurityPolicyBatchError{SubjectType: subjectType, Subject: subjectName, Message: err.Error()})
+			continue
+		}
+		result.Applied = append(result.Applied, item)
+	}
+	return result, nil
 }
 
 func (s *Service) DeleteRemoteSecurityPolicy(id string) error {
@@ -368,6 +427,30 @@ func (s *Service) PurgeExpiredTerminalEvents() (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+func (s *Service) RunTerminalRetention(ctx context.Context) {
+	purge := func() {
+		removed, err := s.PurgeExpiredTerminalEvents()
+		if err != nil {
+			slog.Error("purge expired terminal events", "error", err)
+			return
+		}
+		if removed > 0 {
+			slog.Info("purged expired terminal events", "count", removed)
+		}
+	}
+	purge()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purge()
+		}
+	}
 }
 
 func (s *Service) loadRemoteSecurityPolicies() error {

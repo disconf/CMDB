@@ -86,3 +86,43 @@ func TestRemoteSecurityFileAndCollaboratorLimits(t *testing.T) {
 		t.Fatalf("readonly collaborator should remain allowed: %v", err)
 	}
 }
+func TestRemoteSecurityPolicyBatchApply(t *testing.T) {
+	service := NewService()
+	base := testPolicyInput("user", "ignored")
+	base.ApprovalMode = "all"
+	result, err := service.SaveRemoteSecurityPolicyBatch(RemoteSecurityPolicyBatchInput{
+		Policy: base,
+		Subjects: []RemoteSecurityPolicySubjectInput{
+			{SubjectType: "user", Subject: "Alice"},
+			{SubjectType: "role", Subject: "Operator"},
+			{SubjectType: "user", Subject: "alice"},
+		},
+	}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Applied) != 2 || len(result.Errors) != 0 {
+		t.Fatalf("unexpected batch result: %+v", result)
+	}
+	if got := service.EffectiveRemoteSecurityPolicy("alice", nil).ApprovalMode; got != "all" {
+		t.Fatalf("user batch policy should apply, got %q", got)
+	}
+	if got := service.EffectiveRemoteSecurityPolicy("bob", []string{"operator"}).ApprovalMode; got != "all" {
+		t.Fatalf("role batch policy should apply, got %q", got)
+	}
+}
+
+func TestRemoteSecurityPolicyBatchRejectsInvalidSubjects(t *testing.T) {
+	service := NewService()
+	base := testPolicyInput("user", "ignored")
+	result, err := service.SaveRemoteSecurityPolicyBatch(RemoteSecurityPolicyBatchInput{
+		Policy:   base,
+		Subjects: []RemoteSecurityPolicySubjectInput{{SubjectType: "global", Subject: "global"}},
+	}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Applied) != 0 || len(result.Errors) != 1 {
+		t.Fatalf("unexpected invalid batch result: %+v", result)
+	}
+}

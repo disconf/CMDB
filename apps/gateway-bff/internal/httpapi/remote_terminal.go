@@ -372,6 +372,51 @@ func registerRemoteTerminalRoutes(mux *http.ServeMux, authService *auth.Service,
 		auditService.Record(user.Username, "remote.policy.save", item.ID, item.SubjectType+"/"+item.Subject)
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-security-policies/audit", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 || limit > 200 {
+			limit = 100
+		}
+		entries, err := auditService.List(500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "AUDIT_ERROR", "message": err.Error()})
+			return
+		}
+		filtered := make([]audit.Entry, 0, limit)
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Action, "remote.policy.") {
+				continue
+			}
+			filtered = append(filtered, entry)
+			if len(filtered) >= limit {
+				break
+			}
+		}
+		writeJSON(w, http.StatusOK, filtered)
+	})
+	mux.HandleFunc("POST /api/v1/discovery/remote-security-policies/batch", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input discovery.RemoteSecurityPolicyBatchInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid remote security policy batch"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		result, err := discoveryService.SaveRemoteSecurityPolicyBatch(input, user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
+			return
+		}
+		for _, item := range result.Applied {
+			auditService.Record(user.Username, "remote.policy.batch_apply", item.ID, item.SubjectType+"/"+item.Subject)
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("DELETE /api/v1/discovery/remote-security-policies/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return

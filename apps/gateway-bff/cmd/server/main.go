@@ -34,6 +34,7 @@ func main() {
 	go api.MonitorService().RunEscalations(runContext)
 	go api.DiscoveryService().RunAgentHealth(runContext)
 	go api.DiscoveryService().AutoScanLoops(runContext)
+	go api.DiscoveryService().RunTerminalRetention(runContext)
 	var publisher *events.OutboxPublisher
 	if os.Getenv("KAFKA_BROKERS") != "" {
 		var err error
