@@ -26,6 +26,7 @@ import (
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/k8s"
 	"cmdb/gateway-bff/internal/monitor"
+	"cmdb/gateway-bff/internal/networkautomation"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/system"
 	"cmdb/gateway-bff/internal/tickets"
@@ -69,6 +70,8 @@ func NewServer() *Server {
 	systemService := system.NewService()
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
+	networkAutomationService := networkautomation.NewService(cmdbService, ticketsService, monitorService, jobsService)
+	go networkAutomationService.Run(context.Background(), time.Minute)
 	authService := auth.NewService()
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
@@ -76,6 +79,7 @@ func NewServer() *Server {
 	auditService := audit.NewService()
 	registerRancherRoutes(mux, authService, auditService, cmdbService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
+	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
 	registerTopologySnapshotRoutes(mux, authService, cmdbService, topologyService)
 	discoveryService.SetCredentialResolver(func(id string) (string, string, error) {
 		m, err := credentialsService.Resolve(id)

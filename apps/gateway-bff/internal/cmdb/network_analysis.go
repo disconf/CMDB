@@ -45,6 +45,9 @@ type NetworkAnomaly struct {
 	Detail         string   `json:"detail"`
 	AssetID        string   `json:"assetId,omitempty"`
 	AssetName      string   `json:"assetName,omitempty"`
+	ProjectGroup   string   `json:"projectGroup,omitempty"`
+	Environment    string   `json:"environment,omitempty"`
+	Location       string   `json:"location,omitempty"`
 	DeviceID       string   `json:"deviceId,omitempty"`
 	DeviceName     string   `json:"deviceName,omitempty"`
 	PortName       string   `json:"portName,omitempty"`
@@ -138,7 +141,9 @@ func (s *Service) VLANInventory() []VLANInventory {
 func (s *Service) NetworkAnomalies() []NetworkAnomaly {
 	assets := s.InventoryAssets()
 	byIP := make(map[string]Asset, len(assets))
+	byID := make(map[string]Asset, len(assets))
 	for _, asset := range assets {
+		byID[asset.ID] = asset
 		if asset.IP != "" {
 			byIP[asset.IP] = asset
 		}
@@ -237,6 +242,17 @@ func (s *Service) NetworkAnomalies() []NetworkAnomaly {
 		}
 		return anomalies[i].Title < anomalies[j].Title
 	})
+	for i := range anomalies {
+		asset := byID[anomalies[i].AssetID]
+		if asset.ID == "" {
+			asset = byID[anomalies[i].DeviceID]
+		}
+		if asset.ID != "" {
+			anomalies[i].ProjectGroup = asset.ProjectGroup
+			anomalies[i].Environment = asset.Environment
+			anomalies[i].Location = asset.Location
+		}
+	}
 	states := s.networkAnomalyStateMap()
 	for i := range anomalies {
 		if state, ok := states[anomalies[i].ID]; ok {

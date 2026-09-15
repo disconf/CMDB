@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -53,3 +53,9 @@ export const acknowledgeNetworkAnomaly=(token:string,id:string,note='')=>send<Ne
 export const resolveNetworkAnomaly=(token:string,id:string,note='')=>send<NetworkAnomaly>(`/api/v1/cmdb/network-anomalies/${encodeURIComponent(id)}/resolve`,token,'POST',{note})
 export const createNetworkAnomalyTicket=(token:string,id:string)=>send<{ticket:unknown;created:boolean}>(`/api/v1/cmdb/network-anomalies/${encodeURIComponent(id)}/ticket`,token,'POST',{})
 export const syncNetworkAnomalies=(token:string)=>send<{synced:number}>('/api/v1/cmdb/network-anomalies/sync-alerts',token,'POST',{})
+export const fetchNetworkAutomationPolicies=(token:string)=>get<NetworkAutomationPolicy[]>('/api/v1/cmdb/network-automation-policies',token)
+export const createNetworkAutomationPolicy=(token:string,input:Partial<NetworkAutomationPolicy>)=>send<NetworkAutomationPolicy>('/api/v1/cmdb/network-automation-policies',token,'POST',input)
+export const updateNetworkAutomationPolicy=(token:string,id:string,input:Partial<NetworkAutomationPolicy>)=>send<NetworkAutomationPolicy>(`/api/v1/cmdb/network-automation-policies/${encodeURIComponent(id)}`,token,'PUT',input)
+export const deleteNetworkAutomationPolicy=(token:string,id:string)=>del<void>(`/api/v1/cmdb/network-automation-policies/${encodeURIComponent(id)}`,token)
+export const evaluateNetworkAutomation=(token:string)=>send<NetworkAutomationReport>('/api/v1/cmdb/network-automation-policies/evaluate',token,'POST',{})
+export const fetchNetworkAutomationLifecycle=(token:string)=>get<NetworkAutomationLifecycle[]>('/api/v1/cmdb/network-automation-lifecycle',token)

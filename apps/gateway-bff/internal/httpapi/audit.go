@@ -121,6 +121,14 @@ func auditAction(method, path string) string {
 		return "cmdb.network_anomaly.ticket"
 	case method == http.MethodPost && path == "/api/v1/cmdb/network-anomalies/sync-alerts":
 		return "cmdb.network_anomaly.sync_alerts"
+	case method == http.MethodPost && path == "/api/v1/cmdb/network-automation-policies":
+		return "cmdb.network_automation_policy.create"
+	case method == http.MethodPut && strings.HasPrefix(path, "/api/v1/cmdb/network-automation-policies/"):
+		return "cmdb.network_automation_policy.update"
+	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-automation-policies/"):
+		return "cmdb.network_automation_policy.delete"
+	case method == http.MethodPost && path == "/api/v1/cmdb/network-automation-policies/evaluate":
+		return "cmdb.network_automation.evaluate"
 	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-links/"):
 		return "cmdb.network_link.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/models":
