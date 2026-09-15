@@ -40,4 +40,15 @@ func TestPostgresPolicyAndLifecyclePersistence(t *testing.T) {
 	if err != nil || lifecycle[life.AnomalyID].Status != "open" {
 		t.Fatalf("load lifecycle: %#v %v", lifecycle, err)
 	}
+	rule := ComplianceRule{ID: "integration-compliance-rule", Name: "integration", Action: "allow", Type: "mac", Value: "AA:BB:CC:DD:EE:FF", Status: "approved", CreatedAt: now, UpdatedAt: now}
+	if err := upsertComplianceRule(context.Background(), db, rule); err != nil {
+		t.Fatalf("persist compliance rule: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_network_compliance_rules WHERE id=$1", rule.ID)
+	})
+	rules, err := loadComplianceRules(context.Background(), db)
+	if err != nil || len(rules) == 0 {
+		t.Fatalf("load compliance rules: %#v %v", rules, err)
+	}
 }

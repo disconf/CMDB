@@ -23,14 +23,15 @@ var ErrNotFound = errors.New("automation policy not found")
 var ErrValidation = errors.New("automation policy validation")
 
 type Service struct {
-	mu        sync.RWMutex
-	db        *sql.DB
-	cmdb      *cmdb.Service
-	tickets   *tickets.Service
-	monitor   *monitor.Service
-	jobs      *jobs.Service
-	policies  []Policy
-	lifecycle map[string]Lifecycle
+	mu              sync.RWMutex
+	db              *sql.DB
+	cmdb            *cmdb.Service
+	tickets         *tickets.Service
+	monitor         *monitor.Service
+	jobs            *jobs.Service
+	policies        []Policy
+	lifecycle       map[string]Lifecycle
+	complianceRules []ComplianceRule
 }
 
 func defaultPolicy() Policy {
@@ -39,7 +40,7 @@ func defaultPolicy() Policy {
 }
 
 func NewService(cmdbService *cmdb.Service, ticketsService *tickets.Service, monitorService *monitor.Service, jobsService *jobs.Service) *Service {
-	service := &Service{cmdb: cmdbService, tickets: ticketsService, monitor: monitorService, jobs: jobsService, policies: []Policy{defaultPolicy()}, lifecycle: map[string]Lifecycle{}}
+	service := &Service{cmdb: cmdbService, tickets: ticketsService, monitor: monitorService, jobs: jobsService, policies: []Policy{defaultPolicy()}, lifecycle: map[string]Lifecycle{}, complianceRules: []ComplianceRule{}}
 	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
 		db, err := openPostgres(url)
 		if err != nil {
@@ -62,6 +63,11 @@ func NewService(cmdbService *cmdb.Service, ticketsService *tickets.Service, moni
 			panic(fmt.Sprintf("load network anomaly lifecycle: %v", lifecycleErr))
 		}
 		service.lifecycle = lifecycle
+		complianceRules, complianceErr := loadComplianceRules(context.Background(), db)
+		if complianceErr != nil {
+			panic(fmt.Sprintf("load network compliance rules: %v", complianceErr))
+		}
+		service.complianceRules = complianceRules
 	}
 	return service
 }

@@ -38,3 +38,6 @@ export interface NetworkAutomationReport { evaluated:number;policies:number;auto
 export interface NetworkDiffSummary { added:number;removed:number;changed:number;unknownAccess:number }
 export interface NetworkDiffChange { kind:string;action:string;id:string;name:string;detail:string;before?:string;after?:string }
 export interface NetworkDiff { from:string;to:string;generatedAt:string;summary:NetworkDiffSummary;changes:NetworkDiffChange[] }
+
+export interface ComplianceRule { id:string;name:string;action:string;type:string;value:string;environment:string;projectGroup:string;location:string;vlan:string;status:string;description:string;expiresAt?:string;createdBy:string;approvedBy?:string;createdAt:string;updatedAt:string }
+export interface ComplianceDecision { id:string;anomalyId:string;ruleId?:string;ruleName?:string;status:string;reason:string;title:string;ip?:string;macAddress?:string;vlan?:string;environment?:string;projectGroup?:string;location?:string;firstSeenAt:string;expiresAt?:string }

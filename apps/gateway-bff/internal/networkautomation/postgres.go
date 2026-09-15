@@ -59,6 +59,10 @@ func openPostgres(databaseURL string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate network automation schema: %w", err)
 	}
+	if _, err = db.ExecContext(ctx, complianceSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate network compliance schema: %w", err)
+	}
 	return db, nil
 }
 

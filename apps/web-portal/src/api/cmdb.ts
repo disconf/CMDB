@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -62,3 +62,9 @@ export const fetchNetworkAutomationLifecycle=(token:string)=>get<NetworkAutomati
 export const fetchNetworkTopologySnapshots=(token:string,limit=20)=>get<TopologySnapshot[]>(`/api/v1/cmdb/network-topology-snapshots?limit=${limit}`,token)
 export const captureNetworkTopologySnapshot=(token:string)=>send<TopologySnapshot>('/api/v1/cmdb/network-topology-snapshots',token,'POST',{})
 export const fetchNetworkTopologyDiff=(token:string,from='',to='')=>get<NetworkDiff>(`/api/v1/cmdb/network-topology-diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,token)
+export const fetchComplianceRules=(token:string)=>get<ComplianceRule[]>('/api/v1/cmdb/network-compliance-rules',token)
+export const createComplianceRule=(token:string,input:Partial<ComplianceRule>)=>send<ComplianceRule>('/api/v1/cmdb/network-compliance-rules',token,'POST',input)
+export const approveComplianceRule=(token:string,id:string)=>send<ComplianceRule>(`/api/v1/cmdb/network-compliance-rules/${encodeURIComponent(id)}/approve`,token,'POST',{})
+export const deleteComplianceRule=(token:string,id:string)=>del<void>(`/api/v1/cmdb/network-compliance-rules/${encodeURIComponent(id)}`,token)
+export const fetchComplianceDecisions=(token:string)=>get<ComplianceDecision[]>('/api/v1/cmdb/network-compliance-decisions',token)
+export const evaluateCompliance=(token:string)=>send<ComplianceDecision[]>('/api/v1/cmdb/network-compliance-rules/evaluate',token,'POST',{})

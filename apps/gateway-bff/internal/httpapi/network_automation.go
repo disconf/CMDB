@@ -116,6 +116,71 @@ func registerNetworkAutomationRoutes(mux *http.ServeMux, authService *auth.Servi
 		}
 		writeJSON(w, http.StatusOK, diff)
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-compliance-rules", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, service.ComplianceRules())
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-compliance-rules", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input networkautomation.ComplianceRuleInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.CreateComplianceRule(input, user.Username)
+		if errors.Is(err, networkautomation.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "合规规则参数无效"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "COMPLIANCE_RULE_CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-compliance-rules/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.ApproveComplianceRule(r.PathValue("id"), user.Username)
+		if errors.Is(err, networkautomation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RULE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "COMPLIANCE_RULE_APPROVE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/cmdb/network-compliance-rules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		if err := service.DeleteComplianceRule(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RULE_NOT_FOUND"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-compliance-decisions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, service.ComplianceDecisions())
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-compliance-rules/evaluate", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, service.ComplianceDecisions())
+	})
 	mux.HandleFunc("GET /api/v1/cmdb/network-automation-lifecycle", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return

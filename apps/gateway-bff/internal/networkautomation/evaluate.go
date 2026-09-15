@@ -34,6 +34,14 @@ func (s *Service) Evaluate(operator string) (Report, error) {
 	anomalies := s.cmdb.NetworkAnomalies()
 	policies := s.Policies()
 	report := Report{Evaluated: len(anomalies), Policies: len(policies)}
+	decisions := map[string]ComplianceDecision{}
+	for _, decision := range s.ComplianceDecisions() {
+		decisions[decision.AnomalyID] = decision
+	}
+	lifecycleSnapshot := map[string]Lifecycle{}
+	for _, life := range s.snapshotLifecycle() {
+		lifecycleSnapshot[life.AnomalyID] = life
+	}
 	active := map[string]bool{}
 	firing := []monitor.CMDBAnomalyAlert{}
 	for _, anomaly := range anomalies {
@@ -41,6 +49,19 @@ func (s *Service) Evaluate(operator string) (Report, error) {
 			continue
 		}
 		active[anomaly.ID] = true
+		if anomaly.Type == "unmanaged-access" {
+			decision := decisions[anomaly.ID]
+			if decision.Status == "allowed" || decision.Status == "temporary" {
+				report.ComplianceAllowed++
+				if life, ok := lifecycleSnapshot[anomaly.ID]; ok && life.TicketID != "" {
+					_, _, _ = s.tickets.SyncAlert(tickets.AlertInput{ID: anomaly.ID, Title: anomaly.Title, Severity: anomaly.Severity, Status: "resolved", Target: anomalyTarget(anomaly), Message: "合规规则已放行", Owner: "compliance-engine"})
+					life.Status = "resolved"
+					life.ResolvedAt = time.Now().Format("2006-01-02 15:04:05")
+					_ = s.saveLifecycle(life)
+				}
+				continue
+			}
+		}
 		policy, ok := matchPolicy(policies, anomaly)
 		if !ok {
 			continue

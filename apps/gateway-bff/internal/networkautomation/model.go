@@ -51,13 +51,14 @@ type Lifecycle struct {
 }
 
 type Report struct {
-	Evaluated        int      `json:"evaluated"`
-	Policies         int      `json:"policies"`
-	AutoTickets      int      `json:"autoTickets"`
-	Escalated        int      `json:"escalated"`
-	Resolved         int      `json:"resolved"`
-	VerificationJobs int      `json:"verificationJobs"`
-	AlertsSynced     int      `json:"alertsSynced"`
-	Snapshots        int      `json:"snapshots"`
-	Errors           []string `json:"errors,omitempty"`
+	Evaluated         int      `json:"evaluated"`
+	Policies          int      `json:"policies"`
+	AutoTickets       int      `json:"autoTickets"`
+	Escalated         int      `json:"escalated"`
+	Resolved          int      `json:"resolved"`
+	VerificationJobs  int      `json:"verificationJobs"`
+	AlertsSynced      int      `json:"alertsSynced"`
+	Snapshots         int      `json:"snapshots"`
+	ComplianceAllowed int      `json:"complianceAllowed"`
+	Errors            []string `json:"errors,omitempty"`
 }
