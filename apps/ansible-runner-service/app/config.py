@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     ssh_password:str=""
     ssh_private_key_path:str="/run/secrets/ssh_private_key"
     known_hosts_path:str="/run/secrets/known_hosts"
+    ssh_strict_host_key_checking:str="accept-new"
     vault_password_file:str=""
     s3_endpoint_url:str=""
     s3_access_key_id:str=""

@@ -4,9 +4,9 @@ export type Template={id:string;name:string;category:string;description:string;c
 export type Playbook={id:string;name:string;description:string;content:string;constants:Record<string,string>;variables:Record<string,string>;enabled:boolean;createdBy:string}
 export type PlaybookInput=Omit<Playbook,'id'|'createdBy'>
 export type JobLog={time:string;level:string;message:string}
-export type Job={id:string;templateId:string;name:string;targets:string[];status:string;progress:number;operator:string;startedAt:string;duration:string;logs:JobLog[];timeoutSeconds:number;attempt:number;approvedBy:string;playbookId:string;variables:Record<string,string>}
-export type Schedule={id:string;name:string;templateId:string;templateName:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;nextRun:string;lastRun:string;lastStatus:string;lastJobId:string;createdBy:string}
-export type ScheduleInput={name:string;templateId:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean}
+export type Job={id:string;templateId:string;name:string;targets:string[];status:string;progress:number;operator:string;startedAt:string;duration:string;logs:JobLog[];timeoutSeconds:number;attempt:number;approvedBy:string;playbookId:string;variables:Record<string,string>;credentialId:string}
+export type Schedule={id:string;name:string;templateId:string;templateName:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;nextRun:string;lastRun:string;lastStatus:string;lastJobId:string;createdBy:string;credentialId:string}
+export type ScheduleInput={name:string;templateId:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;credentialId:string}
 export type Summary={templates:number;running:number;successToday:number;failedToday:number;schedules:number;playbooks:number}
 export type ExecutorInfo={mode:string;ready:boolean;endpoint:string}
 
@@ -15,8 +15,8 @@ export const fetchJobData=(token:string)=>Promise.all([request<Summary>('/api/v1
 export const fetchJobAssets=(token:string)=>request<AssetPage>('/api/v1/cmdb/assets?page=1&pageSize=100',token)
 export const createTemplate=(token:string,input:Omit<Template,'id'|'lastRun'|'enabled'>)=>request<Template>('/api/v1/jobs/templates',token,{method:'POST',body:JSON.stringify(input)})
 export const toggleTemplate=(token:string,id:string)=>request<Template>(`/api/v1/jobs/templates/${id}/toggle`,token,{method:'POST'})
-export const createExecution=(token:string,input:{templateId:string;targets:string[];timeoutSeconds:number})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
-export const createPlaybookExecution=(token:string,input:{playbookId:string;targets:string[];variables:Record<string,string>;timeoutSeconds:number})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
+export const createExecution=(token:string,input:{templateId:string;targets:string[];timeoutSeconds:number;credentialId:string})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
+export const createPlaybookExecution=(token:string,input:{playbookId:string;targets:string[];variables:Record<string,string>;timeoutSeconds:number;credentialId:string})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
 export const jobAction=(token:string,id:string,action:'run'|'retry'|'cancel'|'approve')=>request<Job>(`/api/v1/jobs/executions/${id}/${action}`,token,{method:'POST'})
 export const createPlaybook=(token:string,input:PlaybookInput)=>request<Playbook>('/api/v1/jobs/playbooks',token,{method:'POST',body:JSON.stringify(input)})
 export const updatePlaybook=(token:string,id:string,input:PlaybookInput)=>request<Playbook>(`/api/v1/jobs/playbooks/${id}`,token,{method:'PUT',body:JSON.stringify(input)})

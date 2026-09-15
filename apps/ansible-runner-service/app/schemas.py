@@ -6,6 +6,7 @@ class RunRequest(BaseModel):
     operator:str=Field(min_length=1,max_length=120)
     attempt:int=Field(ge=1,le=100)
     timeoutSeconds:int=Field(ge=10,le=86400)
+    credentialId:str=Field(default="",max_length=120)
 class RunEvent(BaseModel):progress:int=Field(ge=0,le=100);level:str;message:str
 class RunResponse(BaseModel):status:str;message:str;events:list[RunEvent]=Field(default_factory=list)
 class HealthResponse(BaseModel):status:str;profiles:int

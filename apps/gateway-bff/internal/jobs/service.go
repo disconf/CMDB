@@ -73,6 +73,7 @@ type Job struct {
 	Attempt        int               `json:"attempt"`
 	ApprovedBy     string            `json:"approvedBy"`
 	PlaybookID     string            `json:"playbookId"`
+	CredentialID   string            `json:"credentialId"`
 	Variables      map[string]string `json:"variables"`
 }
 type Schedule struct {
@@ -89,6 +90,7 @@ type Schedule struct {
 	LastStatus     string   `json:"lastStatus"`
 	LastJobID      string   `json:"lastJobId"`
 	CreatedBy      string   `json:"createdBy"`
+	CredentialID   string   `json:"credentialId"`
 }
 type ScheduleInput struct {
 	Name           string   `json:"name"`
@@ -96,6 +98,7 @@ type ScheduleInput struct {
 	Targets        []string `json:"targets"`
 	Cron           string   `json:"cron"`
 	TimeoutSeconds int      `json:"timeoutSeconds"`
+	CredentialID   string   `json:"credentialId"`
 	Enabled        *bool    `json:"enabled"`
 }
 type CreateInput struct {
@@ -105,6 +108,7 @@ type CreateInput struct {
 	Targets        []string          `json:"targets"`
 	Operator       string            `json:"operator"`
 	TimeoutSeconds int               `json:"timeoutSeconds"`
+	CredentialID   string            `json:"credentialId"`
 }
 type Summary struct {
 	Templates    int `json:"templates"`
@@ -284,6 +288,7 @@ func (s *Service) Summary() Summary {
 }
 
 func (s *Service) Create(in CreateInput) (Job, error) {
+	in.CredentialID = strings.TrimSpace(in.CredentialID)
 	if in.PlaybookID != "" {
 		return s.createPlaybookExecution(in)
 	}
@@ -310,7 +315,7 @@ func (s *Service) Create(in CreateInput) (Job, error) {
 		status = "awaiting_approval"
 		message = "高风险任务已创建，等待其他管理员审批"
 	}
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, Attempt: 0}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -334,7 +339,7 @@ func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, Attempt: 0}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -393,7 +398,7 @@ func (s *Service) start(id string, retry bool) (Job, error) {
 	s.persistLocked(*j)
 	attempt := j.Attempt
 	command := s.commandForJobLocked(*j)
-	request := ExecutionRequest{JobID: j.ID, Command: command, Targets: append([]string(nil), j.Targets...), Operator: j.Operator, Attempt: attempt, TimeoutSeconds: j.TimeoutSeconds}
+	request := ExecutionRequest{JobID: j.ID, Command: command, Targets: append([]string(nil), j.Targets...), Operator: j.Operator, Attempt: attempt, TimeoutSeconds: j.TimeoutSeconds, CredentialID: j.CredentialID}
 	out := cloneJob(*j)
 	s.mu.Unlock()
 	go s.execute(ctx, id, attempt, request)

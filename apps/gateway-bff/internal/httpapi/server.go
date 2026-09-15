@@ -83,7 +83,20 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ASSET_READ_FAILED"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": asset.ID, "ip": asset.IP, "sshPort": runnerAssetSSHPort(asset)})
+		payload := map[string]any{"id": asset.ID, "ip": asset.IP, "sshPort": runnerAssetSSHPort(asset)}
+		credentialID := runnerAssetCredentialID(asset, r.URL.Query().Get("credentialId"))
+		if credentialID != "" {
+			material, err := credentialsService.Resolve(credentialID)
+			if err != nil || strings.TrimSpace(material.Username) == "" || strings.TrimSpace(material.Secret) == "" {
+				writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "CREDENTIAL_RESOLVE_FAILED", "message": "SSH 凭据不可用"})
+				return
+			}
+			payload["credentialId"] = credentialID
+			payload["sshUser"] = material.Username
+			payload["sshPassword"] = material.Secret
+			payload["authType"] = "password"
+		}
+		writeJSON(w, http.StatusOK, payload)
 	})
 	mux.Handle("GET /metrics", platformMetrics.Handler())
 	mux.HandleFunc("GET /api/v1/monitor/service-discovery/node-exporter", func(w http.ResponseWriter, r *http.Request) {
@@ -2544,6 +2557,19 @@ func authorizeRunnerToken(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func runnerAssetCredentialID(asset cmdb.Asset, override string) string {
+	if value := strings.TrimSpace(override); value != "" {
+		return value
+	}
+	for _, attr := range asset.Attributes {
+		name := strings.ToLower(strings.TrimSpace(attr.Name))
+		if name == "ssh_credential_id" || name == "sshcredentialid" || name == "ssh credential id" {
+			return strings.TrimSpace(attr.Value)
+		}
+	}
+	return ""
 }
 
 func runnerAssetSSHPort(asset cmdb.Asset) int {

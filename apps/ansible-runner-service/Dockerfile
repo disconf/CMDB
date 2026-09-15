@@ -1,7 +1,7 @@
 ARG PYTHON_BASE=harbor.qa.bcavt.com/inchtek/python:3.11.9
 FROM ${PYTHON_BASE}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client sshpass && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 runner
 WORKDIR /app
 COPY requirements.txt ./

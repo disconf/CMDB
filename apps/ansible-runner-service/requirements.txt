@@ -5,3 +5,4 @@ httpx==0.28.1
 ansible-runner==2.4.1
 ansible-core==2.18.7
 boto3==1.40.1
+paramiko==3.5.1

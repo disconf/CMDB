@@ -18,6 +18,7 @@ class FakeResponse:
 
 class FakeClient:
     endpoint = ""
+    params = None
     headers = {}
     payload = {"ip": "10.0.0.8", "sshPort": 2222}
 
@@ -31,8 +32,9 @@ class FakeClient:
     async def __aexit__(self, exc_type, exc, traceback):
         return False
 
-    async def get(self, endpoint):
+    async def get(self, endpoint, params=None):
         FakeClient.endpoint = endpoint
+        FakeClient.params = params
         return FakeResponse(payload=FakeClient.payload)
 
 
@@ -64,3 +66,28 @@ def test_resolve_inventory_uses_password_when_key_is_unavailable(monkeypatch):
     inventory = asyncio.run(RunnerService(settings).resolve_inventory(["srv-2"]))
     assert inventory["all"]["hosts"]["srv-2"]["ansible_port"] == 22
     assert inventory["all"]["vars"]["ansible_password"] == "secret"
+
+def test_resolve_inventory_uses_vault_credential_per_asset(monkeypatch):
+    monkeypatch.setattr("app.services.httpx.AsyncClient", FakeClient)
+    FakeClient.payload = {
+        "ip": "10.0.0.10",
+        "sshPort": 2202,
+        "credentialId": "cred-1",
+        "sshUser": "ops",
+        "sshPassword": "secret",
+        "authType": "password",
+    }
+    settings = Settings(
+        runner_api_token="0123456789abcdef-test-token",
+        cmdb_internal_token="internal-runner-token",
+        ssh_user="root",
+        ssh_private_key_path="/path/that/does/not/exist",
+    )
+    inventory = asyncio.run(RunnerService(settings).resolve_inventory(["srv-3"], "cred-1"))
+    assert FakeClient.params == {"credentialId": "cred-1"}
+    host = inventory["all"]["hosts"]["srv-3"]
+    assert host["ansible_user"] == "ops"
+    assert host["ansible_password"] == "secret"
+    assert host["ansible_connection"] == "paramiko"
+    assert "PreferredAuthentications=password" in host["ansible_ssh_common_args"]
+    assert "PubkeyAuthentication=no" in host["ansible_ssh_common_args"]

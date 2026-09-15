@@ -20,6 +20,7 @@ type ExecutionRequest struct {
 	Operator       string   `json:"operator"`
 	Attempt        int      `json:"attempt"`
 	TimeoutSeconds int      `json:"timeoutSeconds"`
+	CredentialID   string   `json:"credentialId,omitempty"`
 }
 type ExecutionEvent struct {
 	Progress int    `json:"progress"`

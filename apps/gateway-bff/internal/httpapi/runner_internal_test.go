@@ -51,3 +51,12 @@ func TestRunnerAssetSSHPortUsesAttributeOverride(t *testing.T) {
 		t.Fatalf("expected default SSH port for invalid override, got %d", port)
 	}
 }
+func TestRunnerAssetCredentialIDUsesOverrideAndAttribute(t *testing.T) {
+	asset := cmdb.Asset{Attributes: []cmdb.Attribute{{Name: "SSH_CREDENTIAL_ID", Value: "cred-attr"}}}
+	if got := runnerAssetCredentialID(asset, " cred-override "); got != "cred-override" {
+		t.Fatalf("expected request override, got %q", got)
+	}
+	if got := runnerAssetCredentialID(asset, ""); got != "cred-attr" {
+		t.Fatalf("expected asset credential, got %q", got)
+	}
+}

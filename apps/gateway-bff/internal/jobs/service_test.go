@@ -80,3 +80,12 @@ func TestCloneJobCopiesVariables(t *testing.T) {
 		t.Fatal("cloneJob must copy variables")
 	}
 }
+func TestCreatePreservesCredentialID(t *testing.T) {
+	job, err := NewService().Create(CreateInput{TemplateID: "tpl-health", Targets: []string{"prod-api-01"}, Operator: "admin", CredentialID: " cred-1 "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.CredentialID != "cred-1" {
+		t.Fatalf("expected normalized credential id, got %q", job.CredentialID)
+	}
+}

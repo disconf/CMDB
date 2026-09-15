@@ -38,7 +38,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: runner
-          image: harbor.qa.bcavt.com/cmdb/ansible-runner-service:1.0.3
+          image: harbor.qa.bcavt.com/cmdb/ansible-runner-service:1.0.4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -53,6 +53,8 @@ spec:
               value: /run/secrets/id_ed25519
             - name: KNOWN_HOSTS_PATH
               value: /run/cmdb/known_hosts
+            - name: PYTHONPATH
+              value: /opt/runner/paramiko-deps:/app
           volumeMounts:
             - name: runner-ssh
               mountPath: /run/secrets

@@ -52,6 +52,7 @@ func (s *Service) templateByID(id string) (Template, error) {
 func normalizeScheduleInput(input ScheduleInput, template Template) (ScheduleInput, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
+	input.CredentialID = strings.TrimSpace(input.CredentialID)
 	input.Cron = strings.TrimSpace(input.Cron)
 	if input.Name == "" || input.TemplateID == "" || input.Cron == "" || len(input.Targets) == 0 || !template.Enabled {
 		return input, ErrValidation
@@ -98,7 +99,7 @@ func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedul
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
-	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, Targets: append([]string(nil), input.Targets...), Cron: input.Cron, TimeoutSeconds: input.TimeoutSeconds, Enabled: *input.Enabled, NextRun: formatScheduleTime(next), CreatedBy: createdBy}
+	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, Targets: append([]string(nil), input.Targets...), Cron: input.Cron, TimeoutSeconds: input.TimeoutSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTime(next), CreatedBy: createdBy}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schedules = append([]Schedule{schedule}, s.schedules...)
@@ -130,6 +131,7 @@ func (s *Service) UpdateSchedule(id string, input ScheduleInput) (Schedule, erro
 			s.schedules[i].Targets = append([]string(nil), input.Targets...)
 			s.schedules[i].Cron = input.Cron
 			s.schedules[i].TimeoutSeconds = input.TimeoutSeconds
+			s.schedules[i].CredentialID = input.CredentialID
 			s.schedules[i].Enabled = *input.Enabled
 			if s.schedules[i].Enabled {
 				s.schedules[i].NextRun = formatScheduleTime(next)
@@ -203,7 +205,7 @@ func (s *Service) RunSchedule(id, operator string, advance bool) (Job, error) {
 	if operator == "" {
 		operator = "scheduler"
 	}
-	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds})
+	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds, CredentialID: schedule.CredentialID})
 	if err == nil && job.Status == "pending" {
 		job, err = s.Run(job.ID)
 	}
