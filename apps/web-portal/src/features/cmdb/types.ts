@@ -15,3 +15,11 @@ export interface Analytics { status:{total:number;online:number;warning:number;o
 export interface IdcRack { id:string;moduleId:string;name:string;uTotal:number;voltage:string;occupiedU?:string[] }
 export interface IdcModule { id:string;roomId:string;name:string;racks:IdcRack[] }
 export interface IdcRoom { id:string;name:string;location:string;modules:IdcModule[] }
+
+export interface NetworkPort { id:string;assetId:string;assetName:string;ifIndex:string;name:string;description?:string;alias?:string;adminStatus:string;operStatus:string;speedMbps?:string;macAddress?:string;vlan?:string;neighborName?:string;neighborPort?:string;neighborChassis?:string;lastSeenAt?:string }
+export interface NetworkLink { id:string;sourceAssetId:string;sourceAssetName:string;sourceInterface:string;targetAssetId:string;targetAssetName:string;targetPort:string;status:string;source:string;lastSeenAt?:string }
+export interface NetworkInterface { id:string;assetId:string;assetName:string;name:string;macAddress?:string;ipv4?:string;mtu?:string;speedMbps?:string;adminStatus:string;operStatus:string;type?:string;lastSeenAt?:string;link?:NetworkLink }
+export interface NetworkDeviceInventory { asset:Asset;ports:NetworkPort[];totalPorts:number;upPorts:number }
+export interface PhysicalNode { id:string;name:string;kind:string;assetType:string;status:string;ip?:string;location?:string;owner?:string;portCount:number;upPortCount:number }
+export interface PhysicalEdge { id:string;source:string;target:string;sourceInterface?:string;targetPort?:string;relation:string;status:string;sourceType:string;lastSeenAt?:string }
+export interface PhysicalGraph { nodes:PhysicalNode[];edges:PhysicalEdge[];updatedAt:string }

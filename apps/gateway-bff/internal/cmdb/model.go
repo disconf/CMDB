@@ -47,9 +47,15 @@ type Attribute struct {
 	Value string `json:"value"`
 }
 type Relation struct {
+	ID         string `json:"id,omitempty"`
 	Type       string `json:"type"`
 	TargetID   string `json:"targetId"`
 	TargetName string `json:"targetName"`
+	SourcePort string `json:"sourcePort,omitempty"`
+	TargetPort string `json:"targetPort,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Source     string `json:"source,omitempty"`
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
 }
 type Asset struct {
 	ID           string      `json:"id"`

@@ -24,7 +24,7 @@ var runtimeAutoAttrs = map[string]bool{
 	"node_exporter_status": true, "node_exporter_port": true, "node_exporter_version": true,
 	"snmp_discovered": true, "sys_descr": true, "sys_name": true, "sys_object_id": true,
 	"management_ip": true, "vendor": true, "model": true, "serial": true, "entity_desc": true,
-	"if_number": true, "bmc_ip": true, "oob": true, "lldp_neighbors": true,
+	"if_number": true, "bmc_ip": true, "oob": true, "lldp_neighbors": true, "network_ports": true, "network_interfaces": true, "network_discovery_at": true,
 	"snmp_vendor": true, "snmp_module": true,
 }
 var ErrValidation = errors.New("validation failed")
@@ -355,7 +355,7 @@ func attributeDiff(before, after []Attribute) []Change {
 }
 
 func asset(id, name, typ, typeName, status, ip, env, group, owner, location, source string, tags []string) Asset {
-	return Asset{ID: id, Name: name, Type: typ, TypeName: typeName, Status: status, IP: ip, Environment: env, ProjectGroup: group, Owner: owner, Location: location, Source: source, LastSeenAt: "2026-07-15 13:28:00", Tags: tags, Attributes: []Attribute{{"os", "操作系统", "Rocky Linux 9.4"}, {"cpu", "CPU", "16 Core"}, {"memory", "内存", "64 GB"}, {"importance", "重要级别", map[bool]string{true: "核心", false: "一般"}[env == "生产"]}}, Relations: []Relation{{"belongs-to", "app-order", "订单服务"}, {"located-in", "idc-sh-01", "上海一号机房"}}}
+	return Asset{ID: id, Name: name, Type: typ, TypeName: typeName, Status: status, IP: ip, Environment: env, ProjectGroup: group, Owner: owner, Location: location, Source: source, LastSeenAt: "2026-07-15 13:28:00", Tags: tags, Attributes: []Attribute{{"os", "操作系统", "Rocky Linux 9.4"}, {"cpu", "CPU", "16 Core"}, {"memory", "内存", "64 GB"}, {"importance", "重要级别", map[bool]string{true: "核心", false: "一般"}[env == "生产"]}}, Relations: []Relation{{Type: "belongs-to", TargetID: "app-order", TargetName: "订单服务"}, {Type: "located-in", TargetID: "idc-sh-01", TargetName: "上海一号机房"}}}
 }
 
 func (s *Service) Models() []Model {

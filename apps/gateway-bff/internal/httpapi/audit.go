@@ -109,6 +109,10 @@ func auditAction(method, path string) string {
 		return "cmdb.asset.update"
 	case method == http.MethodPost && path == "/api/v1/cmdb/imports":
 		return "cmdb.asset.import"
+	case method == http.MethodPost && path == "/api/v1/cmdb/network-links":
+		return "cmdb.network_link.create"
+	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-links/"):
+		return "cmdb.network_link.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/models":
 		return "cmdb.model.create"
 	case method == http.MethodPut && strings.HasPrefix(path, "/api/v1/cmdb/models/"):

@@ -159,6 +159,7 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 		return nil
 	})
 	neighbors := collectLLDP(g, 500)
+	networkPorts := collectNetworkPorts(g, neighbors, 500)
 	if hwDescr != "" && vendor == "" {
 		vendor = vendorFromDescr(hwDescr)
 	}
@@ -194,6 +195,14 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 	if len(neighbors) > 0 {
 		if payload, err := json.Marshal(neighbors); err == nil {
 			host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "lldp_neighbors", Label: "LLDP邻居", Value: string(payload)})
+		}
+	}
+	if len(networkPorts) > 0 {
+		if payload, err := json.Marshal(networkPorts); err == nil {
+			host.Attributes = append(host.Attributes,
+				cmdb.Attribute{Name: "network_ports", Label: "网络端口清单", Value: string(payload)},
+				cmdb.Attribute{Name: "network_discovery_at", Label: "网络清单采集时间", Value: time.Now().Format("2006-01-02 15:04:05")},
+			)
 		}
 	}
 	host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "snmp_discovered", Label: "SNMP发现", Value: "true"})

@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,10 +39,14 @@ type SSHScanResult struct {
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
-const sshInventoryCommand = `hostname; grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2; uname -r; uname -m; nproc; awk '/MemTotal/ {print $2}' /proc/meminfo; df -B1 --output=size / | tail -1; awk '/^btime / {print $2}' /proc/stat; (systemd-detect-virt --vm 2>/dev/null || echo none)`
+const sshInventoryCommand = `hostname; grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2; uname -r; uname -m; nproc; awk '/MemTotal/ {print $2}' /proc/meminfo; df -B1 --output=size / | tail -1; awk '/^btime / {print $2}' /proc/stat; (systemd-detect-virt --vm 2>/dev/null || echo none); echo __CMDB_NETWORK_STATE__; (ip -o link show 2>/dev/null || true); (ip -o -4 addr show 2>/dev/null || true)`
 
 func parseSSHInventory(ip string, output string) *NodeExporterHost {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
+	primary := output
+	if before, _, ok := strings.Cut(output, sshNetworkMarker); ok {
+		primary = before
+	}
+	lines := strings.Split(strings.TrimSpace(primary), "\n")
 	if len(lines) < 8 {
 		return nil
 	}
@@ -75,6 +80,24 @@ func parseSSHInventory(ip string, output string) *NodeExporterHost {
 	}
 	if virt != "" && virt != "none" {
 		host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "virtualization_type", Label: "虚拟化类型", Value: virt})
+	}
+	interfaces := parseSSHNetworkInterfaces(ip, output)
+	if len(interfaces) > 0 {
+		if payload, err := json.Marshal(interfaces); err == nil {
+			host.Attributes = append(host.Attributes,
+				cmdb.Attribute{Name: "network_interfaces", Label: "网卡清单", Value: string(payload)},
+				cmdb.Attribute{Name: "network_discovery_at", Label: "网络清单采集时间", Value: time.Now().Format("2006-01-02 15:04:05")},
+			)
+		}
+		macs := make([]string, 0, len(interfaces))
+		for _, item := range interfaces {
+			if item.MACAddress != "" {
+				macs = append(macs, item.MACAddress)
+			}
+		}
+		if len(macs) > 0 {
+			host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "mac_addresses", Label: "MAC地址", Value: strings.Join(macs, ",")})
+		}
 	}
 	return host
 }

@@ -1,0 +1,463 @@
+package cmdb
+
+import (
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+// NetworkPort is a logical or physical port discovered on a network device.
+type NetworkPort struct {
+	ID              string `json:"id"`
+	AssetID         string `json:"assetId"`
+	AssetName       string `json:"assetName"`
+	IfIndex         string `json:"ifIndex"`
+	Name            string `json:"name"`
+	Description     string `json:"description,omitempty"`
+	Alias           string `json:"alias,omitempty"`
+	AdminStatus     string `json:"adminStatus"`
+	OperStatus      string `json:"operStatus"`
+	SpeedMbps       string `json:"speedMbps,omitempty"`
+	MACAddress      string `json:"macAddress,omitempty"`
+	VLAN            string `json:"vlan,omitempty"`
+	NeighborName    string `json:"neighborName,omitempty"`
+	NeighborPort    string `json:"neighborPort,omitempty"`
+	NeighborChassis string `json:"neighborChassis,omitempty"`
+	LastSeenAt      string `json:"lastSeenAt,omitempty"`
+}
+
+// NetworkInterface is a host NIC discovered by SSH or node_exporter inventory.
+type NetworkInterface struct {
+	ID          string       `json:"id"`
+	AssetID     string       `json:"assetId"`
+	AssetName   string       `json:"assetName"`
+	Name        string       `json:"name"`
+	MACAddress  string       `json:"macAddress,omitempty"`
+	IPv4        string       `json:"ipv4,omitempty"`
+	MTU         string       `json:"mtu,omitempty"`
+	SpeedMbps   string       `json:"speedMbps,omitempty"`
+	AdminStatus string       `json:"adminStatus"`
+	OperStatus  string       `json:"operStatus"`
+	Type        string       `json:"type,omitempty"`
+	LastSeenAt  string       `json:"lastSeenAt,omitempty"`
+	Link        *NetworkLink `json:"link,omitempty"`
+}
+
+// NetworkLink is a manually maintained or LLDP-discovered physical connection.
+type NetworkLink struct {
+	ID              string `json:"id"`
+	SourceAssetID   string `json:"sourceAssetId"`
+	SourceAssetName string `json:"sourceAssetName"`
+	SourceInterface string `json:"sourceInterface"`
+	TargetAssetID   string `json:"targetAssetId"`
+	TargetAssetName string `json:"targetAssetName"`
+	TargetPort      string `json:"targetPort"`
+	Status          string `json:"status"`
+	Source          string `json:"source"`
+	LastSeenAt      string `json:"lastSeenAt,omitempty"`
+}
+
+type NetworkDeviceInventory struct {
+	Asset      Asset         `json:"asset"`
+	Ports      []NetworkPort `json:"ports"`
+	TotalPorts int           `json:"totalPorts"`
+	UpPorts    int           `json:"upPorts"`
+}
+
+type CreateNetworkLinkInput struct {
+	SourceAssetID   string `json:"sourceAssetId"`
+	SourceInterface string `json:"sourceInterface"`
+	TargetAssetID   string `json:"targetAssetId"`
+	TargetPort      string `json:"targetPort"`
+}
+
+func (s *Service) NetworkDevices() []NetworkDeviceInventory {
+	s.mu.RLock()
+	assets := make([]Asset, 0)
+	for _, asset := range s.assets {
+		if asset.Type == "network-device" || asset.Type == "load-balancer" {
+			assets = append(assets, cloneAsset(asset))
+		}
+	}
+	allAssets := make([]Asset, len(s.assets))
+	for index := range s.assets {
+		allAssets[index] = cloneAsset(s.assets[index])
+	}
+	s.mu.RUnlock()
+
+	byName := make(map[string]Asset, len(allAssets))
+	for _, asset := range allAssets {
+		byName[normalizeNetworkName(asset.Name)] = asset
+	}
+	result := make([]NetworkDeviceInventory, 0, len(assets))
+	for _, asset := range assets {
+		ports := parseNetworkPorts(asset)
+		for index := range ports {
+			addPortNeighborAsset(&ports[index], byName)
+		}
+		inventory := NetworkDeviceInventory{Asset: asset, Ports: ports, TotalPorts: len(ports)}
+		for _, port := range ports {
+			if port.OperStatus == "up" {
+				inventory.UpPorts++
+			}
+		}
+		result = append(result, inventory)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.ToLower(result[i].Asset.Name) < strings.ToLower(result[j].Asset.Name)
+	})
+	return result
+}
+
+func (s *Service) NetworkPorts(assetID string) ([]NetworkPort, error) {
+	asset, err := s.GetAsset(assetID)
+	if err != nil {
+		return nil, err
+	}
+	ports := parseNetworkPorts(asset)
+	byName := make(map[string]Asset)
+	for _, candidate := range s.InventoryAssets() {
+		byName[normalizeNetworkName(candidate.Name)] = candidate
+	}
+	for index := range ports {
+		addPortNeighborAsset(&ports[index], byName)
+	}
+	return ports, nil
+}
+
+func (s *Service) NetworkInterfaces(assetID string) ([]NetworkInterface, error) {
+	asset, err := s.GetAsset(assetID)
+	if err != nil {
+		return nil, err
+	}
+	interfaces := parseNetworkInterfaces(asset)
+	links := s.NetworkLinks()
+	for index := range interfaces {
+		interfaces[index].AssetID = asset.ID
+		interfaces[index].AssetName = asset.Name
+		for linkIndex := range links {
+			link := links[linkIndex]
+			if link.SourceAssetID == asset.ID && strings.EqualFold(link.SourceInterface, interfaces[index].Name) {
+				copyLink := link
+				interfaces[index].Link = &copyLink
+				break
+			}
+		}
+	}
+	return interfaces, nil
+}
+
+func (s *Service) NetworkLinks() []NetworkLink {
+	s.mu.RLock()
+	assets := make([]Asset, len(s.assets))
+	for index := range s.assets {
+		assets[index] = cloneAsset(s.assets[index])
+	}
+	s.mu.RUnlock()
+
+	byID := make(map[string]Asset, len(assets))
+	byName := make(map[string]Asset, len(assets))
+	for _, asset := range assets {
+		byID[asset.ID] = asset
+		byName[normalizeNetworkName(asset.Name)] = asset
+	}
+	links := make([]NetworkLink, 0)
+	seen := make(map[string]bool)
+	resolve := func(id, name string) (string, string) {
+		if id != "" {
+			if target, ok := byID[id]; ok {
+				return target.ID, target.Name
+			}
+		}
+		if name != "" {
+			if target, ok := byName[normalizeNetworkName(name)]; ok {
+				return target.ID, target.Name
+			}
+		}
+		return id, name
+	}
+	for _, source := range assets {
+		for _, relation := range source.Relations {
+			if relation.Type != "connects-to" {
+				continue
+			}
+			targetID, targetName := resolve(relation.TargetID, relation.TargetName)
+			link := NetworkLink{
+				ID: relation.ID, SourceAssetID: source.ID, SourceAssetName: source.Name,
+				SourceInterface: relation.SourcePort, TargetAssetID: targetID, TargetAssetName: targetName,
+				TargetPort: relation.TargetPort, Status: relation.Status, Source: relation.Source,
+				LastSeenAt: relation.LastSeenAt,
+			}
+			if link.ID == "" {
+				link.ID = networkLinkID(link)
+			}
+			if link.Status == "" {
+				link.Status = "active"
+			}
+			if link.Source == "" {
+				link.Source = "manual"
+			}
+			if !seen[link.ID] {
+				seen[link.ID] = true
+				links = append(links, link)
+			}
+		}
+	}
+	for _, asset := range assets {
+		if asset.Type != "network-device" && asset.Type != "load-balancer" {
+			continue
+		}
+		for _, port := range parseNetworkPorts(asset) {
+			if port.NeighborName == "" {
+				continue
+			}
+			targetID, targetName := resolve("", port.NeighborName)
+			link := NetworkLink{
+				ID:            networkLinkID(NetworkLink{SourceAssetID: asset.ID, SourceInterface: port.Name, TargetAssetID: targetID, TargetAssetName: targetName, TargetPort: port.NeighborPort}),
+				SourceAssetID: asset.ID, SourceAssetName: asset.Name, SourceInterface: port.Name,
+				TargetAssetID: targetID, TargetAssetName: targetName, TargetPort: port.NeighborPort,
+				Status: "active", Source: "lldp", LastSeenAt: port.LastSeenAt,
+			}
+			if !seen[link.ID] {
+				seen[link.ID] = true
+				links = append(links, link)
+			}
+		}
+	}
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].SourceAssetName == links[j].SourceAssetName {
+			return links[i].SourceInterface < links[j].SourceInterface
+		}
+		return strings.ToLower(links[i].SourceAssetName) < strings.ToLower(links[j].SourceAssetName)
+	})
+	return links
+}
+
+func (s *Service) CreateNetworkLink(input CreateNetworkLinkInput, operator string) (NetworkLink, error) {
+	input.SourceAssetID = strings.TrimSpace(input.SourceAssetID)
+	input.SourceInterface = strings.TrimSpace(input.SourceInterface)
+	input.TargetAssetID = strings.TrimSpace(input.TargetAssetID)
+	input.TargetPort = strings.TrimSpace(input.TargetPort)
+	if input.SourceAssetID == "" || input.SourceInterface == "" || input.TargetAssetID == "" || input.TargetPort == "" {
+		return NetworkLink{}, fmt.Errorf("%w: source and target are required", ErrValidation)
+	}
+	source, err := s.GetAsset(input.SourceAssetID)
+	if err != nil {
+		return NetworkLink{}, err
+	}
+	target, err := s.GetAsset(input.TargetAssetID)
+	if err != nil {
+		return NetworkLink{}, err
+	}
+	if target.Type != "network-device" && target.Type != "load-balancer" {
+		return NetworkLink{}, fmt.Errorf("%w: target must be a network device", ErrValidation)
+	}
+	if !isHostAssetType(source.Type) {
+		return NetworkLink{}, fmt.Errorf("%w: source must be a server", ErrValidation)
+	}
+	if interfaces, err := s.NetworkInterfaces(source.ID); err == nil && len(interfaces) > 0 && !hasNetworkInterface(interfaces, input.SourceInterface) {
+		return NetworkLink{}, fmt.Errorf("%w: source interface not found", ErrValidation)
+	}
+	if ports, err := s.NetworkPorts(target.ID); err == nil && len(ports) > 0 && !hasNetworkPort(ports, input.TargetPort) {
+		return NetworkLink{}, fmt.Errorf("%w: target port not found", ErrValidation)
+	}
+	for _, link := range s.NetworkLinks() {
+		if link.Source == "lldp" {
+			continue
+		}
+		if link.SourceAssetID == source.ID && strings.EqualFold(link.SourceInterface, input.SourceInterface) {
+			return NetworkLink{}, fmt.Errorf("%w: source interface is already linked", ErrConflict)
+		}
+		if link.TargetAssetID == target.ID && strings.EqualFold(link.TargetPort, input.TargetPort) {
+			return NetworkLink{}, fmt.Errorf("%w: target port is already linked", ErrConflict)
+		}
+	}
+	link := NetworkLink{
+		SourceAssetID: source.ID, SourceAssetName: source.Name, SourceInterface: input.SourceInterface,
+		TargetAssetID: target.ID, TargetAssetName: target.Name, TargetPort: input.TargetPort,
+		Status: "active", Source: "manual", LastSeenAt: time.Now().Format("2006-01-02 15:04:05"),
+	}
+	link.ID = networkLinkID(link)
+	relations := append([]Relation(nil), source.Relations...)
+	relations = append(relations, Relation{
+		ID: link.ID, Type: "connects-to", TargetID: target.ID, TargetName: target.Name,
+		SourcePort: input.SourceInterface, TargetPort: input.TargetPort,
+		Status: "active", Source: "manual", LastSeenAt: link.LastSeenAt,
+	})
+	if _, err := s.UpdateAsset(source.ID, assetUpdateInput(source, relations), operator); err != nil {
+		return NetworkLink{}, err
+	}
+	return link, nil
+}
+
+func (s *Service) DeleteNetworkLink(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrNotFound
+	}
+	for _, source := range s.InventoryAssets() {
+		relations := make([]Relation, 0, len(source.Relations))
+		found := false
+		for _, relation := range source.Relations {
+			if relation.Type != "connects-to" {
+				relations = append(relations, relation)
+				continue
+			}
+			relationID := relation.ID
+			if relationID == "" {
+				targetID, targetName := relation.TargetID, relation.TargetName
+				relationID = networkLinkID(NetworkLink{SourceAssetID: source.ID, SourceInterface: relation.SourcePort, TargetAssetID: targetID, TargetAssetName: targetName, TargetPort: relation.TargetPort})
+			}
+			if relationID == id {
+				found = true
+				continue
+			}
+			relations = append(relations, relation)
+		}
+		if found {
+			_, err := s.UpdateAsset(source.ID, assetUpdateInput(source, relations), "network-link-delete")
+			return err
+		}
+	}
+	return ErrNotFound
+}
+
+func assetUpdateInput(asset Asset, relations []Relation) UpdateAssetInput {
+	return UpdateAssetInput{
+		Name: asset.Name, Status: asset.Status, IP: asset.IP, Environment: asset.Environment,
+		ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, Location: asset.Location,
+		Tags: append([]string(nil), asset.Tags...), Attributes: append([]Attribute(nil), asset.Attributes...),
+		Relations: relations,
+	}
+}
+
+func parseNetworkPorts(asset Asset) []NetworkPort {
+	raw := networkAttributeValue(asset.Attributes, "network_ports")
+	var ports []NetworkPort
+	if raw != "" && json.Unmarshal([]byte(raw), &ports) == nil && len(ports) > 0 {
+		for index := range ports {
+			if ports[index].AssetID == "" {
+				ports[index].AssetID = asset.ID
+			}
+			if ports[index].AssetName == "" {
+				ports[index].AssetName = asset.Name
+			}
+			if ports[index].ID == "" {
+				ports[index].ID = portID(asset.ID, ports[index])
+			}
+		}
+		sort.Slice(ports, func(i, j int) bool { return ports[i].IfIndex < ports[j].IfIndex })
+		return ports
+	}
+	var neighbors []struct {
+		LocalPort      string `json:"localPort"`
+		RemoteSysName  string `json:"remoteSysName"`
+		RemoteChassis  string `json:"remoteChassisId"`
+		RemotePortID   string `json:"remotePortId"`
+		RemotePortDesc string `json:"remotePortDesc"`
+	}
+	raw = networkAttributeValue(asset.Attributes, "lldp_neighbors")
+	if raw != "" && json.Unmarshal([]byte(raw), &neighbors) == nil {
+		for index, neighbor := range neighbors {
+			name := strings.TrimSpace(neighbor.LocalPort)
+			if name == "" {
+				name = fmt.Sprintf("port-%d", index+1)
+			}
+			port := NetworkPort{AssetID: asset.ID, AssetName: asset.Name, IfIndex: neighbor.LocalPort, Name: name, AdminStatus: "unknown", OperStatus: "up", NeighborName: neighbor.RemoteSysName, NeighborPort: neighbor.RemotePortDesc, NeighborChassis: neighbor.RemoteChassis}
+			port.ID = portID(asset.ID, port)
+			ports = append(ports, port)
+		}
+	}
+	return ports
+}
+
+func parseNetworkInterfaces(asset Asset) []NetworkInterface {
+	raw := networkAttributeValue(asset.Attributes, "network_interfaces")
+	if raw == "" {
+		return []NetworkInterface{}
+	}
+	var interfaces []NetworkInterface
+	if json.Unmarshal([]byte(raw), &interfaces) != nil {
+		return []NetworkInterface{}
+	}
+	for index := range interfaces {
+		if interfaces[index].AssetID == "" {
+			interfaces[index].AssetID = asset.ID
+		}
+		if interfaces[index].AssetName == "" {
+			interfaces[index].AssetName = asset.Name
+		}
+		if interfaces[index].ID == "" {
+			interfaces[index].ID = fmt.Sprintf("%s:if:%s", asset.ID, interfaces[index].Name)
+		}
+		if interfaces[index].AdminStatus == "" {
+			interfaces[index].AdminStatus = "unknown"
+		}
+		if interfaces[index].OperStatus == "" {
+			interfaces[index].OperStatus = "unknown"
+		}
+	}
+	sort.Slice(interfaces, func(i, j int) bool { return interfaces[i].Name < interfaces[j].Name })
+	return interfaces
+}
+
+func addPortNeighborAsset(port *NetworkPort, byName map[string]Asset) {
+	if port == nil || port.NeighborName == "" {
+		return
+	}
+	if asset, ok := byName[normalizeNetworkName(port.NeighborName)]; ok {
+		port.NeighborName = asset.Name
+	}
+}
+
+func networkAttributeValue(attributes []Attribute, name string) string {
+	for _, attribute := range attributes {
+		if attribute.Name == name {
+			return attribute.Value
+		}
+	}
+	return ""
+}
+
+func normalizeNetworkName(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+
+func portID(assetID string, port NetworkPort) string {
+	return assetID + ":port:" + firstNonEmpty(port.Name, port.IfIndex)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func networkLinkID(link NetworkLink) string {
+	key := strings.Join([]string{link.SourceAssetID, link.SourceInterface, link.TargetAssetID, link.TargetAssetName, link.TargetPort}, "|")
+	sum := sha1.Sum([]byte(key))
+	return "netlink-" + hex.EncodeToString(sum[:8])
+}
+
+func hasNetworkInterface(interfaces []NetworkInterface, name string) bool {
+	for _, item := range interfaces {
+		if strings.EqualFold(item.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNetworkPort(ports []NetworkPort, name string) bool {
+	for _, item := range ports {
+		if strings.EqualFold(item.Name, name) || strings.EqualFold(item.IfIndex, name) {
+			return true
+		}
+	}
+	return false
+}

@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -34,3 +34,12 @@ export const listCredentials=(token:string)=>get<Credential[]>('/api/v1/credenti
 export const createCredential=(token:string,input:{name:string;kind:string;username:string;secret:string;group?:string;description?:string})=>send<Credential>('/api/v1/credentials',token,'POST',input)
 export const deleteCredential=(token:string,id:string)=>del<void>(`/api/v1/credentials/${encodeURIComponent(id)}`,token)
 
+
+
+export const fetchNetworkDevices=(token:string)=>get<NetworkDeviceInventory[]>('/api/v1/cmdb/network-devices',token)
+export const fetchNetworkPorts=(token:string,assetId:string)=>get<NetworkPort[]>(`/api/v1/cmdb/network-devices/${encodeURIComponent(assetId)}/ports`,token)
+export const fetchNetworkInterfaces=(token:string,assetId:string)=>get<NetworkInterface[]>(`/api/v1/cmdb/assets/${encodeURIComponent(assetId)}/interfaces`,token)
+export const fetchNetworkLinks=(token:string)=>get<NetworkLink[]>('/api/v1/cmdb/network-links',token)
+export const createNetworkLink=(token:string,input:{sourceAssetId:string;sourceInterface:string;targetAssetId:string;targetPort:string})=>send<NetworkLink>('/api/v1/cmdb/network-links',token,'POST',input)
+export const deleteNetworkLink=(token:string,id:string)=>del<void>(`/api/v1/cmdb/network-links/${encodeURIComponent(id)}`,token)
+export const fetchPhysicalTopology=(token:string,environment='')=>get<PhysicalGraph>(`/api/v1/topology/physical${environment?`?environment=${encodeURIComponent(environment)}`:''}`,token)
