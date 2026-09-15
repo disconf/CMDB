@@ -1,6 +1,7 @@
 package cmdb
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -36,24 +37,34 @@ type VLANInventory struct {
 }
 
 type NetworkAnomaly struct {
-	ID         string   `json:"id"`
-	Type       string   `json:"type"`
-	Severity   string   `json:"severity"`
-	Status     string   `json:"status"`
-	Title      string   `json:"title"`
-	Detail     string   `json:"detail"`
-	AssetID    string   `json:"assetId,omitempty"`
-	AssetName  string   `json:"assetName,omitempty"`
-	DeviceID   string   `json:"deviceId,omitempty"`
-	DeviceName string   `json:"deviceName,omitempty"`
-	PortName   string   `json:"portName,omitempty"`
-	VLAN       string   `json:"vlan,omitempty"`
-	IP         string   `json:"ip,omitempty"`
-	MACAddress string   `json:"macAddress,omitempty"`
-	Evidence   []string `json:"evidence,omitempty"`
-	DetectedAt string   `json:"detectedAt"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Severity       string   `json:"severity"`
+	Status         string   `json:"status"`
+	Title          string   `json:"title"`
+	Detail         string   `json:"detail"`
+	AssetID        string   `json:"assetId,omitempty"`
+	AssetName      string   `json:"assetName,omitempty"`
+	DeviceID       string   `json:"deviceId,omitempty"`
+	DeviceName     string   `json:"deviceName,omitempty"`
+	PortName       string   `json:"portName,omitempty"`
+	VLAN           string   `json:"vlan,omitempty"`
+	IP             string   `json:"ip,omitempty"`
+	MACAddress     string   `json:"macAddress,omitempty"`
+	Evidence       []string `json:"evidence,omitempty"`
+	AcknowledgedBy string   `json:"acknowledgedBy,omitempty"`
+	AcknowledgedAt string   `json:"acknowledgedAt,omitempty"`
+	Note           string   `json:"note,omitempty"`
+	DetectedAt     string   `json:"detectedAt"`
 }
 
+type NetworkAnomalyState struct {
+	AnomalyID string `json:"anomalyId"`
+	Status    string `json:"status"`
+	Operator  string `json:"operator"`
+	Note      string `json:"note"`
+	UpdatedAt string `json:"updatedAt"`
+}
 type arpObservation struct {
 	DeviceID   string
 	DeviceName string
@@ -226,7 +237,80 @@ func (s *Service) NetworkAnomalies() []NetworkAnomaly {
 		}
 		return anomalies[i].Title < anomalies[j].Title
 	})
+	states := s.networkAnomalyStateMap()
+	for i := range anomalies {
+		if state, ok := states[anomalies[i].ID]; ok {
+			anomalies[i].Status = state.Status
+			anomalies[i].AcknowledgedBy = state.Operator
+			anomalies[i].Note = state.Note
+			if state.Status == "acknowledged" || state.Status == "resolved" {
+				anomalies[i].AcknowledgedAt = state.UpdatedAt
+			}
+		}
+	}
 	return anomalies
+}
+
+func (s *Service) networkAnomalyStateMap() map[string]NetworkAnomalyState {
+	if s.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		states, err := loadNetworkAnomalyStates(ctx, s.db)
+		if err == nil {
+			return states
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]NetworkAnomalyState, len(s.anomalyStates))
+	for key, value := range s.anomalyStates {
+		result[key] = value
+	}
+	return result
+}
+
+func (s *Service) AcknowledgeNetworkAnomaly(id, operator, note string) (NetworkAnomaly, error) {
+	return s.changeNetworkAnomalyState(id, "acknowledged", operator, note)
+}
+
+func (s *Service) ResolveNetworkAnomaly(id, operator, note string) (NetworkAnomaly, error) {
+	return s.changeNetworkAnomalyState(id, "resolved", operator, note)
+}
+
+func (s *Service) changeNetworkAnomalyState(id, status, operator, note string) (NetworkAnomaly, error) {
+	operator = strings.TrimSpace(operator)
+	if operator == "" {
+		return NetworkAnomaly{}, ErrValidation
+	}
+	var target NetworkAnomaly
+	found := false
+	for _, item := range s.NetworkAnomalies() {
+		if item.ID == id {
+			target = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return NetworkAnomaly{}, ErrNotFound
+	}
+	state := NetworkAnomalyState{AnomalyID: id, Status: status, Operator: operator, Note: strings.TrimSpace(note), UpdatedAt: time.Now().Format("2006-01-02 15:04:05")}
+	if s.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := upsertNetworkAnomalyState(ctx, s.db, state); err != nil {
+			return NetworkAnomaly{}, err
+		}
+	} else {
+		s.mu.Lock()
+		s.anomalyStates[id] = state
+		s.mu.Unlock()
+	}
+	target.Status = state.Status
+	target.AcknowledgedBy = state.Operator
+	target.AcknowledgedAt = state.UpdatedAt
+	target.Note = state.Note
+	return target, nil
 }
 
 func addNetworkAnomaly(list *[]NetworkAnomaly, anomalyType, severity, title, detail, assetID, assetName, deviceID, deviceName, portName, vlan, ip, mac string, evidence []string) {

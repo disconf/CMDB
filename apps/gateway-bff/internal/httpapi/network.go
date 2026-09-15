@@ -7,10 +7,12 @@ import (
 
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/monitor"
+	"cmdb/gateway-bff/internal/tickets"
 	"cmdb/gateway-bff/internal/topology"
 )
 
-func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service, cmdbService *cmdb.Service, topologyService *topology.Service) {
+func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service, cmdbService *cmdb.Service, topologyService *topology.Service, monitorService *monitor.Service, ticketsService *tickets.Service) {
 	mux.HandleFunc("GET /api/v1/cmdb/network-devices", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
@@ -125,10 +127,109 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		_, _ = topologyService.CaptureSnapshot("physical", environment, user.Username)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-anomalies/{id}/acknowledge", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			Note string `json:"note"`
+		}
+		_ = decodeJSON(r, &input)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := cmdbService.AcknowledgeNetworkAnomaly(r.PathValue("id"), user.Username, input.Note)
+		if errors.Is(err, cmdb.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANOMALY_NOT_FOUND", "message": "网络异常不存在或已发生变化"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ANOMALY_ACK_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-anomalies/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			Note string `json:"note"`
+		}
+		_ = decodeJSON(r, &input)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := cmdbService.ResolveNetworkAnomaly(r.PathValue("id"), user.Username, input.Note)
+		if errors.Is(err, cmdb.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANOMALY_NOT_FOUND", "message": "网络异常不存在或已发生变化"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ANOMALY_RESOLVE_FAILED", "message": err.Error()})
+			return
+		}
+		_, _, _ = ticketsService.SyncAlert(tickets.AlertInput{ID: item.ID, Title: item.Title, Severity: item.Severity, Status: "resolved", Target: firstHTTPAPIValue(item.IP, item.DeviceName, item.AssetName), Message: item.Detail, Owner: user.Username})
+		_, _ = syncNetworkAnomalyAlerts(cmdbService, monitorService)
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-anomalies/{id}/ticket", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		item, ok := findNetworkAnomaly(cmdbService, r.PathValue("id"))
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANOMALY_NOT_FOUND", "message": "网络异常不存在或已发生变化"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		ticket, created, err := ticketsService.SyncAlert(tickets.AlertInput{ID: item.ID, Title: item.Title, Severity: item.Severity, Status: "firing", Target: firstHTTPAPIValue(item.IP, item.DeviceName, item.AssetName), Message: item.Detail, Owner: user.Username})
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ANOMALY_TICKET_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ticket": ticket, "created": created})
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-anomalies/sync-alerts", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		count, err := syncNetworkAnomalyAlerts(cmdbService, monitorService)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ALERT_SYNC_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"synced": count})
+	})
 	mux.HandleFunc("GET /api/v1/topology/physical", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "topology:view") {
 			return
 		}
 		writeJSON(w, http.StatusOK, topologyService.PhysicalGraph(r.URL.Query().Get("environment")))
 	})
+}
+
+func findNetworkAnomaly(service *cmdb.Service, id string) (cmdb.NetworkAnomaly, bool) {
+	for _, item := range service.NetworkAnomalies() {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return cmdb.NetworkAnomaly{}, false
+}
+
+func firstHTTPAPIValue(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func syncNetworkAnomalyAlerts(cmdbService *cmdb.Service, monitorService *monitor.Service) (int, error) {
+	items := []monitor.CMDBAnomalyAlert{}
+	for _, item := range cmdbService.NetworkAnomalies() {
+		if item.Status == "resolved" {
+			continue
+		}
+		items = append(items, monitor.CMDBAnomalyAlert{ID: item.ID, Title: item.Title, Severity: item.Severity, TargetID: item.AssetID, Target: firstHTTPAPIValue(item.IP, item.DeviceName, item.AssetName), Message: item.Detail, Owner: item.AcknowledgedBy})
+	}
+	return monitorService.SyncCMDBAnomalies(items)
 }

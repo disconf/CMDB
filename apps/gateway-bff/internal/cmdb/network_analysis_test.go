@@ -14,9 +14,6 @@ func TestVLANInventoryAndAnomalyDetection(t *testing.T) {
 	if _, err := service.CreateAsset(CreateAssetInput{ID: "analysis-switch", Name: "analysis-switch", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []Attribute{{Name: "network_ports", Label: "网络端口清单", Value: string(ports)}}}, "test"); err != nil {
 		t.Fatalf("create switch: %v", err)
 	}
-	if ports, err := service.NetworkPorts("analysis-switch"); err == nil {
-		t.Logf("ports=%#v", ports)
-	}
 	vlans := service.VLANInventory()
 	if len(vlans) != 1 || vlans[0].VLAN != "100" || vlans[0].MemberCount != 2 || vlans[0].ARPEntryCount != 2 {
 		t.Fatalf("unexpected VLAN inventory: %#v", vlans)
@@ -28,5 +25,13 @@ func TestVLANInventoryAndAnomalyDetection(t *testing.T) {
 	}
 	if !seen["mac-port-flapping"] || !seen["arp-ip-conflict"] {
 		t.Fatalf("expected MAC/ARP anomalies: %#v", anomalies)
+	}
+	acked, err := service.AcknowledgeNetworkAnomaly(anomalies[0].ID, "admin", "已确认")
+	if err != nil || acked.Status != "acknowledged" {
+		t.Fatalf("acknowledge anomaly: %#v %v", acked, err)
+	}
+	resolved, err := service.ResolveNetworkAnomaly(anomalies[0].ID, "admin", "已恢复")
+	if err != nil || resolved.Status != "resolved" {
+		t.Fatalf("resolve anomaly: %#v %v", resolved, err)
 	}
 }

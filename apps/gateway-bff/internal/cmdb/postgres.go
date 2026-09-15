@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS cmdb_topology_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_cmdb_topology_snapshots_kind_time
   ON cmdb_topology_snapshots(kind, environment, created_at DESC);
+CREATE TABLE IF NOT EXISTS cmdb_network_anomaly_states (
+  anomaly_id text PRIMARY KEY,
+  status text NOT NULL,
+  operator text NOT NULL DEFAULT '',
+  note text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 `
 
 func loadModels(ctx context.Context, db *sql.DB) ([]Model, error) {
@@ -323,4 +330,30 @@ func loadTopologySnapshots(ctx context.Context, db *sql.DB) ([]TopologySnapshot,
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func loadNetworkAnomalyStates(ctx context.Context, db *sql.DB) (map[string]NetworkAnomalyState, error) {
+	rows, err := db.QueryContext(ctx, `SELECT anomaly_id,status,operator,note,updated_at FROM cmdb_network_anomaly_states`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]NetworkAnomalyState{}
+	for rows.Next() {
+		var item NetworkAnomalyState
+		var updated time.Time
+		if err = rows.Scan(&item.AnomalyID, &item.Status, &item.Operator, &item.Note, &updated); err != nil {
+			return nil, err
+		}
+		item.UpdatedAt = updated.Local().Format("2006-01-02 15:04:05")
+		result[item.AnomalyID] = item
+	}
+	return result, rows.Err()
+}
+
+func upsertNetworkAnomalyState(ctx context.Context, db execer, item NetworkAnomalyState) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO cmdb_network_anomaly_states(anomaly_id,status,operator,note,updated_at)
+		VALUES($1,$2,$3,$4,now())
+		ON CONFLICT(anomaly_id) DO UPDATE SET status=excluded.status,operator=excluded.operator,note=excluded.note,updated_at=now()`, item.AnomalyID, item.Status, item.Operator, item.Note)
+	return err
 }

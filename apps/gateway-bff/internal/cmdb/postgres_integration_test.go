@@ -48,6 +48,17 @@ func TestPostgresPersistsAssetAndHistory(t *testing.T) {
 	if err != nil || loadedSnapshot.ID != snapshot.ID || len(loadedSnapshot.Payload) == 0 {
 		t.Fatalf("load persisted topology snapshot: %#v %v", loadedSnapshot, err)
 	}
+	state := NetworkAnomalyState{AnomalyID: "integration-network-anomaly", Status: "acknowledged", Operator: "integration-test", Note: "checked"}
+	if err := upsertNetworkAnomalyState(context.Background(), db, state); err != nil {
+		t.Fatalf("save network anomaly state: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_network_anomaly_states WHERE anomaly_id=$1", state.AnomalyID)
+	})
+	states, err := loadNetworkAnomalyStates(context.Background(), db)
+	if err != nil || states[state.AnomalyID].Status != "acknowledged" {
+		t.Fatalf("load network anomaly state: %#v %v", states, err)
+	}
 	var assetCount, historyCount, outboxCount, statusOutboxCount int
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

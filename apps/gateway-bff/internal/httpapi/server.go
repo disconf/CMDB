@@ -75,7 +75,7 @@ func NewServer() *Server {
 	k8sService := k8s.NewService(cmdbService)
 	auditService := audit.NewService()
 	registerRancherRoutes(mux, authService, auditService, cmdbService)
-	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService)
+	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerTopologySnapshotRoutes(mux, authService, cmdbService, topologyService)
 	discoveryService.SetCredentialResolver(func(id string) (string, string, error) {
 		m, err := credentialsService.Resolve(id)

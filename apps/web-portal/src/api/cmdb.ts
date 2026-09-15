@@ -49,3 +49,7 @@ export const fetchTopologySnapshot=(token:string,id:string)=>get<TopologySnapsho
 export const captureTopologySnapshot=(token:string,kind='physical',environment='')=>send<TopologySnapshot>('/api/v1/topology/snapshots',token,'POST',{kind,environment})
 export const fetchVLANInventory=(token:string)=>get<VLANInventory[]>('/api/v1/cmdb/vlans',token)
 export const fetchNetworkAnomalies=(token:string)=>get<NetworkAnomaly[]>('/api/v1/cmdb/network-anomalies',token)
+export const acknowledgeNetworkAnomaly=(token:string,id:string,note='')=>send<NetworkAnomaly>(`/api/v1/cmdb/network-anomalies/${encodeURIComponent(id)}/acknowledge`,token,'POST',{note})
+export const resolveNetworkAnomaly=(token:string,id:string,note='')=>send<NetworkAnomaly>(`/api/v1/cmdb/network-anomalies/${encodeURIComponent(id)}/resolve`,token,'POST',{note})
+export const createNetworkAnomalyTicket=(token:string,id:string)=>send<{ticket:unknown;created:boolean}>(`/api/v1/cmdb/network-anomalies/${encodeURIComponent(id)}/ticket`,token,'POST',{})
+export const syncNetworkAnomalies=(token:string)=>send<{synced:number}>('/api/v1/cmdb/network-anomalies/sync-alerts',token,'POST',{})

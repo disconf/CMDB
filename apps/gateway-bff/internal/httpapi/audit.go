@@ -113,6 +113,14 @@ func auditAction(method, path string) string {
 		return "cmdb.network_link.create"
 	case method == http.MethodPost && path == "/api/v1/topology/snapshots":
 		return "topology.snapshot.create"
+	case method == http.MethodPost && strings.HasSuffix(path, "/acknowledge") && strings.HasPrefix(path, "/api/v1/cmdb/network-anomalies/"):
+		return "cmdb.network_anomaly.acknowledge"
+	case method == http.MethodPost && strings.HasSuffix(path, "/resolve") && strings.HasPrefix(path, "/api/v1/cmdb/network-anomalies/"):
+		return "cmdb.network_anomaly.resolve"
+	case method == http.MethodPost && strings.HasSuffix(path, "/ticket") && strings.HasPrefix(path, "/api/v1/cmdb/network-anomalies/"):
+		return "cmdb.network_anomaly.ticket"
+	case method == http.MethodPost && path == "/api/v1/cmdb/network-anomalies/sync-alerts":
+		return "cmdb.network_anomaly.sync_alerts"
 	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-links/"):
 		return "cmdb.network_link.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/models":
