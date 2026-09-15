@@ -222,6 +222,13 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 			}
 			host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "network_fdb_source", Label: "MAC表采集来源", Value: source})
 		}
+		arpCount := 0
+		for _, port := range networkPorts {
+			arpCount += len(port.ARPEntries)
+		}
+		if arpCount > 0 {
+			host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "network_arp_source", Label: "ARP表采集来源", Value: "ip-mib"})
+		}
 	}
 	host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "snmp_discovered", Label: "SNMP发现", Value: "true"})
 	host.Virtual = false

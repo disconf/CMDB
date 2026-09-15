@@ -39,3 +39,13 @@ func TestParseFDBIndexMACFirst(t *testing.T) {
 		t.Fatalf("unexpected mac-first index: %q %q %t", mac, vlan, ok)
 	}
 }
+
+func TestParseARPIndex(t *testing.T) {
+	ifIndex, ip, ok := parseARPIndex("7.172.28.68.10")
+	if !ok || ifIndex != "7" || ip != "172.28.68.10" {
+		t.Fatalf("unexpected ARP index: %q %q %t", ifIndex, ip, ok)
+	}
+	if _, _, ok := parseARPIndex("7.0.0.0.0"); ok {
+		t.Fatal("zero IP must be ignored")
+	}
+}

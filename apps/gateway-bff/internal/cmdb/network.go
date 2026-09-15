@@ -10,42 +10,56 @@ import (
 	"time"
 )
 
+// NetworkARPEntry links an IP address to a MAC address on a switch port or host interface.
+type NetworkARPEntry struct {
+	IP             string `json:"ip"`
+	MACAddress     string `json:"macAddress,omitempty"`
+	VLAN           string `json:"vlan,omitempty"`
+	InterfaceIndex string `json:"interfaceIndex,omitempty"`
+	AssetID        string `json:"assetId,omitempty"`
+	AssetName      string `json:"assetName,omitempty"`
+	State          string `json:"state,omitempty"`
+	LastSeenAt     string `json:"lastSeenAt,omitempty"`
+}
+
 // NetworkPort is a logical or physical port discovered on a network device.
 type NetworkPort struct {
-	ID              string   `json:"id"`
-	AssetID         string   `json:"assetId"`
-	AssetName       string   `json:"assetName"`
-	IfIndex         string   `json:"ifIndex"`
-	Name            string   `json:"name"`
-	Description     string   `json:"description,omitempty"`
-	Alias           string   `json:"alias,omitempty"`
-	AdminStatus     string   `json:"adminStatus"`
-	OperStatus      string   `json:"operStatus"`
-	SpeedMbps       string   `json:"speedMbps,omitempty"`
-	MACAddress      string   `json:"macAddress,omitempty"`
-	MACAddresses    []string `json:"macAddresses,omitempty"`
-	VLAN            string   `json:"vlan,omitempty"`
-	NeighborName    string   `json:"neighborName,omitempty"`
-	NeighborPort    string   `json:"neighborPort,omitempty"`
-	NeighborChassis string   `json:"neighborChassis,omitempty"`
-	LastSeenAt      string   `json:"lastSeenAt,omitempty"`
+	ID              string            `json:"id"`
+	AssetID         string            `json:"assetId"`
+	AssetName       string            `json:"assetName"`
+	IfIndex         string            `json:"ifIndex"`
+	Name            string            `json:"name"`
+	Description     string            `json:"description,omitempty"`
+	Alias           string            `json:"alias,omitempty"`
+	AdminStatus     string            `json:"adminStatus"`
+	OperStatus      string            `json:"operStatus"`
+	SpeedMbps       string            `json:"speedMbps,omitempty"`
+	MACAddress      string            `json:"macAddress,omitempty"`
+	MACAddresses    []string          `json:"macAddresses,omitempty"`
+	ARPEntries      []NetworkARPEntry `json:"arpEntries,omitempty"`
+	VLAN            string            `json:"vlan,omitempty"`
+	NeighborName    string            `json:"neighborName,omitempty"`
+	NeighborPort    string            `json:"neighborPort,omitempty"`
+	NeighborChassis string            `json:"neighborChassis,omitempty"`
+	LastSeenAt      string            `json:"lastSeenAt,omitempty"`
 }
 
 // NetworkInterface is a host NIC discovered by SSH or node_exporter inventory.
 type NetworkInterface struct {
-	ID          string       `json:"id"`
-	AssetID     string       `json:"assetId"`
-	AssetName   string       `json:"assetName"`
-	Name        string       `json:"name"`
-	MACAddress  string       `json:"macAddress,omitempty"`
-	IPv4        string       `json:"ipv4,omitempty"`
-	MTU         string       `json:"mtu,omitempty"`
-	SpeedMbps   string       `json:"speedMbps,omitempty"`
-	AdminStatus string       `json:"adminStatus"`
-	OperStatus  string       `json:"operStatus"`
-	Type        string       `json:"type,omitempty"`
-	LastSeenAt  string       `json:"lastSeenAt,omitempty"`
-	Link        *NetworkLink `json:"link,omitempty"`
+	ID          string            `json:"id"`
+	AssetID     string            `json:"assetId"`
+	AssetName   string            `json:"assetName"`
+	Name        string            `json:"name"`
+	MACAddress  string            `json:"macAddress,omitempty"`
+	IPv4        string            `json:"ipv4,omitempty"`
+	MTU         string            `json:"mtu,omitempty"`
+	SpeedMbps   string            `json:"speedMbps,omitempty"`
+	AdminStatus string            `json:"adminStatus"`
+	OperStatus  string            `json:"operStatus"`
+	Type        string            `json:"type,omitempty"`
+	LastSeenAt  string            `json:"lastSeenAt,omitempty"`
+	Neighbors   []NetworkARPEntry `json:"neighbors,omitempty"`
+	Link        *NetworkLink      `json:"link,omitempty"`
 }
 
 // NetworkLink is a manually maintained or LLDP-discovered physical connection.
@@ -95,14 +109,19 @@ func (s *Service) NetworkDevices() []NetworkDeviceInventory {
 	s.mu.RUnlock()
 
 	byName := make(map[string]Asset, len(allAssets))
+	byIP := make(map[string]Asset, len(allAssets))
 	for _, asset := range allAssets {
 		byName[normalizeNetworkName(asset.Name)] = asset
+		if asset.IP != "" {
+			byIP[asset.IP] = asset
+		}
 	}
 	result := make([]NetworkDeviceInventory, 0, len(assets))
 	for _, asset := range assets {
 		ports := parseNetworkPorts(asset)
 		for index := range ports {
 			addPortNeighborAsset(&ports[index], byName)
+			addPortARPAssets(&ports[index], byIP)
 		}
 		inventory := NetworkDeviceInventory{Asset: asset, Ports: ports, TotalPorts: len(ports)}
 		for _, port := range ports {
@@ -125,11 +144,16 @@ func (s *Service) NetworkPorts(assetID string) ([]NetworkPort, error) {
 	}
 	ports := parseNetworkPorts(asset)
 	byName := make(map[string]Asset)
+	byIP := make(map[string]Asset)
 	for _, candidate := range s.InventoryAssets() {
 		byName[normalizeNetworkName(candidate.Name)] = candidate
+		if candidate.IP != "" {
+			byIP[candidate.IP] = candidate
+		}
 	}
 	for index := range ports {
 		addPortNeighborAsset(&ports[index], byName)
+		addPortARPAssets(&ports[index], byIP)
 	}
 	return ports, nil
 }
@@ -140,10 +164,18 @@ func (s *Service) NetworkInterfaces(assetID string) ([]NetworkInterface, error) 
 		return nil, err
 	}
 	interfaces := parseNetworkInterfaces(asset)
+	allAssets := s.InventoryAssets()
+	byIP := make(map[string]Asset, len(allAssets))
+	for _, candidate := range allAssets {
+		if candidate.IP != "" {
+			byIP[candidate.IP] = candidate
+		}
+	}
 	links := s.NetworkLinks()
 	for index := range interfaces {
 		interfaces[index].AssetID = asset.ID
 		interfaces[index].AssetName = asset.Name
+		addInterfaceARPAssets(&interfaces[index], byIP)
 		for linkIndex := range links {
 			link := links[linkIndex]
 			if link.SourceAssetID == asset.ID && strings.EqualFold(link.SourceInterface, interfaces[index].Name) {
@@ -428,6 +460,29 @@ func networkAttributeValue(attributes []Attribute, name string) string {
 	return ""
 }
 
+func addPortARPAssets(port *NetworkPort, byIP map[string]Asset) {
+	if port == nil {
+		return
+	}
+	for index := range port.ARPEntries {
+		if asset, ok := byIP[port.ARPEntries[index].IP]; ok {
+			port.ARPEntries[index].AssetID = asset.ID
+			port.ARPEntries[index].AssetName = asset.Name
+		}
+	}
+}
+
+func addInterfaceARPAssets(item *NetworkInterface, byIP map[string]Asset) {
+	if item == nil {
+		return
+	}
+	for index := range item.Neighbors {
+		if asset, ok := byIP[item.Neighbors[index].IP]; ok {
+			item.Neighbors[index].AssetID = asset.ID
+			item.Neighbors[index].AssetName = asset.Name
+		}
+	}
+}
 func normalizeNetworkName(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
 func portID(assetID string, port NetworkPort) string {
@@ -531,13 +586,16 @@ func enrichManualLink(link *NetworkLink, byID map[string]Asset) {
 		return
 	}
 	interfaceMAC := ""
+	interfaceIPv4 := ""
 	for _, item := range parseNetworkInterfaces(sourceAsset) {
 		if strings.EqualFold(item.Name, link.SourceInterface) {
 			interfaceMAC = normalizeMACForCompare(item.MACAddress)
+			interfaceIPv4 = item.IPv4
 			break
 		}
 	}
 	portMACs := []string{}
+	arpIPs := []string{}
 	portFound := false
 	for _, port := range parseNetworkPorts(targetAsset) {
 		if strings.EqualFold(port.Name, link.TargetPort) || strings.EqualFold(port.IfIndex, link.TargetPort) {
@@ -547,6 +605,14 @@ func enrichManualLink(link *NetworkLink, byID map[string]Asset) {
 			}
 			for _, mac := range port.MACAddresses {
 				portMACs = append(portMACs, normalizeMACForCompare(mac))
+			}
+			for _, entry := range port.ARPEntries {
+				if entry.MACAddress != "" {
+					portMACs = append(portMACs, normalizeMACForCompare(entry.MACAddress))
+				}
+				if entry.IP != "" {
+					arpIPs = append(arpIPs, entry.IP)
+				}
 			}
 			break
 		}
@@ -563,7 +629,13 @@ func enrichManualLink(link *NetworkLink, byID map[string]Asset) {
 	if interfaceMAC != "" && containsNormalizedMAC(portMACs, interfaceMAC) {
 		link.Verification = "confirmed"
 		link.Confidence = 100
-		link.Evidence = append(link.Evidence, "交换机端口 MAC 地址表匹配，链路已确认")
+		link.Evidence = append(link.Evidence, "交换机 FDB/ARP 表匹配服务器网卡 MAC，链路已确认")
+		return
+	}
+	if interfaceIPv4 != "" && containsString(arpIPs, interfaceIPv4) {
+		link.Verification = "confirmed"
+		link.Confidence = 90
+		link.Evidence = append(link.Evidence, "交换机 ARP 表匹配服务器 IPv4，链路已确认")
 		return
 	}
 	unique := uniqueNormalizedMACs(portMACs)
@@ -573,9 +645,8 @@ func enrichManualLink(link *NetworkLink, byID map[string]Asset) {
 		link.Evidence = append(link.Evidence, fmt.Sprintf("交换机端口学习到 %d 个其他 MAC，需人工复核", len(unique)))
 		return
 	}
-	link.Evidence = append(link.Evidence, "交换机端口暂未学习到 MAC，保留待验证")
+	link.Evidence = append(link.Evidence, "交换机端口暂未学习到 MAC/ARP，保留待验证")
 }
-
 func enrichLLDPLink(link *NetworkLink, byID map[string]Asset) {
 	link.Verification = "candidate"
 	link.Confidence = 70
@@ -614,6 +685,14 @@ func containsNormalizedMAC(values []string, target string) bool {
 	return false
 }
 
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == strings.TrimSpace(target) {
+			return true
+		}
+	}
+	return false
+}
 func uniqueNormalizedMACs(values []string) []string {
 	seen := make(map[string]bool)
 	result := make([]string, 0, len(values))

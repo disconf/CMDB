@@ -33,8 +33,9 @@ const confirmedLinks = computed(() => links.value.filter(link => link.verificati
 const conflictLinks = computed(() => links.value.filter(link => link.verification === 'conflict').length)
 
 function fdbSource() {
-  const item = selected.value?.asset.attributes.find(attribute => attribute.name === 'network_fdb_source')
-  return item?.value || '未采集'
+  const fdb = selected.value?.asset.attributes.find(attribute => attribute.name === 'network_fdb_source')?.value || '未采集'
+  const arp = selected.value?.asset.attributes.find(attribute => attribute.name === 'network_arp_source')?.value || '未采集'
+  return `MAC表 ${fdb} / ARP ${arp}`
 }function statusLabel(value: string) {
   return ({ up: '在线', down: '离线', testing: '测试', dormant: '休眠', unknown: '未知', 'not-present': '未安装', 'lower-layer-down': '下层故障' } as Record<string,string>)[value] || value || '未知'
 }
@@ -103,7 +104,7 @@ onMounted(load)
           <div v-for="port in ports" :key="port.id" class="port-row">
             <span><Cable/><i><strong>{{ port.name }}</strong><small>{{ port.alias || port.description || `ifIndex ${port.ifIndex}` }}</small></i></span>
             <span><b class="port-status" :data-status="tone(port.operStatus)">{{ statusLabel(port.operStatus) }}</b></span>
-            <span>{{ speedLabel(port.speedMbps) }}</span><span>{{ port.vlan || '—' }}</span><span class="mono">{{ port.macAddress || (port.macAddresses?.length ? `${port.macAddresses.length} 个学习 MAC` : '—') }}</span>
+            <span>{{ speedLabel(port.speedMbps) }}</span><span>{{ port.vlan || '—' }}</span><span class="mono">{{ port.macAddress || (port.macAddresses?.length ? `${port.macAddresses.length} 个学习 MAC` : '—') }}<small v-if="port.arpEntries?.length">{{port.arpEntries.length}} 个 ARP</small></span>
             <span><template v-if="port.neighborName"><strong>{{ port.neighborName }}</strong><small>{{ port.neighborPort || port.neighborChassis || 'LLDP' }}</small></template><template v-else>—</template></span><span>{{ port.lastSeenAt || '—' }}</span>
           </div>
           <div v-if="!ports.length" class="network-empty"><Server/>当前设备尚未采集到端口清单，请先执行 SNMP 采集。</div>

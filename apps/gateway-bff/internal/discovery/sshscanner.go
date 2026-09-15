@@ -39,7 +39,7 @@ type SSHScanResult struct {
 	Hosts     []NodeExporterHost `json:"hosts"`
 }
 
-const sshInventoryCommand = `hostname; grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2; uname -r; uname -m; nproc; awk '/MemTotal/ {print $2}' /proc/meminfo; df -B1 --output=size / | tail -1; awk '/^btime / {print $2}' /proc/stat; (systemd-detect-virt --vm 2>/dev/null || echo none); echo __CMDB_NETWORK_STATE__; (ip -o link show 2>/dev/null || true); (ip -o -4 addr show 2>/dev/null || true)`
+const sshInventoryCommand = `hostname; grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2; uname -r; uname -m; nproc; awk '/MemTotal/ {print $2}' /proc/meminfo; df -B1 --output=size / | tail -1; awk '/^btime / {print $2}' /proc/stat; (systemd-detect-virt --vm 2>/dev/null || echo none); echo __CMDB_NETWORK_STATE__; (ip -o link show 2>/dev/null || true); (ip -o -4 addr show 2>/dev/null || true); echo __CMDB_NEIGHBOR_STATE__; (ip -o neigh show 2>/dev/null || true)`
 
 func parseSSHInventory(ip string, output string) *NodeExporterHost {
 	primary := output
@@ -97,6 +97,15 @@ func parseSSHInventory(ip string, output string) *NodeExporterHost {
 		}
 		if len(macs) > 0 {
 			host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "mac_addresses", Label: "MAC地址", Value: strings.Join(macs, ",")})
+		}
+		neighbors := []cmdb.NetworkARPEntry{}
+		for _, item := range interfaces {
+			neighbors = append(neighbors, item.Neighbors...)
+		}
+		if len(neighbors) > 0 {
+			if payload, err := json.Marshal(neighbors); err == nil {
+				host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "network_neighbors", Label: "ARP邻居表", Value: string(payload)})
+			}
 		}
 	}
 	return host

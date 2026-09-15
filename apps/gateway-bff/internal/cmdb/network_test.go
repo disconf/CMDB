@@ -46,3 +46,22 @@ func TestNetworkLinkLifecycle(t *testing.T) {
 		t.Fatalf("expected link create/delete history: %#v", history)
 	}
 }
+
+func TestNetworkLinkVerificationUsesARPTable(t *testing.T) {
+	service := NewService()
+	ports, _ := json.Marshal([]NetworkPort{{IfIndex: "3", Name: "GE0/0/3", AdminStatus: "up", OperStatus: "up", ARPEntries: []NetworkARPEntry{{IP: "10.10.0.20", MACAddress: "AA:BB:CC:DD:EE:FF"}}}})
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "arp-switch", Name: "arp-switch", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []Attribute{{Name: "network_ports", Label: "网络端口清单", Value: string(ports)}}}, "test"); err != nil {
+		t.Fatalf("create switch: %v", err)
+	}
+	interfaces, _ := json.Marshal([]NetworkInterface{{Name: "eth0", MACAddress: "AA:BB:CC:DD:EE:FF", IPv4: "10.10.0.20/24", AdminStatus: "up", OperStatus: "up"}})
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "arp-host", Name: "arp-host", Type: "physical-server", Status: "online", IP: "10.10.0.20", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []Attribute{{Name: "network_interfaces", Label: "网卡清单", Value: string(interfaces)}}}, "test"); err != nil {
+		t.Fatalf("create host: %v", err)
+	}
+	if _, err := service.CreateNetworkLink(CreateNetworkLinkInput{SourceAssetID: "arp-host", SourceInterface: "eth0", TargetAssetID: "arp-switch", TargetPort: "GE0/0/3"}, "test"); err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	links := service.NetworkLinks()
+	if len(links) != 1 || links[0].Verification != "confirmed" || links[0].Confidence != 100 {
+		t.Fatalf("expected ARP-verified link: %#v", links)
+	}
+}

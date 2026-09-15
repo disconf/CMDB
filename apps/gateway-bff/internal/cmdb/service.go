@@ -24,7 +24,7 @@ var runtimeAutoAttrs = map[string]bool{
 	"node_exporter_status": true, "node_exporter_port": true, "node_exporter_version": true,
 	"snmp_discovered": true, "sys_descr": true, "sys_name": true, "sys_object_id": true,
 	"management_ip": true, "vendor": true, "model": true, "serial": true, "entity_desc": true,
-	"if_number": true, "bmc_ip": true, "oob": true, "lldp_neighbors": true, "network_ports": true, "network_interfaces": true, "network_discovery_at": true, "network_fdb_source": true,
+	"if_number": true, "bmc_ip": true, "oob": true, "lldp_neighbors": true, "network_ports": true, "network_interfaces": true, "network_neighbors": true, "network_discovery_at": true, "network_fdb_source": true, "network_arp_source": true,
 	"snmp_vendor": true, "snmp_module": true,
 }
 var ErrValidation = errors.New("validation failed")

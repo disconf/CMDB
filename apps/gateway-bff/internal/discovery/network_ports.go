@@ -13,21 +13,23 @@ import (
 )
 
 const (
-	oidIfDescr          = ".1.3.6.1.2.1.2.2.1.2"
-	oidIfPhysAddress    = ".1.3.6.1.2.1.2.2.1.6"
-	oidIfAdminStatus    = ".1.3.6.1.2.1.2.2.1.7"
-	oidIfOperStatus     = ".1.3.6.1.2.1.2.2.1.8"
-	oidIfSpeed          = ".1.3.6.1.2.1.2.2.1.5"
-	oidIfHighSpeed      = ".1.3.6.1.2.1.31.1.1.1.15"
-	oidIfName           = ".1.3.6.1.2.1.31.1.1.1.1"
-	oidIfAlias          = ".1.3.6.1.2.1.31.1.1.1.18"
-	oidDot1qPvid        = ".1.3.6.1.2.1.17.7.1.4.5.1.1"
-	oidDot1dPortIfIndex = ".1.3.6.1.2.1.17.1.4.1.2"
-	oidDot1dTpFdbPort   = ".1.3.6.1.2.1.17.4.3.1.2"
-	oidDot1qTpFdbPort   = ".1.3.6.1.2.1.17.7.1.2.2.1.2"
-	oidHuaweiDynFdbPort = ".1.3.6.1.4.1.2011.5.25.42.2.1.3.1.4"
-	oidHuaweiCfgFdbPort = ".1.3.6.1.4.1.2011.5.25.42.2.1.2.1.4"
-	oidH3CFdbSearchPort = ".1.3.6.1.4.1.25506.8.35.3.1.1.3"
+	oidIfDescr             = ".1.3.6.1.2.1.2.2.1.2"
+	oidIfPhysAddress       = ".1.3.6.1.2.1.2.2.1.6"
+	oidIfAdminStatus       = ".1.3.6.1.2.1.2.2.1.7"
+	oidIfOperStatus        = ".1.3.6.1.2.1.2.2.1.8"
+	oidIfSpeed             = ".1.3.6.1.2.1.2.2.1.5"
+	oidIfHighSpeed         = ".1.3.6.1.2.1.31.1.1.1.15"
+	oidIfName              = ".1.3.6.1.2.1.31.1.1.1.1"
+	oidIfAlias             = ".1.3.6.1.2.1.31.1.1.1.18"
+	oidDot1qPvid           = ".1.3.6.1.2.1.17.7.1.4.5.1.1"
+	oidDot1dPortIfIndex    = ".1.3.6.1.2.1.17.1.4.1.2"
+	oidDot1dTpFdbPort      = ".1.3.6.1.2.1.17.4.3.1.2"
+	oidDot1qTpFdbPort      = ".1.3.6.1.2.1.17.7.1.2.2.1.2"
+	oidHuaweiDynFdbPort    = ".1.3.6.1.4.1.2011.5.25.42.2.1.3.1.4"
+	oidHuaweiCfgFdbPort    = ".1.3.6.1.4.1.2011.5.25.42.2.1.2.1.4"
+	oidH3CFdbSearchPort    = ".1.3.6.1.4.1.25506.8.35.3.1.1.3"
+	oidIpNetToMediaPhys    = ".1.3.6.1.2.1.4.22.1.2"
+	oidIpNetToPhysicalPhys = ".1.3.6.1.2.1.4.35.1.4"
 )
 
 const (
@@ -80,6 +82,8 @@ func collectNetworkPorts(g *gosnmp.GoSNMP, neighbors []LLDPNeighbor, limit int, 
 	})
 	walkNetworkColumn(g, oidIfPhysAddress, limit, func(index, value string) { get(index).MACAddress = normalizeMAC(value) })
 	walkNetworkColumn(g, oidDot1qPvid, limit, func(index, value string) { get(index).VLAN = value })
+	collectFDBMACs(g, rows, limit*20, vendor)
+	collectARPEntries(g, rows, limit*20)
 
 	for _, neighbor := range neighbors {
 		port := rows[neighbor.LocalPort]
@@ -299,6 +303,83 @@ func parseFDBIndexWithStyle(suffix, style string) (string, string, bool) {
 	return mac, vlan, true
 }
 
+func collectARPEntries(g *gosnmp.GoSNMP, rows map[string]*cmdb.NetworkPort, limit int) {
+	if limit < 128 {
+		limit = 128
+	}
+	seen := map[string]map[string]bool{}
+	add := func(ifIndex, ip, mac string) {
+		port := rows[ifIndex]
+		if port == nil || ip == "" || mac == "" {
+			return
+		}
+		if seen[ifIndex] == nil {
+			seen[ifIndex] = map[string]bool{}
+		}
+		key := ip + "|" + mac
+		if seen[ifIndex][key] {
+			return
+		}
+		seen[ifIndex][key] = true
+		if len(port.ARPEntries) >= 128 {
+			return
+		}
+		port.ARPEntries = append(port.ARPEntries, cmdb.NetworkARPEntry{IP: ip, MACAddress: mac, InterfaceIndex: ifIndex, LastSeenAt: time.Now().Format("2006-01-02 15:04:05")})
+	}
+	for _, oid := range []string{oidIpNetToMediaPhys, oidIpNetToPhysicalPhys} {
+		walkFDB(g, oid, limit, func(suffix, mac string) {
+			ifIndex, ip, ok := parseARPIndex(suffix)
+			if !ok {
+				return
+			}
+			add(ifIndex, ip, normalizeMAC(mac))
+		})
+	}
+	for _, port := range rows {
+		sort.Slice(port.ARPEntries, func(i, j int) bool { return port.ARPEntries[i].IP < port.ARPEntries[j].IP })
+	}
+}
+
+func parseARPIndex(suffix string) (string, string, bool) {
+	parts := strings.Split(strings.Trim(suffix, "."), ".")
+	if len(parts) < 5 {
+		return "", "", false
+	}
+	ifIndex, err := strconv.Atoi(parts[0])
+	if err != nil || ifIndex < 1 {
+		return "", "", false
+	}
+	octets := make([]byte, 0, 4)
+	for _, part := range parts[len(parts)-4:] {
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 || value > 255 {
+			return "", "", false
+		}
+		octets = append(octets, byte(value))
+	}
+	if isZeroIPv4(octets) || isBroadcastIPv4(octets) {
+		return "", "", false
+	}
+	return strconv.Itoa(ifIndex), fmt.Sprintf("%d.%d.%d.%d", octets[0], octets[1], octets[2], octets[3]), true
+}
+
+func isZeroIPv4(value []byte) bool {
+	for _, item := range value {
+		if item != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func isBroadcastIPv4(value []byte) bool {
+	for _, item := range value {
+		if item != 0xFF {
+			return false
+		}
+	}
+	return true
+}
 func isBroadcastMAC(value []byte) bool {
 	for _, item := range value {
 		if item != 0xFF {

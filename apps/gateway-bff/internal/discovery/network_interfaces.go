@@ -10,8 +10,10 @@ import (
 )
 
 const sshNetworkMarker = "__CMDB_NETWORK_STATE__"
+const sshNeighborMarker = "__CMDB_NEIGHBOR_STATE__"
 
 var (
+	ipNeighborPattern = regexp.MustCompile(`^([0-9.]+)\s+dev\s+(\S+)\s+lladdr\s+([0-9A-Fa-f:]+)\s+(\S+)`)
 	ipLinkLinePattern = regexp.MustCompile(`^\d+:\s+([^:@]+)(?:@[^:]+)?:\s+<([^>]*)>.*\bstate\s+(\S+).*\blink/(\S+)\s+([0-9A-Fa-f:]+)`)
 	ipv4LinePattern   = regexp.MustCompile(`^\d+:\s+(\S+)\s+inet\s+([0-9.]+/\d+)`)
 	mtuPattern        = regexp.MustCompile(`\bmtu\s+(\d+)`)
@@ -58,6 +60,13 @@ func parseSSHNetworkInterfaces(ip, output string) []cmdb.NetworkInterface {
 				item.Type = "vlan"
 			default:
 				item.Type = "ethernet"
+			}
+			continue
+		}
+		if match := ipNeighborPattern.FindStringSubmatch(line); len(match) == 5 {
+			item := byName[strings.TrimSpace(match[2])]
+			if item != nil {
+				item.Neighbors = append(item.Neighbors, cmdb.NetworkARPEntry{IP: match[1], MACAddress: strings.ToUpper(match[3]), State: match[4], LastSeenAt: time.Now().Format("2006-01-02 15:04:05")})
 			}
 			continue
 		}
