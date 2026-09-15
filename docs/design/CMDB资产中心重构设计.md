@@ -100,3 +100,34 @@ POST /api/v1/discovery/scan-services
 ```
 
 常用 Exporter 会自动识别；未识别到 Exporter 时资产仍会入库，并在监控目标页显示“待配置”。
+
+## 10. Rancher 全量同步实现
+
+认证：
+
+```text
+RANCHER_URL=https://172.28.68.57:8443
+RANCHER_USERNAME=admin
+RANCHER_PASSWORD=<secret>
+RANCHER_INSECURE_SKIP_VERIFY=true
+RANCHER_DASHBOARD_URL=https://172.28.68.57:8443
+```
+
+同步顺序：
+
+```text
+Rancher 登录
+ → /v3/clusters
+ → /k8s/clusters/{id}/api/v1/nodes
+ → /k8s/clusters/{id}/api/v1/namespaces
+ → /k8s/clusters/{id}/apis/apps/v1/deployments
+ → statefulsets
+ → daemonsets
+```
+
+合并策略：
+
+- 集群同名时复用原 CMDB 集群 ID。
+- 节点、命名空间和工作负载使用 Rancher/Kubernetes UID 生成稳定 ID。
+- 通过 `belongs-to` 关系连接集群、命名空间和工作负载。
+- 未提供 Token 时自动使用 Rancher 用户名密码登录换取临时 Token。

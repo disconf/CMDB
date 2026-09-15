@@ -18,14 +18,18 @@ func TestFetchRancherClusters(t *testing.T) {
 	defer server.Close()
 	t.Setenv("RANCHER_URL", server.URL)
 	t.Setenv("RANCHER_TOKEN", "rancher-token")
-	items, err := fetchRancherClusters(context.Background())
+	client, err := newRancherClient(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := client.Clusters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(items) != 1 || items[0].Name != "prod" || items[0].NodeCount != 5 || items[0].DashboardURL != server.URL+"/dashboard/c/c-abc/explore" {
 		t.Fatalf("unexpected clusters: %#v", items)
 	}
-	asset := rancherClusterAsset(items[0])
+	asset := rancherClusterAsset(items[0], "")
 	if asset.ID != "rancher-cluster-c-abc" || asset.Type != "k8s-cluster" || asset.Source != "Rancher" {
 		t.Fatalf("unexpected Rancher asset: %#v", asset)
 	}
@@ -34,7 +38,7 @@ func TestFetchRancherClusters(t *testing.T) {
 func TestFetchRancherClustersRequiresConfig(t *testing.T) {
 	t.Setenv("RANCHER_URL", "")
 	t.Setenv("RANCHER_TOKEN", "")
-	if _, err := fetchRancherClusters(context.Background()); err == nil {
+	if _, err := newRancherClient(context.Background()); err == nil {
 		t.Fatal("expected configuration error")
 	}
 }

@@ -14,7 +14,7 @@ const message = ref('')
 const headers = () => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' })
 async function request<T>(path:string, init?:RequestInit){const response=await fetch(path,{...init,headers:headers()});const body=await response.json().catch(()=>({message:'请求失败'}));if(!response.ok)throw new Error((body as {message?:string}).message||`请求失败 (${response.status})`);return body as T}
 async function load(){loading.value=true;error.value='';try{config.value=await request<{configured:boolean;url?:string}>('/api/v1/cmdb/rancher/config');if(config.value.configured)clusters.value=await request<Cluster[]>('/api/v1/cmdb/rancher/clusters')}catch(reason){error.value=reason instanceof Error?reason.message:'Rancher 数据加载失败'}finally{loading.value=false}}
-async function sync(){syncing.value=true;error.value='';message.value='';try{const result=await request<{synced:number}>('/api/v1/cmdb/rancher/sync',{method:'POST'});message.value=`已同步 ${result.synced} 个 K8s 集群`;await load()}catch(reason){error.value=reason instanceof Error?reason.message:'Rancher 同步失败'}finally{syncing.value=false}}
+async function sync(){syncing.value=true;error.value='';message.value='';try{const result=await request<{clusters:number;nodes:number;namespaces:number;workloads:number}>('/api/v1/cmdb/rancher/sync',{method:'POST'});message.value=`已同步集群 ${result.clusters} 个、节点 ${result.nodes} 个、命名空间 ${result.namespaces} 个、工作负载 ${result.workloads} 个`;await load()}catch(reason){error.value=reason instanceof Error?reason.message:'Rancher 同步失败'}finally{syncing.value=false}}
 function open(url:string){if(url)window.open(url,'_blank','noopener,noreferrer')}
 onMounted(load)
 </script>
