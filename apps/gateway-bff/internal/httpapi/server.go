@@ -2401,19 +2401,34 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "release:view") {
 			return
 		}
-		writeJSON(w, 200, releasesService.Summary())
+		result, err := releasesService.Summary()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_SUMMARY_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("GET /api/v1/releases", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:view") {
 			return
 		}
-		writeJSON(w, 200, releasesService.List())
+		items, err := releasesService.List()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_LIST_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
 	})
 	mux.HandleFunc("GET /api/v1/releases/artifacts", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:view") {
 			return
 		}
-		writeJSON(w, 200, releasesService.Artifacts())
+		items, err := releasesService.Artifacts()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_ARTIFACTS_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
 	})
 	mux.HandleFunc("POST /api/v1/releases", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:manage") {
@@ -2431,7 +2446,29 @@ func NewServer() *Server {
 			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
 			return
 		}
+		auditService.Record(u.Username, "release.start", x.ID, x.Application+" "+x.Version)
 		writeJSON(w, 201, x)
+	})
+	mux.HandleFunc("POST /api/v1/releases/events", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeReleaseWebhook(w, r) {
+			return
+		}
+		var in releases.EventInput
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := releasesService.ApplyEvent(in)
+		if errors.Is(err, releases.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_EVENT_FAILED"})
+			return
+		}
+		auditService.Record(item.Source, "release.event", item.ID, item.Application+" "+item.Version+" "+item.Status)
+		writeJSON(w, http.StatusAccepted, item)
 	})
 	mux.HandleFunc("POST /api/v1/releases/{id}/rollback", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:manage") {
@@ -2443,6 +2480,7 @@ func NewServer() *Server {
 			writeJSON(w, 404, map[string]string{"code": "RELEASE_NOT_FOUND"})
 			return
 		}
+		auditService.Record(u.Username, "release.rollback", x.ID, x.Application+" "+x.Version)
 		writeJSON(w, 200, x)
 	})
 	mux.HandleFunc("GET /api/v1/toolbox/summary", func(w http.ResponseWriter, r *http.Request) {
@@ -2677,6 +2715,18 @@ func syncTicketsFromAlerts(ticketService *tickets.Service, auditService *audit.S
 	}
 }
 
+func authorizeReleaseWebhook(w http.ResponseWriter, r *http.Request) bool {
+	expected := strings.TrimSpace(os.Getenv("RELEASE_WEBHOOK_TOKEN"))
+	provided := strings.TrimSpace(r.Header.Get("X-Release-Token"))
+	if provided == "" {
+		provided = bearerToken(r)
+	}
+	if expected == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED", "message": "发布事件令牌无效"})
+		return false
+	}
+	return true
+}
 func authorizeRunnerToken(w http.ResponseWriter, r *http.Request) bool {
 	expected := strings.TrimSpace(os.Getenv("ANSIBLE_RUNNER_TOKEN"))
 	provided := bearerToken(r)
