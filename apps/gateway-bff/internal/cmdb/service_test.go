@@ -277,6 +277,28 @@ func TestAgentLifecycleRecordsEvents(t *testing.T) {
 	}
 }
 
+func TestMergeHostInventorySkipsNoopEvents(t *testing.T) {
+	service := NewService()
+	input := AgentAssetInput{ID: "agent-noop-01", Type: "virtual-machine", Hostname: "noop-01", IP: "10.88.0.21", OS: "linux"}
+	if _, err := service.UpsertAgentAsset(input); err != nil {
+		t.Fatalf("upsert agent asset: %v", err)
+	}
+	before, err := service.History(input.ID)
+	if err != nil {
+		t.Fatalf("history before merge: %v", err)
+	}
+	if _, err = service.MergeHostInventory(input.ID, "node-exporter", []Attribute{{Name: "os", Label: "操作系统", Value: "linux"}}); err != nil {
+		t.Fatalf("noop merge: %v", err)
+	}
+	after, err := service.History(input.ID)
+	if err != nil {
+		t.Fatalf("history after merge: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("noop discovery wrote history: before=%d after=%d", len(before), len(after))
+	}
+}
+
 func TestImportUpsertUpdatesByIP(t *testing.T) {
 	service := NewService()
 	service.CreateAsset(CreateAssetInput{ID: "dup-a", Name: "dup-a", Type: "virtual-machine", Status: "online", IP: "10.66.1.2", Environment: "测试", ProjectGroup: "研发效能组", Owner: "李娜", Source: "manual"}, "t")

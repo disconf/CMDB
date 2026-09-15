@@ -50,7 +50,7 @@ func TestOutboxPublisherMarksEventPublished(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err = publisher.publishOne(ctx); err != nil {
+	if err = publisher.publishBatch(ctx, 10000); err != nil {
 		t.Fatalf("publish outbox event: %v", err)
 	}
 	var publishedAt *time.Time

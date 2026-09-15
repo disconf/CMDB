@@ -110,7 +110,7 @@ Prometheus **不是**拓扑数据来源；它提供的是“某个节点现在�
 ### 5.2 前端展示与影响分析
 - 展示：现有 `TopologyPage`（五层）继续用 CMDB `/api/v1/topology/graph` 与 `/api/v1/topology/nodes/{id}/impact` 渲染。
 - 影响分析算法：以 CMDB 关系图做 BFS 上下游扩散（如：某台主机 down → 其上实例/服务/应用受影响清单），再叠加 Prometheus 状态（哪些节点现在异常）给出“受影响且异常”排序。
-- 动态刷新：CMDB 变更事件（outbox/Kafka：`cmdb.asset.changed.v1` / `cmdb.asset.status.v1`）驱动拓扑增量更新与监控纳管（P4 预留）。
+- 动态刷新：CMDB 变更事件（outbox/Kafka：`cmdb.asset.changed.v1` / `cmdb.asset.status.v1`）已启用，可供拓扑增量更新与监控纳管事件消费者使用。
 
 ## 6. 推荐的落地顺序
 
@@ -118,7 +118,7 @@ Prometheus **不是**拓扑数据来源；它提供的是“某个节点现在�
 2. **打通服务发现**：网关新增 `/monitor/service-discovery/snmp`，node-exporter 已有；Prometheus 用 http_sd 拉 CMDB。
 3. **告警闭环**：Alertmanager → CMDB webhook，资产状态回写（warning/offline），大屏联动。
 4. **网络设备试点**：给 CMDB 纳管交换机（SNMP 资产采集 → ingest）→ Prometheus snmp_exporter 出指标 → LLDP 生成链路 → 拓扑着色。
-5. **开启 Kafka 事件**：资产变更/状态 → 监控纳管与拓扑自动刷新。
+5. **开启 Kafka 事件（已完成）**：资产变更/状态 → 监控纳管与拓扑自动刷新。
 
 ## 7. 一句话总结
 **用 CMDB 管“发现与关系”，用 Prometheus 管“指标与告警”；Prometheus 的目标清单由 CMDB 动态下发（http_sd），CMDB 的状态由告警事件回写；拓扑以 CMDB 关系为骨架、以 Prometheus 状态为着色与影响因子。**

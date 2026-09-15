@@ -41,8 +41,8 @@ func TestDiscoveredResourcePersistsAndReconcilesToCMDB(t *testing.T) {
 	var assetCount, outboxCount int
 	_ = service.db.QueryRow("SELECT count(*) FROM cmdb_assets WHERE id=$1", itemID).Scan(&assetCount)
 	_ = service.db.QueryRow("SELECT count(*) FROM event_outbox WHERE event_key=$1", itemID).Scan(&outboxCount)
-	if assetCount != 1 || outboxCount != 2 {
-		t.Fatalf("expected reconciled asset and two events, got asset=%d outbox=%d", assetCount, outboxCount)
+	if assetCount != 1 || outboxCount != 3 {
+		t.Fatalf("expected reconciled asset and three events, got asset=%d outbox=%d", assetCount, outboxCount)
 	}
 }
 

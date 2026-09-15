@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS event_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_event_outbox_pending
   ON event_outbox(next_attempt_at, created_at) WHERE published_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_event_outbox_topic_time
+  ON event_outbox(topic, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_outbox_published_time
+  ON event_outbox(published_at DESC) WHERE published_at IS NOT NULL;
 `
 
 func loadModels(ctx context.Context, db *sql.DB) ([]Model, error) {
@@ -189,18 +193,50 @@ func insertAssetEvents(ctx context.Context, db execer, asset Asset, history Hist
 	if err != nil {
 		return err
 	}
-	for _, event := range []struct {
+	events := []struct {
 		id, topic string
 		payload   []byte
 	}{
 		{history.ID + "-asset", "cmdb.asset.changed.v1", assetPayload},
 		{history.ID + "-audit", "audit.operation.created.v1", auditPayload},
-	} {
+	}
+	if previousStatus, changed := historyStatusChange(history); changed {
+		statusPayload, marshalErr := json.Marshal(map[string]any{
+			"eventId": history.ID + "-status", "eventType": "cmdb.asset.status.v1",
+			"occurredAt": occurredAt, "producer": "gateway-bff",
+			"data": map[string]any{
+				"assetId": asset.ID, "assetName": asset.Name, "assetType": asset.Type,
+				"ip": asset.IP, "source": asset.Source, "status": asset.Status,
+				"previousStatus": previousStatus, "action": history.Action, "operator": history.Operator,
+			},
+		})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		events = append(events, struct {
+			id, topic string
+			payload   []byte
+		}{history.ID + "-status", "cmdb.asset.status.v1", statusPayload})
+	}
+	for _, event := range events {
 		if _, err = db.ExecContext(ctx, `INSERT INTO event_outbox(id,topic,event_key,payload) VALUES($1,$2,$3,$4)`, event.id, event.topic, asset.ID, event.payload); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func historyStatusChange(history HistoryEntry) (string, bool) {
+	if history.Action == "created" || history.Action == "agent-registered" {
+		return "", true
+	}
+	for _, change := range history.Changes {
+		if change.Field != "status" {
+			continue
+		}
+		return change.Before, change.Before != change.After
+	}
+	return "", false
 }
 
 func loadAssets(ctx context.Context, db *sql.DB) ([]Asset, error) {

@@ -580,6 +580,9 @@ func (s *Service) MergeHostInventory(id, source string, attrs []Attribute) (Asse
 		}
 		target.Status = "online"
 		changes := attributeDiff(before.Attributes, target.Attributes)
+		if before.Status == target.Status && len(changes) == 0 {
+			return cloneAsset(*target), nil
+		}
 		entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: id, Action: "merged-by-" + source, Operator: "discovery", OccurredAt: time.Now().Format("2006-01-02 15:04:05"), Changes: changes}
 		if s.db != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -707,9 +710,13 @@ func (s *Service) GetAsset(id string) (Asset, error) {
 	}
 	return Asset{}, ErrNotFound
 }
-func (s *Service) recordStatusEvent(asset Asset, action, operator string) error {
+func (s *Service) recordStatusEvent(asset Asset, previousStatus, action, operator string) error {
 	now := time.Now().Format("2006-01-02 15:04:05")
-	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: asset.ID, Action: action, Operator: operator, OccurredAt: now}
+	changes := []Change{}
+	if previousStatus != asset.Status {
+		changes = append(changes, Change{Field: "status", Before: previousStatus, After: asset.Status})
+	}
+	entry := HistoryEntry{ID: fmt.Sprintf("hist-%d", time.Now().UnixNano()), AssetID: asset.ID, Action: action, Operator: operator, OccurredAt: now, Changes: changes}
 	if s.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -784,7 +791,7 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 				}
 			}
 			if beforeStatus != "online" {
-				if err := s.recordStatusEvent(s.assets[i], "online", "agent"); err != nil {
+				if err := s.recordStatusEvent(s.assets[i], beforeStatus, "online", "agent"); err != nil {
 					return Asset{}, err
 				}
 			}
@@ -803,7 +810,7 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 			s.models[i].Count++
 		}
 	}
-	if err := s.recordStatusEvent(asset, "agent-registered", "agent"); err != nil {
+	if err := s.recordStatusEvent(asset, "", "agent-registered", "agent"); err != nil {
 		s.assets = s.assets[:len(s.assets)-1]
 		for i := range s.models {
 			if s.models[i].Code == asset.Type {
@@ -872,13 +879,14 @@ func (s *Service) MarkAgentAssetOffline(id string) error {
 			if s.assets[i].Status == "offline" {
 				return nil
 			}
+			beforeStatus := s.assets[i].Status
 			s.assets[i].Status = "offline"
 			if s.db != nil {
 				if _, err := s.db.Exec(`UPDATE cmdb_assets SET status='offline',updated_at=now() WHERE id=$1`, id); err != nil {
 					return err
 				}
 			}
-			return s.recordStatusEvent(s.assets[i], "offline", "agent-health")
+			return s.recordStatusEvent(s.assets[i], beforeStatus, "offline", "agent-health")
 		}
 	}
 	return ErrNotFound

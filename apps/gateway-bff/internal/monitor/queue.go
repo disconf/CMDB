@@ -23,12 +23,24 @@ type NotificationTask struct {
 	Alert     Alert  `json:"alert"`
 	ChannelID string `json:"channelId"`
 }
+type OutboxTopicStatus struct {
+	Topic            string `json:"topic"`
+	Pending          int    `json:"pending"`
+	Retrying         int    `json:"retrying"`
+	PublishedLast24h int    `json:"publishedLast24h"`
+	LastPublishedAt  string `json:"lastPublishedAt"`
+}
 type QueueStatus struct {
-	Enabled        bool   `json:"enabled"`
-	Consumer       string `json:"consumer"`
-	PendingOutbox  int    `json:"pendingOutbox"`
-	DeadLetters    int    `json:"deadLetters"`
-	LastConsumedAt string `json:"lastConsumedAt"`
+	Enabled            bool                `json:"enabled"`
+	Consumer           string              `json:"consumer"`
+	PendingOutbox      int                 `json:"pendingOutbox"`
+	DeadLetters        int                 `json:"deadLetters"`
+	LastConsumedAt     string              `json:"lastConsumedAt"`
+	TotalPendingOutbox int                 `json:"totalPendingOutbox"`
+	RetryingOutbox     int                 `json:"retryingOutbox"`
+	PublishedLast24h   int                 `json:"publishedLast24h"`
+	LastPublishedAt    string              `json:"lastPublishedAt"`
+	Topics             []OutboxTopicStatus `json:"topics"`
 }
 type DeadLetter struct {
 	ID         string `json:"id"`
@@ -83,9 +95,41 @@ func (s *Service) QueueStatus() QueueStatus {
 	result.Consumer = s.consumerStatus
 	result.LastConsumedAt = s.lastConsumedAt
 	s.mu.RUnlock()
+	result.Topics = []OutboxTopicStatus{}
 	if s.db != nil {
 		_ = s.db.QueryRow(`SELECT count(*) FROM event_outbox WHERE topic=$1 AND published_at IS NULL`, notificationTopic).Scan(&result.PendingOutbox)
 		_ = s.db.QueryRow(`SELECT count(*) FROM monitor_notification_dead_letters`).Scan(&result.DeadLetters)
+		var lastPublished sql.NullTime
+		_ = s.db.QueryRow(`SELECT
+			count(*) FILTER (WHERE published_at IS NULL),
+			count(*) FILTER (WHERE published_at IS NULL AND attempts > 0),
+			count(*) FILTER (WHERE published_at >= now() - interval '24 hours'),
+			max(published_at)
+			FROM event_outbox`).Scan(&result.TotalPendingOutbox, &result.RetryingOutbox, &result.PublishedLast24h, &lastPublished)
+		if lastPublished.Valid {
+			result.LastPublishedAt = lastPublished.Time.Local().Format("2006-01-02 15:04:05")
+		}
+		rows, err := s.db.Query(`SELECT
+			topic,
+			count(*) FILTER (WHERE published_at IS NULL),
+			count(*) FILTER (WHERE published_at IS NULL AND attempts > 0),
+			count(*) FILTER (WHERE published_at >= now() - interval '24 hours'),
+			max(published_at)
+			FROM event_outbox GROUP BY topic ORDER BY topic`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var item OutboxTopicStatus
+				var last sql.NullTime
+				if rows.Scan(&item.Topic, &item.Pending, &item.Retrying, &item.PublishedLast24h, &last) != nil {
+					continue
+				}
+				if last.Valid {
+					item.LastPublishedAt = last.Time.Local().Format("2006-01-02 15:04:05")
+				}
+				result.Topics = append(result.Topics, item)
+			}
+		}
 	}
 	return result
 }

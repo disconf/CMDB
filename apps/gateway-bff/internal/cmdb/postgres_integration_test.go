@@ -37,7 +37,7 @@ func TestPostgresPersistsAssetAndHistory(t *testing.T) {
 	if created.ID == "" {
 		t.Fatal("created asset has no ID")
 	}
-	var assetCount, historyCount, outboxCount int
+	var assetCount, historyCount, outboxCount, statusOutboxCount int
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM cmdb_assets WHERE id=$1", created.ID).Scan(&assetCount); err != nil {
@@ -49,7 +49,10 @@ func TestPostgresPersistsAssetAndHistory(t *testing.T) {
 	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM event_outbox WHERE event_key=$1", created.ID).Scan(&outboxCount); err != nil {
 		t.Fatalf("query outbox events: %v", err)
 	}
-	if assetCount != 1 || historyCount != 1 || outboxCount != 2 {
-		t.Fatalf("expected one asset, one history and two outbox rows, got asset=%d history=%d outbox=%d", assetCount, historyCount, outboxCount)
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM event_outbox WHERE event_key=$1 AND topic='cmdb.asset.status.v1'", created.ID).Scan(&statusOutboxCount); err != nil {
+		t.Fatalf("query status outbox events: %v", err)
+	}
+	if assetCount != 1 || historyCount != 1 || outboxCount != 3 || statusOutboxCount != 1 {
+		t.Fatalf("expected one asset, one history, three outbox rows and one status event, got asset=%d history=%d outbox=%d status=%d", assetCount, historyCount, outboxCount, statusOutboxCount)
 	}
 }

@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS event_outbox (
  published_at timestamptz,created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_event_outbox_pending ON event_outbox(next_attempt_at,created_at) WHERE published_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_event_outbox_topic_time ON event_outbox(topic,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_outbox_published_time ON event_outbox(published_at DESC) WHERE published_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS monitor_notification_dead_letters (
  id text PRIMARY KEY,event_id text NOT NULL,alert_id text NOT NULL DEFAULT '',payload jsonb NOT NULL,
  error text NOT NULL,attempts integer NOT NULL,created_at timestamptz NOT NULL DEFAULT now()

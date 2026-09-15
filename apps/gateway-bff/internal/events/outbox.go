@@ -40,7 +40,7 @@ func (p *OutboxPublisher) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		if err := p.publishOne(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := p.publishBatch(ctx, 100); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("publish outbox event", "error", err)
 		}
 		select {
@@ -52,32 +52,64 @@ func (p *OutboxPublisher) Run(ctx context.Context) {
 }
 
 func (p *OutboxPublisher) publishOne(ctx context.Context) error {
+	return p.publishBatch(ctx, 1)
+}
+
+func (p *OutboxPublisher) publishBatch(ctx context.Context, limit int) error {
+	if limit < 1 {
+		limit = 1
+	}
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var id, topic, key string
-	var payload []byte
-	err = tx.QueryRowContext(ctx, `SELECT id,topic,event_key,payload FROM event_outbox
+	rows, err := tx.QueryContext(ctx, `SELECT id,topic,event_key,payload FROM event_outbox
 		WHERE published_at IS NULL AND next_attempt_at <= now()
-		ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &topic, &key, &payload)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
+		ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, limit)
 	if err != nil {
 		return err
 	}
-	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	err = p.writer.WriteMessages(publishCtx, kafka.Message{Topic: topic, Key: []byte(key), Value: payload, Headers: []kafka.Header{{Key: "event-id", Value: []byte(id)}}})
+	type outboxEvent struct {
+		id, topic, key string
+		payload        []byte
+	}
+	events := make([]outboxEvent, 0, limit)
+	for rows.Next() {
+		var event outboxEvent
+		if err = rows.Scan(&event.id, &event.topic, &event.key, &event.payload); err != nil {
+			rows.Close()
+			return err
+		}
+		events = append(events, event)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(events) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(events))
+	messages := make([]kafka.Message, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, event.id)
+		messages = append(messages, kafka.Message{
+			Topic: event.topic, Key: []byte(event.key), Value: event.payload,
+			Headers: []kafka.Header{{Key: "event-id", Value: []byte(event.id)}},
+		})
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	err = p.writer.WriteMessages(publishCtx, messages...)
 	cancel()
 	if err != nil {
 		_, _ = tx.ExecContext(ctx, `UPDATE event_outbox SET attempts=attempts+1,
-			next_attempt_at=now() + least(attempts+1, 6) * interval '5 seconds' WHERE id=$1`, id)
+			next_attempt_at=now() + least(attempts+1, 6) * interval '5 seconds' WHERE id = ANY($1)`, ids)
 		_ = tx.Commit()
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE event_outbox SET published_at=now() WHERE id=$1", id); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE event_outbox SET published_at=now() WHERE id = ANY($1)", ids); err != nil {
 		return err
 	}
 	return tx.Commit()
