@@ -47,6 +47,7 @@ func main() {
 			os.Exit(1)
 		}
 		go publisher.Run(runContext)
+		go api.RunAssetEventConsumer(runContext)
 		go api.DiscoveryService().Consume(runContext, os.Getenv("KAFKA_BROKERS"))
 		go api.MonitorService().ConsumeNotifications(runContext, os.Getenv("KAFKA_BROKERS"))
 	}

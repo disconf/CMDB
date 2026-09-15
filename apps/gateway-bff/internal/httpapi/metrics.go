@@ -10,6 +10,7 @@ import (
 
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/discovery"
+	"cmdb/gateway-bff/internal/events"
 	"cmdb/gateway-bff/internal/monitor"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -54,7 +55,7 @@ type dependencyProbe struct {
 	url     string
 }
 
-func newMetrics(cmdbService *cmdb.Service, discoveryService *discovery.Service, monitorService *monitor.Service) *metricsMiddleware {
+func newMetrics(cmdbService *cmdb.Service, discoveryService *discovery.Service, monitorService *monitor.Service, assetEvents *events.AssetEventConsumer) *metricsMiddleware {
 	registry := prometheus.NewRegistry()
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cmdb_http_requests_total", Help: "Total CMDB gateway HTTP requests."}, []string{"method", "route", "status"})
 	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "cmdb_http_request_duration_seconds", Help: "CMDB gateway request duration.", Buckets: prometheus.DefBuckets}, []string{"method", "route"})
@@ -63,10 +64,61 @@ func newMetrics(cmdbService *cmdb.Service, discoveryService *discovery.Service, 
 	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "cmdb_assets_total", Help: "Current number of CMDB assets."}, func() float64 { return float64(cmdbService.Summary().Total) }))
 	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "cmdb_discovery_pending_total", Help: "Discovered resources waiting for reconciliation."}, func() float64 { return float64(discoveryService.Summary().Pending) }))
 	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "cmdb_alerts_active_total", Help: "Current active alerts."}, func() float64 { return float64(monitorService.ActiveCount()) }))
-	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "cmdb_notification_outbox_pending", Help: "Notification events waiting in the transactional outbox."}, func() float64 { return float64(monitorService.QueueStatus().PendingOutbox) }))
-	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "cmdb_notification_dead_letters_total", Help: "Notification events moved to the dead letter queue."}, func() float64 { return float64(monitorService.QueueStatus().DeadLetters) }))
+	registry.MustRegister(newEventQueueCollector(monitorService))
+	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "cmdb_asset_event_consumer_up", Help: "Whether the CMDB asset event consumer is running."}, func() float64 {
+		if assetEvents != nil && assetEvents.Running() {
+			return 1
+		}
+		return 0
+	}))
+	registry.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "cmdb_asset_events_processed_total", Help: "Total CMDB asset events processed by the internal consumer."}, func() float64 {
+		if assetEvents == nil {
+			return 0
+		}
+		return float64(assetEvents.Processed())
+	}))
 	go probeDependencies(dependencies)
 	return &metricsMiddleware{requests: requests, duration: duration, handler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{})}
+}
+
+type eventQueueCollector struct {
+	service *monitor.Service
+	descs   []*prometheus.Desc
+}
+
+func newEventQueueCollector(service *monitor.Service) *eventQueueCollector {
+	return &eventQueueCollector{
+		service: service,
+		descs: []*prometheus.Desc{
+			prometheus.NewDesc("cmdb_event_outbox_pending", "All events waiting in the transactional outbox.", nil, nil),
+			prometheus.NewDesc("cmdb_event_outbox_retrying", "Outbox events that have failed at least once and are waiting for retry.", nil, nil),
+			prometheus.NewDesc("cmdb_event_outbox_published_24h", "Outbox events published during the last 24 hours.", nil, nil),
+			prometheus.NewDesc("cmdb_event_outbox_last_publish_timestamp_seconds", "Unix timestamp of the most recently published outbox event.", nil, nil),
+			prometheus.NewDesc("cmdb_notification_outbox_pending", "Notification events waiting in the transactional outbox.", nil, nil),
+			prometheus.NewDesc("cmdb_notification_dead_letters_total", "Notification events moved to the dead letter queue.", nil, nil),
+		},
+	}
+}
+
+func (c *eventQueueCollector) Describe(ch chan<- *prometheus.Desc) {
+	for _, desc := range c.descs {
+		ch <- desc
+	}
+}
+
+func (c *eventQueueCollector) Collect(ch chan<- prometheus.Metric) {
+	status := c.service.QueueStatus()
+	values := []float64{
+		float64(status.TotalPendingOutbox),
+		float64(status.RetryingOutbox),
+		float64(status.PublishedLast24h),
+		float64(status.LastPublishedAtUnix),
+		float64(status.PendingOutbox),
+		float64(status.DeadLetters),
+	}
+	for index, desc := range c.descs {
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, values[index])
+	}
 }
 
 func probeDependencies(gauge *prometheus.GaugeVec) {

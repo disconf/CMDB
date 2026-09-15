@@ -92,6 +92,41 @@ groups:
         annotations:
           summary: "Keycloak JVM 堆内存过高"
           description: "Keycloak 实例 {{ $labels.instance }} 堆内存使用率已超过 90%。"
+      - alert: CMDBEventOutboxBacklog
+        expr: max(cmdb_event_outbox_pending{job="cmdb-gateway"}) > 100
+        for: 5m
+        labels: {severity: warning, category: event-bus}
+        annotations:
+          summary: "CMDB 事件 Outbox 积压"
+          description: "事件总线待发布数量为 {{ $value }}，已超过 100 条持续 5 分钟。"
+      - alert: CMDBEventOutboxRetrying
+        expr: max(cmdb_event_outbox_retrying{job="cmdb-gateway"}) > 0
+        for: 5m
+        labels: {severity: warning, category: event-bus}
+        annotations:
+          summary: "CMDB 事件 Outbox 持续重试"
+          description: "事件总线存在失败重试事件，已持续 5 分钟，请检查 Kafka 与数据库连接。"
+      - alert: CMDBEventOutboxStalled
+        expr: max(cmdb_event_outbox_pending{job="cmdb-gateway"}) > 0 and time() - max(cmdb_event_outbox_last_publish_timestamp_seconds{job="cmdb-gateway"}) > 900
+        for: 5m
+        labels: {severity: critical, category: event-bus}
+        annotations:
+          summary: "CMDB 事件 Outbox 发布停滞"
+          description: "存在待发布事件且最近 15 分钟没有成功发布记录。"
+      - alert: CMDBAssetEventConsumerDown
+        expr: min(cmdb_asset_event_consumer_up{job="cmdb-gateway"}) < 1
+        for: 2m
+        labels: {severity: critical, category: event-bus}
+        annotations:
+          summary: "CMDB 资产事件消费者未运行"
+          description: "至少一个 Gateway 副本未运行资产事件消费者，跨副本 CMDB 刷新可能失效。"
+      - alert: CMDBNotificationDeadLetter
+        expr: max(cmdb_notification_dead_letters_total{job="cmdb-gateway"}) > 0
+        for: 1m
+        labels: {severity: warning, category: notification}
+        annotations:
+          summary: "CMDB 通知存在死信"
+          description: "通知死信队列中有 {{ $value }} 条消息，请进入监控告警页面处理。"
       - alert: PlatformDependencyDown
         expr: cmdb_dependency_up{job="cmdb-gateway"} == 0
         for: 2m

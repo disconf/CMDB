@@ -31,16 +31,20 @@ type OutboxTopicStatus struct {
 	LastPublishedAt  string `json:"lastPublishedAt"`
 }
 type QueueStatus struct {
-	Enabled            bool                `json:"enabled"`
-	Consumer           string              `json:"consumer"`
-	PendingOutbox      int                 `json:"pendingOutbox"`
-	DeadLetters        int                 `json:"deadLetters"`
-	LastConsumedAt     string              `json:"lastConsumedAt"`
-	TotalPendingOutbox int                 `json:"totalPendingOutbox"`
-	RetryingOutbox     int                 `json:"retryingOutbox"`
-	PublishedLast24h   int                 `json:"publishedLast24h"`
-	LastPublishedAt    string              `json:"lastPublishedAt"`
-	Topics             []OutboxTopicStatus `json:"topics"`
+	Enabled              bool                `json:"enabled"`
+	Consumer             string              `json:"consumer"`
+	PendingOutbox        int                 `json:"pendingOutbox"`
+	DeadLetters          int                 `json:"deadLetters"`
+	LastConsumedAt       string              `json:"lastConsumedAt"`
+	TotalPendingOutbox   int                 `json:"totalPendingOutbox"`
+	RetryingOutbox       int                 `json:"retryingOutbox"`
+	PublishedLast24h     int                 `json:"publishedLast24h"`
+	LastPublishedAt      string              `json:"lastPublishedAt"`
+	LastPublishedAtUnix  int64               `json:"lastPublishedAtUnix"`
+	AssetConsumer        string              `json:"assetConsumer"`
+	AssetEventsProcessed uint64              `json:"assetEventsProcessed"`
+	AssetEventLastAt     string              `json:"assetEventLastAt"`
+	Topics               []OutboxTopicStatus `json:"topics"`
 }
 type DeadLetter struct {
 	ID         string `json:"id"`
@@ -108,6 +112,7 @@ func (s *Service) QueueStatus() QueueStatus {
 			FROM event_outbox`).Scan(&result.TotalPendingOutbox, &result.RetryingOutbox, &result.PublishedLast24h, &lastPublished)
 		if lastPublished.Valid {
 			result.LastPublishedAt = lastPublished.Time.Local().Format("2006-01-02 15:04:05")
+			result.LastPublishedAtUnix = lastPublished.Time.Unix()
 		}
 		rows, err := s.db.Query(`SELECT
 			topic,

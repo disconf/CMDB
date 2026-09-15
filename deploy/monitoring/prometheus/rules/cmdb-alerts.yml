@@ -100,3 +100,49 @@ groups:
         annotations:
           summary: "Redis is rejecting connections"
           description: "Redis rejected one or more connections during the last five minutes."
+
+      - alert: CMDBEventOutboxBacklog
+        expr: max(cmdb_event_outbox_pending{job="cmdb-gateway"}) > 100
+        for: 5m
+        labels:
+          severity: warning
+          category: event-bus
+        annotations:
+          summary: "CMDB event outbox backlog"
+          description: "The event outbox has {{ $value }} pending events for more than five minutes."
+      - alert: CMDBEventOutboxRetrying
+        expr: max(cmdb_event_outbox_retrying{job="cmdb-gateway"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+          category: event-bus
+        annotations:
+          summary: "CMDB event outbox is retrying"
+          description: "The event outbox has retrying events for more than five minutes. Check Kafka and database connectivity."
+      - alert: CMDBEventOutboxStalled
+        expr: max(cmdb_event_outbox_pending{job="cmdb-gateway"}) > 0 and time() - max(cmdb_event_outbox_last_publish_timestamp_seconds{job="cmdb-gateway"}) > 900
+        for: 5m
+        labels:
+          severity: critical
+          category: event-bus
+        annotations:
+          summary: "CMDB event outbox is stalled"
+          description: "Pending events exist and no event has been published successfully for fifteen minutes."
+      - alert: CMDBAssetEventConsumerDown
+        expr: min(cmdb_asset_event_consumer_up{job="cmdb-gateway"}) < 1
+        for: 2m
+        labels:
+          severity: critical
+          category: event-bus
+        annotations:
+          summary: "CMDB asset event consumer is not running"
+          description: "At least one gateway replica is not consuming asset events; cross-replica CMDB refresh may be unavailable."
+      - alert: CMDBNotificationDeadLetter
+        expr: max(cmdb_notification_dead_letters_total{job="cmdb-gateway"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+          category: notification
+        annotations:
+          summary: "CMDB notification dead letters exist"
+          description: "The notification dead letter queue has {{ $value }} messages."

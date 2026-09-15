@@ -81,19 +81,49 @@ func NewService() *Service {
 		if modelErr != nil {
 			panic(fmt.Sprintf("reload CMDB models: %v", modelErr))
 		}
-		service.models = persistedModels
+		service.models = withModelCounts(persistedModels, persistedAssets)
 		service.assets = persistedAssets
 		service.history = persistedHistory
-		for index := range service.models {
-			service.models[index].Count = 0
-			for _, item := range service.assets {
-				if item.Type == service.models[index].Code {
-					service.models[index].Count++
-				}
+	}
+	return service
+}
+
+func withModelCounts(models []Model, assets []Asset) []Model {
+	for index := range models {
+		models[index].Count = 0
+		for _, item := range assets {
+			if item.Type == models[index].Code {
+				models[index].Count++
 			}
 		}
 	}
-	return service
+	return models
+}
+
+// ReloadFromDatabase refreshes the in-process read model after a committed CMDB change event.
+// Every gateway replica consumes asset events, so a write handled by one replica becomes visible to all replicas.
+func (s *Service) ReloadFromDatabase(ctx context.Context) error {
+	if s.db == nil {
+		return nil
+	}
+	assets, err := loadAssets(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("reload CMDB assets: %w", err)
+	}
+	models, err := loadModels(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("reload CMDB models: %w", err)
+	}
+	history, err := loadHistory(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("reload CMDB history: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.assets = assets
+	s.models = withModelCounts(models, assets)
+	s.history = history
+	return nil
 }
 
 var modelFieldPresets = map[string][]ModelField{

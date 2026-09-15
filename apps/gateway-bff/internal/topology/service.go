@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"cmdb/gateway-bff/internal/cmdb"
@@ -34,22 +36,43 @@ type Graph struct {
 	Edges     []Edge `json:"edges"`
 	UpdatedAt string `json:"updatedAt"`
 }
+type ImpactNode struct {
+	Node
+	Distance  int      `json:"distance"`
+	Direction string   `json:"direction"`
+	Path      []string `json:"path"`
+}
+type ImpactSummary struct {
+	Total    int `json:"total"`
+	Healthy  int `json:"healthy"`
+	Warning  int `json:"warning"`
+	Critical int `json:"critical"`
+}
 type Impact struct {
-	Root     Node       `json:"root"`
-	Affected []Node     `json:"affected"`
-	Paths    [][]string `json:"paths"`
+	Root     Node          `json:"root"`
+	Affected []ImpactNode  `json:"affected"`
+	Paths    [][]string    `json:"paths"`
+	Summary  ImpactSummary `json:"summary"`
+}
+type cachedGraph struct {
+	graph   Graph
+	expires time.Time
 }
 type Service struct {
-	graph Graph
-	cmdb  *cmdb.Service
+	graph   Graph
+	cmdb    *cmdb.Service
+	cacheMu sync.RWMutex
+	cache   map[string]cachedGraph
 }
+
+const topologyCacheTTL = 15 * time.Second
 
 func NewService() *Service {
 	return &Service{graph: demoGraph()}
 }
 
 func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
-	return &Service{graph: demoGraph(), cmdb: cmdbService}
+	return &Service{graph: demoGraph(), cmdb: cmdbService, cache: map[string]cachedGraph{}}
 }
 
 func demoGraph() Graph {
@@ -63,10 +86,38 @@ func demoGraph() Graph {
 }
 
 func (s *Service) Graph(environment string) Graph {
-	if s.cmdb != nil {
-		return s.cmdbGraph(environment)
+	if s.cmdb == nil {
+		return filterDemoGraph(s.graph, environment)
 	}
-	return filterDemoGraph(s.graph, environment)
+	if graph, ok := s.cachedGraph(environment); ok {
+		return graph
+	}
+	graph := s.cmdbGraph(environment)
+	s.cacheMu.Lock()
+	if s.cache == nil {
+		s.cache = map[string]cachedGraph{}
+	}
+	s.cache[environment] = cachedGraph{graph: graph, expires: time.Now().Add(topologyCacheTTL)}
+	s.cacheMu.Unlock()
+	return graph
+}
+
+// Invalidate forces the next topology read to rebuild from CMDB.
+// Asset event consumers call this after refreshing their in-process CMDB state.
+func (s *Service) Invalidate() {
+	s.cacheMu.Lock()
+	s.cache = map[string]cachedGraph{}
+	s.cacheMu.Unlock()
+}
+
+func (s *Service) cachedGraph(environment string) (Graph, bool) {
+	s.cacheMu.RLock()
+	cached, ok := s.cache[environment]
+	s.cacheMu.RUnlock()
+	if !ok || time.Now().After(cached.expires) {
+		return Graph{}, false
+	}
+	return cached.graph, true
 }
 
 func filterDemoGraph(graph Graph, environment string) Graph {
@@ -281,33 +332,81 @@ func slug(value string) string {
 func (s *Service) Impact(id string) (Impact, error) {
 	graph := s.Graph("")
 	byID := map[string]Node{}
-	for _, n := range graph.Nodes {
-		byID[n.ID] = n
+	for _, node := range graph.Nodes {
+		byID[node.ID] = node
 	}
 	root, ok := byID[id]
 	if !ok {
 		return Impact{}, ErrNotFound
 	}
+	type queueNode struct {
+		id       string
+		distance int
+		path     []string
+	}
 	seen := map[string]bool{id: true}
-	queue := []string{id}
+	queue := []queueNode{{id: id, path: []string{id}}}
 	result := Impact{Root: root}
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
-		for _, e := range graph.Edges {
-			var next string
-			if e.Source == current {
-				next = e.Target
-			} else if e.Target == current {
-				next = e.Source
+		for _, edge := range graph.Edges {
+			next, direction := "", ""
+			switch {
+			case edge.Source == current.id:
+				next, direction = edge.Target, "downstream"
+			case edge.Target == current.id:
+				next, direction = edge.Source, "upstream"
 			}
-			if next != "" && !seen[next] {
-				seen[next] = true
-				queue = append(queue, next)
-				result.Affected = append(result.Affected, byID[next])
-				result.Paths = append(result.Paths, []string{current, next})
+			if next == "" || seen[next] {
+				continue
 			}
+			node, exists := byID[next]
+			if !exists {
+				continue
+			}
+			seen[next] = true
+			path := append(append([]string(nil), current.path...), next)
+			result.Affected = append(result.Affected, ImpactNode{
+				Node: node, Distance: current.distance + 1, Direction: direction, Path: path,
+			})
+			queue = append(queue, queueNode{id: next, distance: current.distance + 1, path: path})
 		}
 	}
+	sort.SliceStable(result.Affected, func(i, j int) bool {
+		left, right := result.Affected[i], result.Affected[j]
+		if statusPriority(left.Status) != statusPriority(right.Status) {
+			return statusPriority(left.Status) < statusPriority(right.Status)
+		}
+		if left.Distance != right.Distance {
+			return left.Distance < right.Distance
+		}
+		return strings.ToLower(left.Name) < strings.ToLower(right.Name)
+	})
+	result.Summary.Total = len(result.Affected)
+	for _, item := range result.Affected {
+		switch item.Status {
+		case "healthy":
+			result.Summary.Healthy++
+		case "warning":
+			result.Summary.Warning++
+		case "critical":
+			result.Summary.Critical++
+		}
+		result.Paths = append(result.Paths, append([]string(nil), item.Path...))
+	}
 	return result, nil
+}
+
+func statusPriority(status string) int {
+	switch strings.ToLower(status) {
+	case "critical":
+		return 0
+	case "warning":
+		return 1
+	case "healthy":
+		return 2
+	default:
+		return 3
+	}
 }

@@ -16,6 +16,30 @@ func TestGraphAndImpact(t *testing.T) {
 	if err != nil || impact.Root.ID != "service-order" || len(impact.Affected) < 3 {
 		t.Fatalf("unexpected impact: %#v %v", impact, err)
 	}
+	if impact.Summary.Total != len(impact.Affected) || len(impact.Paths) != len(impact.Affected) {
+		t.Fatalf("impact summary/path mismatch: %#v", impact)
+	}
+	if len(impact.Affected[0].Path) < 2 || impact.Affected[0].Direction == "" || impact.Affected[0].Distance < 1 {
+		t.Fatalf("expected enriched impact node, got %#v", impact.Affected[0])
+	}
+}
+
+func TestCMDBGraphCacheInvalidation(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	service := NewServiceWithCMDB(cmdbService)
+	if got := len(service.Graph("test").Nodes); got != 0 {
+		t.Fatalf("expected empty graph, got %d nodes", got)
+	}
+	if _, err := cmdbService.CreateAsset(cmdb.CreateAssetInput{ID: "cache-host", Name: "cache-host", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test"}, "test"); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if got := len(service.Graph("test").Nodes); got != 0 {
+		t.Fatalf("expected cached graph before invalidation, got %d nodes", got)
+	}
+	service.Invalidate()
+	if got := len(service.Graph("test").Nodes); got != 1 {
+		t.Fatalf("expected refreshed graph after invalidation, got %d nodes", got)
+	}
 }
 
 func TestCMDBGraphUsesAssetsAndRelations(t *testing.T) {

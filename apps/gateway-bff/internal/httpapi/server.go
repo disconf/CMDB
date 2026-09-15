@@ -21,6 +21,7 @@ import (
 	"cmdb/gateway-bff/internal/credentials"
 	"cmdb/gateway-bff/internal/dashboard"
 	"cmdb/gateway-bff/internal/discovery"
+	"cmdb/gateway-bff/internal/events"
 	"cmdb/gateway-bff/internal/idc"
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/k8s"
@@ -33,9 +34,10 @@ import (
 )
 
 type Server struct {
-	handler   http.Handler
-	discovery *discovery.Service
-	monitor   *monitor.Service
+	handler     http.Handler
+	discovery   *discovery.Service
+	monitor     *monitor.Service
+	assetEvents *events.AssetEventConsumer
 }
 
 func NewServer() *Server {
@@ -43,8 +45,23 @@ func NewServer() *Server {
 	cmdbService := cmdb.NewService()
 	discoveryService := discovery.NewServiceWithCMDB(cmdbService)
 	monitorService := monitor.NewService()
+	topologyService := topology.NewServiceWithCMDB(cmdbService)
+	var assetEventConsumer *events.AssetEventConsumer
+	if brokers := os.Getenv("KAFKA_BROKERS"); strings.TrimSpace(brokers) != "" {
+		var consumerErr error
+		assetEventConsumer, consumerErr = events.NewAssetEventConsumer(brokers, func(ctx context.Context, _ string, _ []byte) error {
+			if err := cmdbService.ReloadFromDatabase(ctx); err != nil {
+				return err
+			}
+			topologyService.Invalidate()
+			return nil
+		})
+		if consumerErr != nil {
+			panic("initialize CMDB asset event consumer: " + consumerErr.Error())
+		}
+	}
 	service := dashboard.NewServiceWithRuntime(cmdbService, discoveryService, monitorService)
-	platformMetrics := newMetrics(cmdbService, discoveryService, monitorService)
+	platformMetrics := newMetrics(cmdbService, discoveryService, monitorService, assetEventConsumer)
 	jobsService := jobs.NewService()
 	go jobsService.RunScheduler(context.Background())
 	ticketsService := tickets.NewService()
@@ -52,7 +69,6 @@ func NewServer() *Server {
 	systemService := system.NewService()
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
-	topologyService := topology.NewServiceWithCMDB(cmdbService)
 	authService := auth.NewService()
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
@@ -1278,7 +1294,13 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "monitor:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, monitorService.QueueStatus())
+		status := monitorService.QueueStatus()
+		if assetEventConsumer != nil {
+			status.AssetConsumer = assetEventConsumer.Status()
+			status.AssetEventsProcessed = assetEventConsumer.Processed()
+			status.AssetEventLastAt = assetEventConsumer.LastEventAt()
+		}
+		writeJSON(w, http.StatusOK, status)
 	})
 	mux.HandleFunc("GET /api/v1/monitor/queue/dead-letters", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "monitor:view") {
@@ -2505,7 +2527,13 @@ func NewServer() *Server {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND", "message": "接口不存在"})
 	})
-	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService}
+	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService, assetEvents: assetEventConsumer}
+}
+
+func (s *Server) RunAssetEventConsumer(ctx context.Context) {
+	if s != nil && s.assetEvents != nil {
+		s.assetEvents.Run(ctx)
+	}
 }
 
 func syncAssetHealthFromAlerts(cmdbService *cmdb.Service, monitorService *monitor.Service, payload monitor.WebhookPayload) {

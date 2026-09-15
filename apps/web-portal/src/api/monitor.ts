@@ -14,7 +14,7 @@ export type NotificationChannel = { id: string; name: string; displayUrl: string
 export type NotificationDelivery = { id: string; channelId: string; channelName: string; alertId: string; alertTitle: string; attempt: number; status: string; httpStatus: number; error: string; createdAt: string }
 export type DeliveryStats = { total: number; successful: number; failed: number; successRate: number }
 export type OutboxTopicStatus = { topic: string; pending: number; retrying: number; publishedLast24h: number; lastPublishedAt: string }
-export type NotificationQueueStatus = { enabled: boolean; consumer: string; pendingOutbox: number; deadLetters: number; lastConsumedAt: string; totalPendingOutbox: number; retryingOutbox: number; publishedLast24h: number; lastPublishedAt: string; topics: OutboxTopicStatus[] }
+export type NotificationQueueStatus = { enabled: boolean; consumer: string; pendingOutbox: number; deadLetters: number; lastConsumedAt: string; totalPendingOutbox: number; retryingOutbox: number; publishedLast24h: number; lastPublishedAt: string; lastPublishedAtUnix: number; assetConsumer: string; assetEventsProcessed: number; assetEventLastAt: string; topics: OutboxTopicStatus[] }
 export type NotificationDeadLetter = { id: string; eventId: string; alertId: string; alertTitle: string; channelId: string; error: string; attempts: number; createdAt: string }
 export type EscalationPolicy = { id:string;name:string;severity:string;timeoutMinutes:number;team:string;owner:string;channelId:string;enabled:boolean }
 
@@ -90,7 +90,7 @@ export const deleteNotificationChannel = (token: string, id: string) => request<
 export const updateNotificationTemplate = (token:string,id:string,template:string) => request<NotificationChannel>(`/api/v1/monitor/channels/${encodeURIComponent(id)}/template`,token,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({template})})
 export const fetchNotificationDeliveries = (token: string) => requestList<NotificationDelivery>('/api/v1/monitor/deliveries',token)
 export const fetchDeliveryStats = async (token: string) => (await request<DeliveryStats | null>('/api/v1/monitor/deliveries/stats',token)) ?? { total:0,successful:0,failed:0,successRate:0 }
-export const fetchNotificationQueueStatus = async (token:string) => (await request<NotificationQueueStatus | null>('/api/v1/monitor/queue/status',token)) ?? { enabled:false,consumer:'',pendingOutbox:0,deadLetters:0,lastConsumedAt:'',totalPendingOutbox:0,retryingOutbox:0,publishedLast24h:0,lastPublishedAt:'',topics:[] }
+export const fetchNotificationQueueStatus = async (token:string) => (await request<NotificationQueueStatus | null>('/api/v1/monitor/queue/status',token)) ?? { enabled:false,consumer:'',pendingOutbox:0,deadLetters:0,lastConsumedAt:'',totalPendingOutbox:0,retryingOutbox:0,publishedLast24h:0,lastPublishedAt:'',lastPublishedAtUnix:0,assetConsumer:'disabled',assetEventsProcessed:0,assetEventLastAt:'',topics:[] }
 export const fetchNotificationDeadLetters = (token:string) => requestList<NotificationDeadLetter>('/api/v1/monitor/queue/dead-letters',token)
 export const replayDeadLetter = (token:string,id:string) => request<void>(`/api/v1/monitor/queue/dead-letters/${encodeURIComponent(id)}/replay`,token,{method:'POST'})
 export const deleteDeadLetter = (token:string,id:string) => request<void>(`/api/v1/monitor/queue/dead-letters/${encodeURIComponent(id)}`,token,{method:'DELETE'})

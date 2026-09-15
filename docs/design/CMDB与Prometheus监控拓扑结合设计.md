@@ -109,8 +109,9 @@ Prometheus **不是**拓扑数据来源；它提供的是“某个节点现在�
 
 ### 5.2 前端展示与影响分析
 - 展示：现有 `TopologyPage`（五层）继续用 CMDB `/api/v1/topology/graph` 与 `/api/v1/topology/nodes/{id}/impact` 渲染。
-- 影响分析算法：以 CMDB 关系图做 BFS 上下游扩散（如：某台主机 down → 其上实例/服务/应用受影响清单），再叠加 Prometheus 状态（哪些节点现在异常）给出“受影响且异常”排序。
-- 动态刷新：CMDB 变更事件（outbox/Kafka：`cmdb.asset.changed.v1` / `cmdb.asset.status.v1`）已启用，可供拓扑增量更新与监控纳管事件消费者使用。
+- 影响分析算法：以 CMDB 关系图做定向 BFS 上下游扩散（如：某台主机 down → 其上实例/服务/应用受影响清单），输出方向、距离、完整路径和严重/关注/健康汇总，并按异常优先排序。
+- 动态刷新：已经启用 Kafka 资产事件消费者；每个 Gateway 副本独立消费 `cmdb.asset.changed.v1` / `cmdb.asset.status.v1`，收到事件后刷新 PostgreSQL 读取模型并失效拓扑缓存（缓存 TTL 15 秒）。
+- 事件总线可观测：Gateway `/metrics` 暴露 Outbox 待发布、重试、24 小时发布量、最近发布时间和资产消费者状态；Prometheus 已配置积压、重试、停滞、消费者离线和通知死信告警。
 
 ## 6. 推荐的落地顺序
 
