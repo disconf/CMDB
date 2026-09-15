@@ -23,6 +23,7 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			_, _ = s.Evaluate("network-automation")
+			_ = s.RunComplianceMaintenance()
 		}
 	}
 }

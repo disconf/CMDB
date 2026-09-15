@@ -12,35 +12,38 @@ import (
 )
 
 type ComplianceRule struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Action       string `json:"action"`
-	Type         string `json:"type"`
-	Value        string `json:"value"`
-	Environment  string `json:"environment"`
-	ProjectGroup string `json:"projectGroup"`
-	Location     string `json:"location"`
-	VLAN         string `json:"vlan"`
-	Status       string `json:"status"`
-	Description  string `json:"description"`
-	ExpiresAt    string `json:"expiresAt,omitempty"`
-	CreatedBy    string `json:"createdBy"`
-	ApprovedBy   string `json:"approvedBy,omitempty"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Action         string `json:"action"`
+	Type           string `json:"type"`
+	Value          string `json:"value"`
+	Environment    string `json:"environment"`
+	ProjectGroup   string `json:"projectGroup"`
+	Location       string `json:"location"`
+	VLAN           string `json:"vlan"`
+	Status         string `json:"status"`
+	Description    string `json:"description"`
+	ExpiresAt      string `json:"expiresAt,omitempty"`
+	ReminderHours  int    `json:"reminderHours"`
+	LastRemindedAt string `json:"lastRemindedAt,omitempty"`
+	CreatedBy      string `json:"createdBy"`
+	ApprovedBy     string `json:"approvedBy,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 type ComplianceRuleInput struct {
-	Name         string `json:"name"`
-	Action       string `json:"action"`
-	Type         string `json:"type"`
-	Value        string `json:"value"`
-	Environment  string `json:"environment"`
-	ProjectGroup string `json:"projectGroup"`
-	Location     string `json:"location"`
-	VLAN         string `json:"vlan"`
-	Description  string `json:"description"`
-	ExpiresAt    string `json:"expiresAt"`
+	Name          string `json:"name"`
+	Action        string `json:"action"`
+	Type          string `json:"type"`
+	Value         string `json:"value"`
+	Environment   string `json:"environment"`
+	ProjectGroup  string `json:"projectGroup"`
+	Location      string `json:"location"`
+	VLAN          string `json:"vlan"`
+	Description   string `json:"description"`
+	ExpiresAt     string `json:"expiresAt"`
+	ReminderHours int    `json:"reminderHours"`
 }
 
 type ComplianceDecision struct {
@@ -78,12 +81,18 @@ func (s *Service) ComplianceRules() []ComplianceRule {
 
 func (s *Service) CreateComplianceRule(input ComplianceRuleInput, operator string) (ComplianceRule, error) {
 	now := time.Now().Format("2006-01-02 15:04:05")
-	item := ComplianceRule{ID: fmt.Sprintf("compliance-%d", time.Now().UnixNano()), Name: strings.TrimSpace(input.Name), Action: strings.TrimSpace(input.Action), Type: strings.TrimSpace(input.Type), Value: strings.TrimSpace(input.Value), Environment: strings.TrimSpace(input.Environment), ProjectGroup: strings.TrimSpace(input.ProjectGroup), Location: strings.TrimSpace(input.Location), VLAN: strings.TrimSpace(input.VLAN), Description: strings.TrimSpace(input.Description), ExpiresAt: strings.TrimSpace(input.ExpiresAt), Status: "pending", CreatedBy: operator, CreatedAt: now, UpdatedAt: now}
+	item := ComplianceRule{ID: fmt.Sprintf("compliance-%d", time.Now().UnixNano()), Name: strings.TrimSpace(input.Name), Action: strings.TrimSpace(input.Action), Type: strings.TrimSpace(input.Type), Value: strings.TrimSpace(input.Value), Environment: strings.TrimSpace(input.Environment), ProjectGroup: strings.TrimSpace(input.ProjectGroup), Location: strings.TrimSpace(input.Location), VLAN: strings.TrimSpace(input.VLAN), Description: strings.TrimSpace(input.Description), ExpiresAt: strings.TrimSpace(input.ExpiresAt), ReminderHours: input.ReminderHours, Status: "pending", CreatedBy: operator, CreatedAt: now, UpdatedAt: now}
 	if item.Name == "" || item.Value == "" {
 		return ComplianceRule{}, ErrValidation
 	}
 	if item.Action == "" {
 		item.Action = "allow"
+	}
+	if item.ReminderHours <= 0 {
+		item.ReminderHours = 24
+	}
+	if item.Action == "temporary" && item.ExpiresAt == "" {
+		return ComplianceRule{}, ErrValidation
 	}
 	if item.Type == "" {
 		item.Type = "mac"

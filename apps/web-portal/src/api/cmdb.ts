@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -68,3 +68,8 @@ export const approveComplianceRule=(token:string,id:string)=>send<ComplianceRule
 export const deleteComplianceRule=(token:string,id:string)=>del<void>(`/api/v1/cmdb/network-compliance-rules/${encodeURIComponent(id)}`,token)
 export const fetchComplianceDecisions=(token:string)=>get<ComplianceDecision[]>('/api/v1/cmdb/network-compliance-decisions',token)
 export const evaluateCompliance=(token:string)=>send<ComplianceDecision[]>('/api/v1/cmdb/network-compliance-rules/evaluate',token,'POST',{})
+export const runComplianceMaintenance=(token:string)=>send<{checked:number;reminded:number;expired:number;alerts:number}>('/api/v1/cmdb/network-compliance-rules/maintenance',token,'POST',{})
+export const fetchOnboardingRequests=(token:string)=>get<OnboardingRequest[]>('/api/v1/cmdb/network-onboarding-requests',token)
+export const createOnboardingRequest=(token:string,input:Partial<OnboardingRequest>)=>send<OnboardingRequest>('/api/v1/cmdb/network-onboarding-requests',token,'POST',input)
+export const approveOnboardingRequest=(token:string,id:string)=>send<OnboardingRequest>(`/api/v1/cmdb/network-onboarding-requests/${encodeURIComponent(id)}/approve`,token,'POST',{})
+export const rejectOnboardingRequest=(token:string,id:string,note='')=>send<OnboardingRequest>(`/api/v1/cmdb/network-onboarding-requests/${encodeURIComponent(id)}/reject`,token,'POST',{note})

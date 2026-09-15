@@ -51,4 +51,15 @@ func TestPostgresPolicyAndLifecyclePersistence(t *testing.T) {
 	if err != nil || len(rules) == 0 {
 		t.Fatalf("load compliance rules: %#v %v", rules, err)
 	}
+	onboard := OnboardingRequest{ID: "integration-onboarding", AnomalyID: "integration-anomaly", Name: "edge-device", IP: "10.0.0.9", MACAddress: "AA:BB:CC:DD:EE:01", AssetType: "physical-server", Status: "pending", CreatedBy: "integration", CreatedAt: now, UpdatedAt: now}
+	if err := upsertOnboardingRequest(context.Background(), db, onboard); err != nil {
+		t.Fatalf("persist onboarding request: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_network_onboarding_requests WHERE id=$1", onboard.ID)
+	})
+	onboarding, err := loadOnboardingRequests(context.Background(), db)
+	if err != nil || len(onboarding) == 0 {
+		t.Fatalf("load onboarding requests: %#v %v", onboarding, err)
+	}
 }

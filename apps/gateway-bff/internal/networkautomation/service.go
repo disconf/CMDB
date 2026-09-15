@@ -32,6 +32,7 @@ type Service struct {
 	policies        []Policy
 	lifecycle       map[string]Lifecycle
 	complianceRules []ComplianceRule
+	onboarding      []OnboardingRequest
 }
 
 func defaultPolicy() Policy {
@@ -40,7 +41,7 @@ func defaultPolicy() Policy {
 }
 
 func NewService(cmdbService *cmdb.Service, ticketsService *tickets.Service, monitorService *monitor.Service, jobsService *jobs.Service) *Service {
-	service := &Service{cmdb: cmdbService, tickets: ticketsService, monitor: monitorService, jobs: jobsService, policies: []Policy{defaultPolicy()}, lifecycle: map[string]Lifecycle{}, complianceRules: []ComplianceRule{}}
+	service := &Service{cmdb: cmdbService, tickets: ticketsService, monitor: monitorService, jobs: jobsService, policies: []Policy{defaultPolicy()}, lifecycle: map[string]Lifecycle{}, complianceRules: []ComplianceRule{}, onboarding: []OnboardingRequest{}}
 	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
 		db, err := openPostgres(url)
 		if err != nil {
@@ -68,6 +69,11 @@ func NewService(cmdbService *cmdb.Service, ticketsService *tickets.Service, moni
 			panic(fmt.Sprintf("load network compliance rules: %v", complianceErr))
 		}
 		service.complianceRules = complianceRules
+		onboarding, onboardingErr := loadOnboardingRequests(context.Background(), db)
+		if onboardingErr != nil {
+			panic(fmt.Sprintf("load network onboarding requests: %v", onboardingErr))
+		}
+		service.onboarding = onboarding
 	}
 	return service
 }

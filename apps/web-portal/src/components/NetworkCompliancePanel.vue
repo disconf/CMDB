@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { CheckCircle2, Clock3, Plus, ShieldCheck, Trash2, X } from 'lucide-vue-next'
-import { approveComplianceRule, createComplianceRule, deleteComplianceRule, evaluateCompliance, fetchComplianceDecisions, fetchComplianceRules } from '@/api/cmdb'
+import { approveComplianceRule, createComplianceRule, deleteComplianceRule, evaluateCompliance, fetchComplianceDecisions, fetchComplianceRules, runComplianceMaintenance } from '@/api/cmdb'
 import { useAuthStore } from '@/stores/useAuthStore'
 import type { ComplianceDecision, ComplianceRule } from '@/features/cmdb/types'
 
@@ -12,7 +12,7 @@ const busy = ref(false)
 const message = ref('')
 const error = ref('')
 const showForm = ref(false)
-const form = reactive({ name:'网络设备白名单', action:'allow', type:'mac', value:'', environment:'', projectGroup:'', location:'', vlan:'', description:'', expiresAt:'' })
+const form = reactive({ name:'网络设备白名单', action:'allow', type:'mac', value:'', environment:'', projectGroup:'', location:'', vlan:'', description:'', expiresAt:'', reminderHours:24 })
 const allowedCount = computed(() => decisions.value.filter(item => item.status === 'allowed' || item.status === 'temporary').length)
 const deniedCount = computed(() => decisions.value.filter(item => item.status === 'denied' || item.status === 'unmatched').length)
 
@@ -28,18 +28,25 @@ async function create() {
 }
 async function approve(item:ComplianceRule) { busy.value = true; try { await approveComplianceRule(auth.token, item.id); await load() } catch (reason) { error.value = reason instanceof Error ? reason.message : '审批失败' } finally { busy.value = false } }
 async function remove(item:ComplianceRule) { busy.value = true; try { await deleteComplianceRule(auth.token, item.id); await load() } catch (reason) { error.value = reason instanceof Error ? reason.message : '删除失败' } finally { busy.value = false } }
-async function evaluate() { busy.value = true; try { decisions.value = await evaluateCompliance(auth.token); message.value = `已重新计算 ${decisions.value.length} 条接入决策` } catch (reason) { error.value = reason instanceof Error ? reason.message : '评估失败' } finally { busy.value = false } }
+async function maintenance() {
+  busy.value = true
+  try {
+    const result = await runComplianceMaintenance(auth.token)
+    message.value = `临时授权检查 ${result.checked} 条，提醒 ${result.reminded} 条，自动撤销 ${result.expired} 条`
+    await load()
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : '到期维护执行失败' } finally { busy.value = false }
+}async function evaluate() { busy.value = true; try { decisions.value = await evaluateCompliance(auth.token); message.value = `已重新计算 ${decisions.value.length} 条接入决策` } catch (reason) { error.value = reason instanceof Error ? reason.message : '评估失败' } finally { busy.value = false } }
 onMounted(load)
 </script>
 
 <template>
   <section class="compliance-panel">
-    <header><div><ShieldCheck/><span><strong>网络资产合规基线</strong><small>MAC/IP/VLAN 白名单、临时授权和拒绝规则</small></span></div><div><button :disabled="busy" @click="showForm=true"><Plus/>新增规则</button><button class="primary" :disabled="busy" @click="evaluate"><CheckCircle2/>重新评估</button></div></header>
+    <header><div><ShieldCheck/><span><strong>网络资产合规基线</strong><small>MAC/IP/VLAN 白名单、临时授权和拒绝规则</small></span></div><div><button :disabled="busy" @click="showForm=true"><Plus/>新增规则</button><button :disabled="busy" @click="maintenance"><Clock3/>到期维护</button><button class="primary" :disabled="busy" @click="evaluate"><CheckCircle2/>重新评估</button></div></header>
     <div class="compliance-stats"><article><ShieldCheck/><span>已审批规则<strong>{{rules.filter(item=>item.status==='approved').length}}</strong></span></article><article><CheckCircle2/><span>放行接入<strong>{{allowedCount}}</strong></span></article><article class="warning"><Clock3/><span>待处理/拒绝<strong>{{deniedCount}}</strong></span></article></div>
     <div v-if="message" class="compliance-message">{{message}}</div><div v-if="error" class="compliance-error">{{error}}</div>
-    <div class="rule-grid"><article v-for="item in rules" :key="item.id"><header><div><strong>{{item.name}}</strong><span>{{actionLabel(item.action)}} · {{item.type}} · {{item.value}}</span></div><b :data-status="item.status">{{item.status==='approved'?'已审批':'待审批'}}</b></header><p>{{item.description||'无说明'}}</p><dl><div><dt>环境/项目组</dt><dd>{{item.environment||'全部'}} / {{item.projectGroup||'全部'}}</dd></div><div><dt>VLAN</dt><dd>{{item.vlan||'全部'}}</dd></div><div><dt>过期时间</dt><dd>{{item.expiresAt||'长期'}}</dd></div><div><dt>创建人</dt><dd>{{item.createdBy}}</dd></div></dl><footer><button v-if="item.status!=='approved'" :disabled="busy" @click="approve(item)">审批通过</button><button :disabled="busy" @click="remove(item)"><Trash2/>删除</button></footer></article><div v-if="!rules.length" class="compliance-empty">暂无合规规则</div></div>
+    <div class="rule-grid"><article v-for="item in rules" :key="item.id"><header><div><strong>{{item.name}}</strong><span>{{actionLabel(item.action)}} · {{item.type}} · {{item.value}}</span></div><b :data-status="item.status">{{item.status==='approved'?'已审批':'待审批'}}</b></header><p>{{item.description||'无说明'}}</p><dl><div><dt>环境/项目组</dt><dd>{{item.environment||'全部'}} / {{item.projectGroup||'全部'}}</dd></div><div><dt>VLAN</dt><dd>{{item.vlan||'全部'}}</dd></div><div><dt>过期时间</dt><dd>{{item.expiresAt||'长期'}}<template v-if="item.reminderHours"> · 提前 {{item.reminderHours}}h</template></dd></div><div><dt>创建人</dt><dd>{{item.createdBy}}</dd></div></dl><footer><button v-if="item.status!=='approved'" :disabled="busy" @click="approve(item)">审批通过</button><button :disabled="busy" @click="remove(item)"><Trash2/>删除</button></footer></article><div v-if="!rules.length" class="compliance-empty">暂无合规规则</div></div>
     <div class="decision-list"><h4>当前接入决策</h4><div class="decision-head"><span>异常对象</span><span>IP / MAC</span><span>VLAN</span><span>匹配规则</span><span>结果</span></div><div v-for="item in decisions.slice(0,30)" :key="item.id" class="decision-row"><span>{{item.title}}</span><span>{{item.ip||'-'}} / {{item.macAddress||'-'}}</span><span>{{item.vlan||'-'}}</span><span>{{item.ruleName||'未匹配'}}</span><b :data-status="item.status">{{statusLabel(item.status)}}</b></div><div v-if="!decisions.length" class="compliance-empty">暂无未授权接入决策</div></div>
-    <div v-if="showForm" class="compliance-modal" @click.self="showForm=false"><form @submit.prevent="create"><header><div><span>COMPLIANCE BASELINE</span><h3>新增合规规则</h3></div><button type="button" @click="showForm=false"><X/></button></header><div class="form-grid"><label><span>规则名称</span><input v-model="form.name" required></label><label><span>动作</span><select v-model="form.action"><option value="allow">白名单</option><option value="temporary">临时授权</option><option value="deny">拒绝</option></select></label><label><span>匹配类型</span><select v-model="form.type"><option value="mac">MAC</option><option value="ip">IP</option><option value="cidr">CIDR</option><option value="vlan">VLAN</option></select></label><label><span>匹配值</span><input v-model="form.value" placeholder="AA:BB:... / 10.0.0.1 / 10.0.0.0/24 / 100" required></label><label><span>环境</span><input v-model="form.environment"></label><label><span>项目组</span><input v-model="form.projectGroup"></label><label><span>位置/机房</span><input v-model="form.location"></label><label><span>VLAN</span><input v-model="form.vlan"></label><label><span>过期时间</span><input v-model="form.expiresAt" placeholder="2026-12-31 23:59:59"></label><label class="wide"><span>说明</span><input v-model="form.description"></label></div><footer><button type="button" @click="showForm=false">取消</button><button class="primary" type="submit" :disabled="busy">提交审批</button></footer></form></div>
+    <div v-if="showForm" class="compliance-modal" @click.self="showForm=false"><form @submit.prevent="create"><header><div><span>COMPLIANCE BASELINE</span><h3>新增合规规则</h3></div><button type="button" @click="showForm=false"><X/></button></header><div class="form-grid"><label><span>规则名称</span><input v-model="form.name" required></label><label><span>动作</span><select v-model="form.action"><option value="allow">白名单</option><option value="temporary">临时授权</option><option value="deny">拒绝</option></select></label><label><span>匹配类型</span><select v-model="form.type"><option value="mac">MAC</option><option value="ip">IP</option><option value="cidr">CIDR</option><option value="vlan">VLAN</option></select></label><label><span>匹配值</span><input v-model="form.value" placeholder="AA:BB:... / 10.0.0.1 / 10.0.0.0/24 / 100" required></label><label><span>环境</span><input v-model="form.environment"></label><label><span>项目组</span><input v-model="form.projectGroup"></label><label><span>位置/机房</span><input v-model="form.location"></label><label><span>VLAN</span><input v-model="form.vlan"></label><label><span>过期时间</span><input v-model="form.expiresAt" placeholder="2026-12-31 23:59:59"></label><label><span>提前提醒小时</span><input v-model.number="form.reminderHours" type="number" min="1"></label><label class="wide"><span>说明</span><input v-model="form.description"></label></div><footer><button type="button" @click="showForm=false">取消</button><button class="primary" type="submit" :disabled="busy">提交审批</button></footer></form></div>
   </section>
 </template>
 

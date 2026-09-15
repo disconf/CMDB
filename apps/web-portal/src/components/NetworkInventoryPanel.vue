@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import NetworkAutomationPanel from './NetworkAutomationPanel.vue'
 import NetworkTopologyDiffPanel from './NetworkTopologyDiffPanel.vue'
 import NetworkCompliancePanel from './NetworkCompliancePanel.vue'
+import NetworkOnboardingPanel from './NetworkOnboardingPanel.vue'
 import type { NetworkAnomaly, NetworkDeviceInventory, NetworkLink, NetworkLinkHistoryEntry, VLANInventory } from '@/features/cmdb/types'
 
 const auth = useAuthStore()
@@ -185,7 +186,7 @@ onMounted(load)
         <div v-if="!anomalies.length" class="network-empty">当前没有检测到网络异常</div>
       </div>
     </section>
-    <NetworkAutomationPanel />`r`n    <NetworkTopologyDiffPanel />`r`n    <NetworkCompliancePanel />
+    <NetworkAutomationPanel />`r`n    <NetworkTopologyDiffPanel />`r`n    <NetworkCompliancePanel />`r`n    <NetworkOnboardingPanel />
   </section>
 </template>
 

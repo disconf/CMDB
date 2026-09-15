@@ -116,6 +116,79 @@ func registerNetworkAutomationRoutes(mux *http.ServeMux, authService *auth.Servi
 		}
 		writeJSON(w, http.StatusOK, diff)
 	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-compliance-rules/maintenance", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, service.RunComplianceMaintenance())
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-onboarding-requests", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, service.OnboardingRequests())
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-onboarding-requests", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input networkautomation.OnboardingInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.CreateOnboardingRequest(input, user.Username)
+		if errors.Is(err, networkautomation.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "入网申请参数无效"})
+			return
+		}
+		if errors.Is(err, networkautomation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANOMALY_NOT_FOUND", "message": "未授权接入异常不存在"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ONBOARDING_CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-onboarding-requests/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.ApproveOnboardingRequest(r.PathValue("id"), user.Username)
+		if errors.Is(err, networkautomation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ONBOARDING_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ONBOARDING_APPROVE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-onboarding-requests/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			Note string `json:"note"`
+		}
+		_ = decodeJSON(r, &input)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.RejectOnboardingRequest(r.PathValue("id"), user.Username, input.Note)
+		if errors.Is(err, networkautomation.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ONBOARDING_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ONBOARDING_REJECT_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("GET /api/v1/cmdb/network-compliance-rules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return

@@ -139,6 +139,14 @@ func auditAction(method, path string) string {
 		return "cmdb.network_compliance_rule.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/network-compliance-rules/evaluate":
 		return "cmdb.network_compliance.evaluate"
+	case method == http.MethodPost && path == "/api/v1/cmdb/network-compliance-rules/maintenance":
+		return "cmdb.network_compliance.maintenance"
+	case method == http.MethodPost && path == "/api/v1/cmdb/network-onboarding-requests":
+		return "cmdb.network_onboarding.create"
+	case method == http.MethodPost && strings.HasSuffix(path, "/approve") && strings.HasPrefix(path, "/api/v1/cmdb/network-onboarding-requests/"):
+		return "cmdb.network_onboarding.approve"
+	case method == http.MethodPost && strings.HasSuffix(path, "/reject") && strings.HasPrefix(path, "/api/v1/cmdb/network-onboarding-requests/"):
+		return "cmdb.network_onboarding.reject"
 	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-links/"):
 		return "cmdb.network_link.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/models":
