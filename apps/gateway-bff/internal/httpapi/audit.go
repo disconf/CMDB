@@ -147,6 +147,14 @@ func auditAction(method, path string) string {
 		return "cmdb.network_onboarding.approve"
 	case method == http.MethodPost && strings.HasSuffix(path, "/reject") && strings.HasPrefix(path, "/api/v1/cmdb/network-onboarding-requests/"):
 		return "cmdb.network_onboarding.reject"
+	case method == http.MethodPost && strings.HasSuffix(path, "/assign") && strings.HasPrefix(path, "/api/v1/cmdb/asset-governance/assets/"):
+		return "cmdb.asset_governance.assign"
+	case method == http.MethodPost && strings.HasSuffix(path, "/confirm") && strings.HasPrefix(path, "/api/v1/cmdb/asset-governance/assets/"):
+		return "cmdb.asset_governance.confirm"
+	case method == http.MethodPost && strings.HasSuffix(path, "/retire") && strings.HasPrefix(path, "/api/v1/cmdb/asset-governance/assets/"):
+		return "cmdb.asset_governance.retire"
+	case method == http.MethodPost && path == "/api/v1/cmdb/asset-governance/evaluate":
+		return "cmdb.asset_governance.evaluate"
 	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-links/"):
 		return "cmdb.network_link.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/models":
@@ -237,7 +245,7 @@ func auditTarget(path string) string {
 	last := parts[len(parts)-1]
 	verbs := map[string]bool{
 		"toggle": true, "run": true, "reconcile": true, "approve": true,
-		"reject": true, "retry": true, "cancel": true, "rollback": true,
+		"reject": true, "retry": true, "cancel": true, "rollback": true, "assign": true, "confirm": true, "retire": true,
 		"execute": true, "permissions": true,
 	}
 	if verbs[last] && len(parts) >= 2 {

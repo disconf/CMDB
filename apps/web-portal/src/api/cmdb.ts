@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -73,3 +73,9 @@ export const fetchOnboardingRequests=(token:string)=>get<OnboardingRequest[]>('/
 export const createOnboardingRequest=(token:string,input:Partial<OnboardingRequest>)=>send<OnboardingRequest>('/api/v1/cmdb/network-onboarding-requests',token,'POST',input)
 export const approveOnboardingRequest=(token:string,id:string)=>send<OnboardingRequest>(`/api/v1/cmdb/network-onboarding-requests/${encodeURIComponent(id)}/approve`,token,'POST',{})
 export const rejectOnboardingRequest=(token:string,id:string,note='')=>send<OnboardingRequest>(`/api/v1/cmdb/network-onboarding-requests/${encodeURIComponent(id)}/reject`,token,'POST',{note})
+
+export const fetchAssetGovernanceIssues=(token:string)=>get<AssetGovernanceIssue[]>('/api/v1/cmdb/asset-governance/issues',token)
+export const evaluateAssetGovernance=(token:string)=>send<AssetGovernanceReport>('/api/v1/cmdb/asset-governance/evaluate',token,'POST',{})
+export const assignAssetGovernance=(token:string,assetId:string,input:{owner:string;projectGroup:string;location:string;note:string})=>send<Asset>(`/api/v1/cmdb/asset-governance/assets/${encodeURIComponent(assetId)}/assign`,token,'POST',input)
+export const confirmAssetGovernance=(token:string,assetId:string,note='')=>send<AssetGovernanceReview>(`/api/v1/cmdb/asset-governance/assets/${encodeURIComponent(assetId)}/confirm`,token,'POST',{note})
+export const retireAssetGovernance=(token:string,assetId:string,note='')=>send<AssetGovernanceReview>(`/api/v1/cmdb/asset-governance/assets/${encodeURIComponent(assetId)}/retire`,token,'POST',{note})

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import {computed,onMounted,reactive,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
-import {Activity,Boxes,ChevronLeft,ChevronRight,Database,Download,ExternalLink,Filter,LayoutDashboard,Network,Plus,RefreshCw,Search,Server,Settings,Tag,Waypoints,X,History,Pencil} from 'lucide-vue-next'
+import {Activity,Boxes,ChevronLeft,ChevronRight,Database,Download,ExternalLink,Filter,LayoutDashboard,Network,Plus,RefreshCw,Search,Server,Settings,ShieldCheck,Tag,Waypoints,X,History,Pencil} from 'lucide-vue-next'
 import {useCmdbStore} from '@/stores/useCmdbStore'
 import {statusLabel} from '@/features/cmdb/cmdbModel'
 import AssetEditor from './AssetEditor.vue'
 import AssetImport from './AssetImport.vue'
+import AssetGovernancePanel from './AssetGovernancePanel.vue'
 import ModelManager from './ModelManager.vue'
 import IdcManager from './IdcManager.vue'
 import CollectedAttributes from './CollectedAttributes.vue'
@@ -25,7 +26,7 @@ const router=useRouter()
 const filters=reactive({search:'',type:'',status:'',projectGroup:'',page:1,pageSize:20})
 const editorMode=ref<'create'|'edit'|''>('')
 const view=ref<'assets'|'k8s'>('assets')
-const section=ref<'overview'|'assets'|'k8s'|'middleware'|'database'|'network'|'servers'|'rancher'|'relations'|'monitor'|'config'>('overview')
+const section=ref<'overview'|'assets'|'k8s'|'middleware'|'database'|'network'|'governance'|'servers'|'rancher'|'relations'|'monitor'|'config'>('overview')
 const regularModels=computed(()=>store.models.filter(model=>!['physical-server','virtual-machine','k8s-node','k8s-cluster','k8s-namespace','k8s-workload','k8s-pod','k8s-service','k8s-ingress','k8s-pvc','k8s-pv','k8s-storageclass'].includes(model.code)))
 const editorSaving=ref(false)
 const editorError=ref('')
@@ -51,7 +52,7 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
   <section class="cmdb-page">
     <header class="cmdb-heading"><div><span>CONFIGURATION MANAGEMENT DATABASE</span><h1>CMDB 资产中心</h1><p>统一管理资产模型、生命周期、归属关系与数据来源</p></div><div><button @click="openAnalytics">数据报表</button>
           <button @click="openIdc">机房管理</button><button @click="showModels=true"><Boxes/>模型管理</button><button @click="showImport=true"><Download/>批量导入</button><button class="primary" @click="editorMode='create';editorError=''"><Plus/>新增资产</button></div></header>
-    <nav class="cmdb-domain-nav"><button :class="{active:section==='overview'}" @click="openSection('overview')"><LayoutDashboard/>资产总览</button><button :class="{active:section==='k8s'}" @click="openSection('k8s')"><Boxes/>K8s 集群</button><button :class="{active:section==='middleware'}" @click="openSection('middleware')"><Activity/>中间件</button><button :class="{active:section==='database'}" @click="openSection('database')"><Database/>数据库</button><button :class="{active:section==='network'}" @click="openSection('network')"><Network/>网络设备</button><button :class="{active:section==='relations'}" @click="openSection('relations')"><Waypoints/>关系拓扑</button><button :class="{active:section==='monitor'}" @click="openSection('monitor')"><Activity/>监控目标</button><button :class="{active:section==='rancher'}" @click="openSection('rancher')"><Boxes/>Rancher</button><button :class="{active:section==='config'}" @click="openSection('config')"><Settings/>系统配置</button></nav>
+    <nav class="cmdb-domain-nav"><button :class="{active:section==='overview'}" @click="openSection('overview')"><LayoutDashboard/>资产总览</button><button :class="{active:section==='k8s'}" @click="openSection('k8s')"><Boxes/>K8s 集群</button><button :class="{active:section==='middleware'}" @click="openSection('middleware')"><Activity/>中间件</button><button :class="{active:section==='database'}" @click="openSection('database')"><Database/>数据库</button><button :class="{active:section==='network'}" @click="openSection('network')"><Network/>网络设备</button><button :class="{active:section==='governance'}" @click="openSection('governance')"><ShieldCheck/>责任治理</button><button :class="{active:section==='relations'}" @click="openSection('relations')"><Waypoints/>关系拓扑</button><button :class="{active:section==='monitor'}" @click="openSection('monitor')"><Activity/>监控目标</button><button :class="{active:section==='rancher'}" @click="openSection('rancher')"><Boxes/>Rancher</button><button :class="{active:section==='config'}" @click="openSection('config')"><Settings/>系统配置</button></nav>
     <CmdbOverviewPanel v-if="section==='overview'" :summary="store.summary" :models="store.models" :assets="store.assets" :loading="store.isLoading" @navigate="openSection" @add="editorMode='create';editorError=''"/>
     <MonitorTargetsPanel v-if="section==='monitor'"/>
     <RancherPanel v-if="section==='rancher'"/>
@@ -61,6 +62,7 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
       <article><Database/><div><span>资产总数</span><strong>{{store.summary.total}}</strong></div></article><article><i class="online"></i><div><span>在线资产</span><strong>{{store.summary.online}}</strong></div></article><article><i class="warning"></i><div><span>异常资产</span><strong>{{store.summary.warning}}</strong></div></article><article><i class="offline"></i><div><span>离线资产</span><strong>{{store.summary.offline}}</strong></div></article><article><Boxes/><div><span>CI 模型</span><strong>{{store.summary.models}}</strong></div></article><article><Tag/><div><span>项目组</span><strong>{{store.summary.projectGroups}}</strong></div></article>
     </div>
     <NetworkInventoryPanel v-if="section==='network'" />
+    <AssetGovernancePanel v-if="section==='governance'" @select="store.select" @changed="store.search({...filters})" />
     <div v-if="['assets','middleware','database','k8s'].includes(section)" class="cmdb-workspace">
       <aside class="model-tree"><header><strong>CI 模型</strong><span>{{store.models.length}}</span></header><button :class="{active:view==='assets'&&!filters.type}" @click="chooseType('')"><Boxes/><span>全部资产</span><b>{{store.summary?.total}}</b></button><button :class="{active:view==='assets'&&filters.type==='server'}" @click="chooseServers"><Server/><span>服务器</span></button><button :class="{active:view==='k8s'}" @click="chooseK8s"><Boxes/><span>K8s 集群</span></button><button v-for="model in regularModels" :key="model.code" :class="{active:view==='assets'&&filters.type===model.code}" @click="chooseType(model.code)"><Server/><span>{{model.name}}</span><b>{{model.count}}</b></button></aside>
       <main class="asset-register"><K8sAssetBrowser v-if="view==='k8s'" @select="store.select"/><template v-else>
