@@ -34,7 +34,7 @@ func TestLiveSNMPInventory(t *testing.T) {
 	for _, port := range ports {
 		macCount += len(port.MACAddresses)
 	}
-	t.Logf("host=%s attributes=%d ports=%d learnedMacs=%d", host.Name, len(host.Attributes), len(ports), macCount)
+	t.Logf("host=%s os=%q vendor=%s attributes=%d ports=%d learnedMacs=%d", host.Name, host.OS, snapshotAttribute(host.Attributes, "vendor"), len(host.Attributes), len(ports), macCount)
 	if len(ports) == 0 {
 		t.Fatalf("SNMP target responded but network_ports attribute was empty")
 	}
@@ -47,4 +47,13 @@ func TestLiveSNMPInventory(t *testing.T) {
 			t.Logf("oid=%s rows=%d", oid, count)
 		}
 	}
+}
+
+func snapshotAttribute(attributes []cmdb.Attribute, name string) string {
+	for _, attribute := range attributes {
+		if attribute.Name == name {
+			return attribute.Value
+		}
+	}
+	return ""
 }

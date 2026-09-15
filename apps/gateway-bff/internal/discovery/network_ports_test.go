@@ -18,3 +18,24 @@ func TestParseFDBIndex(t *testing.T) {
 		t.Fatal("broadcast MAC must be ignored")
 	}
 }
+
+func TestVendorFDBProfiles(t *testing.T) {
+	huawei := vendorFDBProfiles("Huawei")
+	if len(huawei) != 2 || huawei[0].OID != oidHuaweiDynFdbPort || huawei[0].Style != fdbStyleMACFirst {
+		t.Fatalf("unexpected Huawei profiles: %#v", huawei)
+	}
+	h3c := vendorFDBProfiles("H3C")
+	if len(h3c) != 1 || h3c[0].OID != oidH3CFdbSearchPort {
+		t.Fatalf("unexpected H3C profiles: %#v", h3c)
+	}
+	if profiles := vendorFDBProfiles("Cisco"); len(profiles) != 0 {
+		t.Fatalf("Cisco should use standard bridge MIB: %#v", profiles)
+	}
+}
+
+func TestParseFDBIndexMACFirst(t *testing.T) {
+	mac, vlan, ok := parseFDBIndexWithStyle("0.17.34.51.68.85.100.7.86.83.73.110.97.109.101", fdbStyleMACFirst)
+	if !ok || mac != "00:11:22:33:44:55" || vlan != "100" {
+		t.Fatalf("unexpected mac-first index: %q %q %t", mac, vlan, ok)
+	}
+}

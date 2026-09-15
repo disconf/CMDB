@@ -25,9 +25,36 @@ const (
 	oidDot1dPortIfIndex = ".1.3.6.1.2.1.17.1.4.1.2"
 	oidDot1dTpFdbPort   = ".1.3.6.1.2.1.17.4.3.1.2"
 	oidDot1qTpFdbPort   = ".1.3.6.1.2.1.17.7.1.2.2.1.2"
+	oidHuaweiDynFdbPort = ".1.3.6.1.4.1.2011.5.25.42.2.1.3.1.4"
+	oidHuaweiCfgFdbPort = ".1.3.6.1.4.1.2011.5.25.42.2.1.2.1.4"
+	oidH3CFdbSearchPort = ".1.3.6.1.4.1.25506.8.35.3.1.1.3"
 )
 
-func collectNetworkPorts(g *gosnmp.GoSNMP, neighbors []LLDPNeighbor, limit int) []cmdb.NetworkPort {
+const (
+	fdbStyleMACLast  = "mac-last"
+	fdbStyleMACFirst = "mac-first"
+)
+
+type networkFDBProfile struct {
+	Name  string
+	OID   string
+	Style string
+}
+
+func vendorFDBProfiles(vendor string) []networkFDBProfile {
+	switch strings.ToLower(strings.TrimSpace(vendor)) {
+	case "huawei":
+		return []networkFDBProfile{
+			{Name: "huawei-dynamic", OID: oidHuaweiDynFdbPort, Style: fdbStyleMACFirst},
+			{Name: "huawei-static", OID: oidHuaweiCfgFdbPort, Style: fdbStyleMACFirst},
+		}
+	case "h3c":
+		return []networkFDBProfile{{Name: "h3c-mac-search", OID: oidH3CFdbSearchPort, Style: fdbStyleMACFirst}}
+	default:
+		return nil
+	}
+}
+func collectNetworkPorts(g *gosnmp.GoSNMP, neighbors []LLDPNeighbor, limit int, vendor string) []cmdb.NetworkPort {
 	rows := map[string]*cmdb.NetworkPort{}
 	get := func(index string) *cmdb.NetworkPort {
 		row := rows[index]
@@ -154,7 +181,7 @@ func operStatus(value string) string {
 	}
 }
 
-func collectFDBMACs(g *gosnmp.GoSNMP, rows map[string]*cmdb.NetworkPort, limit int) {
+func collectFDBMACs(g *gosnmp.GoSNMP, rows map[string]*cmdb.NetworkPort, limit int, vendor string) {
 	if limit < 128 {
 		limit = 128
 	}
@@ -197,6 +224,15 @@ func collectFDBMACs(g *gosnmp.GoSNMP, rows map[string]*cmdb.NetworkPort, limit i
 		}
 		add(ifIndex, mac, vlan)
 	})
+	for _, profile := range vendorFDBProfiles(vendor) {
+		walkFDB(g, profile.OID, limit, func(suffix, ifIndex string) {
+			mac, vlan, ok := parseFDBIndexWithStyle(suffix, profile.Style)
+			if !ok || ifIndex == "0" {
+				return
+			}
+			add(ifIndex, mac, vlan)
+		})
+	}
 	walkFDB(g, oidDot1qTpFdbPort, limit, func(suffix, bridgePort string) {
 		mac, vlan, ok := parseFDBIndex(suffix)
 		if !ok {
@@ -230,12 +266,22 @@ func walkFDB(g *gosnmp.GoSNMP, base string, limit int, apply func(suffix, value 
 }
 
 func parseFDBIndex(suffix string) (string, string, bool) {
+	return parseFDBIndexWithStyle(suffix, fdbStyleMACLast)
+}
+
+func parseFDBIndexWithStyle(suffix, style string) (string, string, bool) {
 	parts := strings.Split(strings.Trim(suffix, "."), ".")
 	if len(parts) < 6 {
 		return "", "", false
 	}
+	start := len(parts) - 6
+	vlanIndex := start - 1
+	if style == fdbStyleMACFirst {
+		start = 0
+		vlanIndex = 6
+	}
 	octets := make([]byte, 0, 6)
-	for _, part := range parts[len(parts)-6:] {
+	for _, part := range parts[start : start+6] {
 		value, err := strconv.Atoi(part)
 		if err != nil || value < 0 || value > 255 {
 			return "", "", false
@@ -247,8 +293,8 @@ func parseFDBIndex(suffix string) (string, string, bool) {
 	}
 	mac := fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", octets[0], octets[1], octets[2], octets[3], octets[4], octets[5])
 	vlan := ""
-	if len(parts) > 6 {
-		vlan = parts[len(parts)-7]
+	if vlanIndex >= 0 && vlanIndex < len(parts) {
+		vlan = parts[vlanIndex]
 	}
 	return mac, vlan, true
 }

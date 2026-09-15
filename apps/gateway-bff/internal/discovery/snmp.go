@@ -159,7 +159,7 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 		return nil
 	})
 	neighbors := collectLLDP(g, 500)
-	networkPorts := collectNetworkPorts(g, neighbors, 500)
+	networkPorts := collectNetworkPorts(g, neighbors, 500, vendor)
 	if hwDescr != "" && vendor == "" {
 		vendor = vendorFromDescr(hwDescr)
 	}
@@ -203,6 +203,24 @@ func probeSNMP(ip string, port int, community string, timeout time.Duration) *No
 				cmdb.Attribute{Name: "network_ports", Label: "网络端口清单", Value: string(payload)},
 				cmdb.Attribute{Name: "network_discovery_at", Label: "网络清单采集时间", Value: time.Now().Format("2006-01-02 15:04:05")},
 			)
+		}
+		macCount := 0
+		for _, port := range networkPorts {
+			macCount += len(port.MACAddresses)
+		}
+		if macCount > 0 {
+			source := "bridge-mib"
+			switch strings.ToLower(vendor) {
+			case "huawei":
+				source = "huawei-l2mam"
+			case "h3c":
+				source = "h3c-lswmam"
+			case "ruijie":
+				source = "ruijie-qbridge"
+			case "cisco":
+				source = "cisco-bridge-mib"
+			}
+			host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "network_fdb_source", Label: "MAC表采集来源", Value: source})
 		}
 	}
 	host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "snmp_discovered", Label: "SNMP发现", Value: "true"})

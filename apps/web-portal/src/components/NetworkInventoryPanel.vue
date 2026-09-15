@@ -32,7 +32,10 @@ const totalUpPorts = computed(() => devices.value.reduce((sum, device) => sum + 
 const confirmedLinks = computed(() => links.value.filter(link => link.verification === 'confirmed' || link.verification === 'lldp-confirmed').length)
 const conflictLinks = computed(() => links.value.filter(link => link.verification === 'conflict').length)
 
-function statusLabel(value: string) {
+function fdbSource() {
+  const item = selected.value?.asset.attributes.find(attribute => attribute.name === 'network_fdb_source')
+  return item?.value || '未采集'
+}function statusLabel(value: string) {
   return ({ up: '在线', down: '离线', testing: '测试', dormant: '休眠', unknown: '未知', 'not-present': '未安装', 'lower-layer-down': '下层故障' } as Record<string,string>)[value] || value || '未知'
 }
 function tone(value: string) {
@@ -94,7 +97,7 @@ onMounted(load)
         <div v-if="!filteredDevices.length" class="network-empty">暂无匹配的网络设备</div>
       </aside>
       <main v-if="selected" class="port-workspace">
-        <header><div><span>{{ selected.asset.typeName }}</span><h3>{{ selected.asset.name }}</h3><small>{{ selected.asset.ip }} · {{ selected.asset.location || '位置待维护' }} · {{ selected.asset.source }}</small></div><div class="port-summary"><b>{{ selected.totalPorts }}</b><span>端口</span><b>{{ selected.upPorts }}</b><span>在线</span></div></header>
+        <header><div><span>{{ selected.asset.typeName }}</span><h3>{{ selected.asset.name }}</h3><small>{{ selected.asset.ip }} · {{ selected.asset.location || '位置待维护' }} · {{ selected.asset.source }} · MAC 表 {{ fdbSource() }}</small></div><div class="port-summary"><b>{{ selected.totalPorts }}</b><span>端口</span><b>{{ selected.upPorts }}</b><span>在线</span></div></header>
         <div class="port-table">
           <div class="port-row port-head"><span>端口</span><span>状态</span><span>速率</span><span>VLAN</span><span>MAC 地址</span><span>对端设备 / 端口</span><span>最近采集</span></div>
           <div v-for="port in ports" :key="port.id" class="port-row">
