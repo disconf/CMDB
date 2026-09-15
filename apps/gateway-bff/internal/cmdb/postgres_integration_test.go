@@ -13,11 +13,11 @@ func TestPostgresPersistsAssetAndHistory(t *testing.T) {
 		t.Skip("CMDB_INTEGRATION_DATABASE_URL is not configured")
 	}
 	seed := NewService()
-	db, assets, history, err := openPostgres(databaseURL, seed.assets)
+	db, assets, history, snapshots, err := openPostgres(databaseURL, seed.assets)
 	if err != nil {
 		t.Fatalf("open postgres repository: %v", err)
 	}
-	service := &Service{db: db, assets: assets, models: seed.models, history: history}
+	service := &Service{db: db, assets: assets, models: seed.models, history: history, snapshots: snapshots}
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(context.Background(), "DELETE FROM event_outbox WHERE event_key=$1", "integration-persistence-check")
 		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_assets WHERE id=$1", "integration-persistence-check")
@@ -36,6 +36,17 @@ func TestPostgresPersistsAssetAndHistory(t *testing.T) {
 	}
 	if created.ID == "" {
 		t.Fatal("created asset has no ID")
+	}
+	snapshot, err := service.SaveTopologySnapshot(TopologySnapshotInput{Kind: "physical", Environment: "集成测试", NodeCount: 1, EdgeCount: 1, Payload: []byte(`{"nodes":[],"edges":[]}`), Operator: "integration-test"})
+	if err != nil {
+		t.Fatalf("save persisted topology snapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_topology_snapshots WHERE id=$1", snapshot.ID)
+	})
+	loadedSnapshot, err := service.TopologySnapshot(snapshot.ID)
+	if err != nil || loadedSnapshot.ID != snapshot.ID || len(loadedSnapshot.Payload) == 0 {
+		t.Fatalf("load persisted topology snapshot: %#v %v", loadedSnapshot, err)
 	}
 	var assetCount, historyCount, outboxCount, statusOutboxCount int
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

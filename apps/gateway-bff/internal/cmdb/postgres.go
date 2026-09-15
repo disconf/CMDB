@@ -64,6 +64,18 @@ CREATE INDEX IF NOT EXISTS idx_event_outbox_topic_time
   ON event_outbox(topic, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_outbox_published_time
   ON event_outbox(published_at DESC) WHERE published_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS cmdb_topology_snapshots (
+  id text PRIMARY KEY,
+  kind text NOT NULL,
+  environment text NOT NULL DEFAULT '',
+  node_count integer NOT NULL DEFAULT 0,
+  edge_count integer NOT NULL DEFAULT 0,
+  payload jsonb NOT NULL,
+  operator text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cmdb_topology_snapshots_kind_time
+  ON cmdb_topology_snapshots(kind, environment, created_at DESC);
 `
 
 func loadModels(ctx context.Context, db *sql.DB) ([]Model, error) {
@@ -93,55 +105,60 @@ func upsertModel(ctx context.Context, db execer, m Model) error {
 	return err
 }
 
-func openPostgres(databaseURL string, seed []Asset) (*sql.DB, []Asset, map[string][]HistoryEntry, error) {
+func openPostgres(databaseURL string, seed []Asset) (*sql.DB, []Asset, map[string][]HistoryEntry, []TopologySnapshot, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, nil, nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	if _, err = db.ExecContext(ctx, schema); err != nil {
 		db.Close()
-		return nil, nil, nil, fmt.Errorf("migrate cmdb schema: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("migrate cmdb schema: %w", err)
 	}
 	var count int
 	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM cmdb_assets").Scan(&count); err != nil {
 		db.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if count == 0 {
 		tx, txErr := db.BeginTx(ctx, nil)
 		if txErr != nil {
 			db.Close()
-			return nil, nil, nil, txErr
+			return nil, nil, nil, nil, txErr
 		}
 		for _, item := range seed {
 			if txErr = insertAsset(ctx, tx, item); txErr != nil {
 				_ = tx.Rollback()
 				db.Close()
-				return nil, nil, nil, fmt.Errorf("seed cmdb asset %s: %w", item.ID, txErr)
+				return nil, nil, nil, nil, fmt.Errorf("seed cmdb asset %s: %w", item.ID, txErr)
 			}
 		}
 		if txErr = tx.Commit(); txErr != nil {
 			db.Close()
-			return nil, nil, nil, txErr
+			return nil, nil, nil, nil, txErr
 		}
 	}
 	assets, err := loadAssets(ctx, db)
 	if err != nil {
 		db.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	history, err := loadHistory(ctx, db)
 	if err != nil {
 		db.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return db, assets, history, nil
+	snapshots, err := loadTopologySnapshots(ctx, db)
+	if err != nil {
+		db.Close()
+		return nil, nil, nil, nil, err
+	}
+	return db, assets, history, snapshots, nil
 }
 
 type execer interface {
@@ -282,6 +299,28 @@ func loadHistory(ctx context.Context, db *sql.DB) (map[string][]HistoryEntry, er
 		h.OccurredAt = occurred.Local().Format("2006-01-02 15:04:05")
 		_ = json.Unmarshal(changes, &h.Changes)
 		result[h.AssetID] = append(result[h.AssetID], h)
+	}
+	return result, rows.Err()
+}
+
+func loadTopologySnapshots(ctx context.Context, db *sql.DB) ([]TopologySnapshot, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id,kind,environment,node_count,edge_count,payload,operator,created_at
+		FROM cmdb_topology_snapshots ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]TopologySnapshot, 0)
+	for rows.Next() {
+		var item TopologySnapshot
+		var payload []byte
+		var created time.Time
+		if err = rows.Scan(&item.ID, &item.Kind, &item.Environment, &item.NodeCount, &item.EdgeCount, &payload, &item.Operator, &created); err != nil {
+			return nil, err
+		}
+		item.Payload = append(json.RawMessage(nil), payload...)
+		item.CreatedAt = created.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
 	}
 	return result, rows.Err()
 }

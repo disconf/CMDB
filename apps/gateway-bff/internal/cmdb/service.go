@@ -32,11 +32,12 @@ var ErrSlotTaken = errors.New("机柜U位已被占用")
 var ErrConflict = errors.New("asset already exists")
 
 type Service struct {
-	mu      sync.RWMutex
-	assets  []Asset
-	models  []Model
-	history map[string][]HistoryEntry
-	db      *sql.DB
+	mu        sync.RWMutex
+	assets    []Asset
+	models    []Model
+	history   map[string][]HistoryEntry
+	snapshots []TopologySnapshot
+	db        *sql.DB
 }
 
 func NewService() *Service {
@@ -59,9 +60,9 @@ func NewService() *Service {
 	}
 	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
-	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry)}
+	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry), snapshots: []TopologySnapshot{}}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
-		db, persistedAssets, persistedHistory, err := openPostgres(databaseURL, assets)
+		db, persistedAssets, persistedHistory, persistedSnapshots, err := openPostgres(databaseURL, assets)
 		if err != nil {
 			panic(fmt.Sprintf("initialize PostgreSQL CMDB repository: %v", err))
 		}
@@ -84,6 +85,7 @@ func NewService() *Service {
 		service.models = withModelCounts(persistedModels, persistedAssets)
 		service.assets = persistedAssets
 		service.history = persistedHistory
+		service.snapshots = persistedSnapshots
 	}
 	return service
 }
@@ -118,11 +120,16 @@ func (s *Service) ReloadFromDatabase(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload CMDB history: %w", err)
 	}
+	snapshots, err := loadTopologySnapshots(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("reload CMDB topology snapshots: %w", err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.assets = assets
 	s.models = withModelCounts(models, assets)
 	s.history = history
+	s.snapshots = snapshots
 	return nil
 }
 
@@ -1526,7 +1533,7 @@ func validateCreate(input CreateAssetInput) error {
 	return nil
 }
 func diffAsset(a, b Asset) []Change {
-	pairs := [][3]string{{"name", a.Name, b.Name}, {"status", a.Status, b.Status}, {"ip", a.IP, b.IP}, {"projectGroup", a.ProjectGroup, b.ProjectGroup}, {"owner", a.Owner, b.Owner}, {"location", a.Location, b.Location}, {"tags", strings.Join(a.Tags, "|"), strings.Join(b.Tags, "|")}}
+	pairs := [][3]string{{"name", a.Name, b.Name}, {"status", a.Status, b.Status}, {"ip", a.IP, b.IP}, {"projectGroup", a.ProjectGroup, b.ProjectGroup}, {"owner", a.Owner, b.Owner}, {"location", a.Location, b.Location}, {"tags", strings.Join(a.Tags, "|"), strings.Join(b.Tags, "|")}, {"物理链路", networkRelationSummary(a.Relations), networkRelationSummary(b.Relations)}}
 	var result []Change
 	for _, p := range pairs {
 		if p[1] != p[2] {
@@ -1535,6 +1542,21 @@ func diffAsset(a, b Asset) []Change {
 	}
 	result = append(result, attributeDiff(a.Attributes, b.Attributes)...)
 	return result
+}
+func networkRelationSummary(relations []Relation) string {
+	items := make([]string, 0)
+	for _, relation := range relations {
+		if relation.Type != "connects-to" {
+			continue
+		}
+		item := firstNonEmpty(relation.TargetName, relation.TargetID)
+		if relation.SourcePort != "" || relation.TargetPort != "" {
+			item += " [" + relation.SourcePort + " -> " + relation.TargetPort + "]"
+		}
+		items = append(items, item)
+	}
+	sort.Strings(items)
+	return strings.Join(items, "; ")
 }
 func cloneAsset(a Asset) Asset {
 	a.Tags = append([]string{}, a.Tags...)

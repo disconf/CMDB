@@ -23,15 +23,18 @@ type PhysicalNode struct {
 }
 
 type PhysicalEdge struct {
-	ID              string `json:"id"`
-	Source          string `json:"source"`
-	Target          string `json:"target"`
-	SourceInterface string `json:"sourceInterface,omitempty"`
-	TargetPort      string `json:"targetPort,omitempty"`
-	Relation        string `json:"relation"`
-	Status          string `json:"status"`
-	SourceType      string `json:"sourceType"`
-	LastSeenAt      string `json:"lastSeenAt,omitempty"`
+	ID              string   `json:"id"`
+	Source          string   `json:"source"`
+	Target          string   `json:"target"`
+	SourceInterface string   `json:"sourceInterface,omitempty"`
+	TargetPort      string   `json:"targetPort,omitempty"`
+	Relation        string   `json:"relation"`
+	Status          string   `json:"status"`
+	SourceType      string   `json:"sourceType"`
+	Verification    string   `json:"verification"`
+	Confidence      int      `json:"confidence"`
+	Evidence        []string `json:"evidence,omitempty"`
+	LastSeenAt      string   `json:"lastSeenAt,omitempty"`
 }
 
 type PhysicalGraph struct {
@@ -134,7 +137,7 @@ func (s *Service) PhysicalGraph(environment string) PhysicalGraph {
 			sourceID, finalTargetID = finalTargetID, sourceID
 			sourceInterface, targetPort = targetPort, sourceInterface
 		}
-		addEdge(PhysicalEdge{ID: link.ID, Source: sourceID, Target: finalTargetID, SourceInterface: sourceInterface, TargetPort: targetPort, Relation: relation, Status: physicalLinkStatus(target.Status), SourceType: link.Source, LastSeenAt: link.LastSeenAt})
+		addEdge(PhysicalEdge{ID: link.ID, Source: sourceID, Target: finalTargetID, SourceInterface: sourceInterface, TargetPort: targetPort, Relation: relation, Status: physicalLinkStatus(target.Status), SourceType: link.Source, Verification: link.Verification, Confidence: link.Confidence, Evidence: append([]string(nil), link.Evidence...), LastSeenAt: link.LastSeenAt})
 	}
 	sort.Slice(graph.Nodes, func(i, j int) bool {
 		if graph.Nodes[i].Kind == graph.Nodes[j].Kind {

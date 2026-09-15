@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cmdb"
@@ -52,6 +53,13 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		}
 		writeJSON(w, http.StatusOK, cmdbService.NetworkLinks())
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-links/history", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		writeJSON(w, http.StatusOK, cmdbService.NetworkLinkHistory(limit))
+	})
 	mux.HandleFunc("POST /api/v1/cmdb/network-links", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return
@@ -73,6 +81,9 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		case err != nil:
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "NETWORK_LINK_CREATE_FAILED", "message": err.Error()})
 		default:
+			if source, readErr := cmdbService.GetAsset(input.SourceAssetID); readErr == nil {
+				_, _ = topologyService.CaptureSnapshot("physical", source.Environment, user.Username)
+			}
 			writeJSON(w, http.StatusCreated, link)
 		}
 	})
@@ -80,7 +91,17 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return
 		}
-		if err := cmdbService.DeleteNetworkLink(r.PathValue("id")); err != nil {
+		linkID := r.PathValue("id")
+		environment := ""
+		for _, link := range cmdbService.NetworkLinks() {
+			if link.ID == linkID {
+				if source, readErr := cmdbService.GetAsset(link.SourceAssetID); readErr == nil {
+					environment = source.Environment
+				}
+				break
+			}
+		}
+		if err := cmdbService.DeleteNetworkLink(linkID); err != nil {
 			if errors.Is(err, cmdb.ErrNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"code": "NETWORK_LINK_NOT_FOUND", "message": "物理链路不存在"})
 				return
@@ -88,6 +109,8 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "NETWORK_LINK_DELETE_FAILED", "message": err.Error()})
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		_, _ = topologyService.CaptureSnapshot("physical", environment, user.Username)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/v1/topology/physical", func(w http.ResponseWriter, r *http.Request) {

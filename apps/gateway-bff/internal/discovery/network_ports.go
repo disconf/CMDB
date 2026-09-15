@@ -13,15 +13,18 @@ import (
 )
 
 const (
-	oidIfDescr       = ".1.3.6.1.2.1.2.2.1.2"
-	oidIfPhysAddress = ".1.3.6.1.2.1.2.2.1.6"
-	oidIfAdminStatus = ".1.3.6.1.2.1.2.2.1.7"
-	oidIfOperStatus  = ".1.3.6.1.2.1.2.2.1.8"
-	oidIfSpeed       = ".1.3.6.1.2.1.2.2.1.5"
-	oidIfHighSpeed   = ".1.3.6.1.2.1.31.1.1.1.15"
-	oidIfName        = ".1.3.6.1.2.1.31.1.1.1.1"
-	oidIfAlias       = ".1.3.6.1.2.1.31.1.1.1.18"
-	oidDot1qPvid     = ".1.3.6.1.2.1.17.7.1.4.5.1.1"
+	oidIfDescr          = ".1.3.6.1.2.1.2.2.1.2"
+	oidIfPhysAddress    = ".1.3.6.1.2.1.2.2.1.6"
+	oidIfAdminStatus    = ".1.3.6.1.2.1.2.2.1.7"
+	oidIfOperStatus     = ".1.3.6.1.2.1.2.2.1.8"
+	oidIfSpeed          = ".1.3.6.1.2.1.2.2.1.5"
+	oidIfHighSpeed      = ".1.3.6.1.2.1.31.1.1.1.15"
+	oidIfName           = ".1.3.6.1.2.1.31.1.1.1.1"
+	oidIfAlias          = ".1.3.6.1.2.1.31.1.1.1.18"
+	oidDot1qPvid        = ".1.3.6.1.2.1.17.7.1.4.5.1.1"
+	oidDot1dPortIfIndex = ".1.3.6.1.2.1.17.1.4.1.2"
+	oidDot1dTpFdbPort   = ".1.3.6.1.2.1.17.4.3.1.2"
+	oidDot1qTpFdbPort   = ".1.3.6.1.2.1.17.7.1.2.2.1.2"
 )
 
 func collectNetworkPorts(g *gosnmp.GoSNMP, neighbors []LLDPNeighbor, limit int) []cmdb.NetworkPort {
@@ -151,6 +154,122 @@ func operStatus(value string) string {
 	}
 }
 
+func collectFDBMACs(g *gosnmp.GoSNMP, rows map[string]*cmdb.NetworkPort, limit int) {
+	if limit < 128 {
+		limit = 128
+	}
+	portIfIndex := map[string]string{}
+	walkNetworkColumn(g, oidDot1dPortIfIndex, limit, func(index, value string) {
+		portIfIndex[index] = value
+	})
+	byInterface := map[string]map[string]bool{}
+	add := func(ifIndex, mac, vlan string) {
+		if ifIndex == "" || mac == "" {
+			return
+		}
+		port := rows[ifIndex]
+		if port == nil {
+			return
+		}
+		if byInterface[ifIndex] == nil {
+			byInterface[ifIndex] = map[string]bool{}
+		}
+		if byInterface[ifIndex][mac] {
+			return
+		}
+		byInterface[ifIndex][mac] = true
+		if len(port.MACAddresses) >= 128 {
+			return
+		}
+		port.MACAddresses = append(port.MACAddresses, mac)
+		if port.VLAN == "" && vlan != "" {
+			port.VLAN = vlan
+		}
+	}
+	walkFDB(g, oidDot1dTpFdbPort, limit, func(suffix, bridgePort string) {
+		mac, vlan, ok := parseFDBIndex(suffix)
+		if !ok {
+			return
+		}
+		ifIndex := portIfIndex[bridgePort]
+		if ifIndex == "" {
+			ifIndex = bridgePort
+		}
+		add(ifIndex, mac, vlan)
+	})
+	walkFDB(g, oidDot1qTpFdbPort, limit, func(suffix, bridgePort string) {
+		mac, vlan, ok := parseFDBIndex(suffix)
+		if !ok {
+			return
+		}
+		ifIndex := portIfIndex[bridgePort]
+		if ifIndex == "" {
+			ifIndex = bridgePort
+		}
+		add(ifIndex, mac, vlan)
+	})
+	for _, port := range rows {
+		sort.Strings(port.MACAddresses)
+	}
+}
+
+func walkFDB(g *gosnmp.GoSNMP, base string, limit int, apply func(suffix, value string)) {
+	count := 0
+	_ = g.BulkWalk(base, func(pdu gosnmp.SnmpPDU) error {
+		count++
+		if count > limit {
+			return fmt.Errorf("fdb limit reached")
+		}
+		suffix := oidSuffix(pdu.Name, base)
+		if suffix == "" {
+			return nil
+		}
+		apply(suffix, stringify(pdu))
+		return nil
+	})
+}
+
+func parseFDBIndex(suffix string) (string, string, bool) {
+	parts := strings.Split(strings.Trim(suffix, "."), ".")
+	if len(parts) < 6 {
+		return "", "", false
+	}
+	octets := make([]byte, 0, 6)
+	for _, part := range parts[len(parts)-6:] {
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 || value > 255 {
+			return "", "", false
+		}
+		octets = append(octets, byte(value))
+	}
+	if octets[0]&1 == 1 || isBroadcastMAC(octets) || isZeroMAC(octets) {
+		return "", "", false
+	}
+	mac := fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", octets[0], octets[1], octets[2], octets[3], octets[4], octets[5])
+	vlan := ""
+	if len(parts) > 6 {
+		vlan = parts[len(parts)-7]
+	}
+	return mac, vlan, true
+}
+
+func isBroadcastMAC(value []byte) bool {
+	for _, item := range value {
+		if item != 0xFF {
+			return false
+		}
+	}
+	return true
+}
+
+func isZeroMAC(value []byte) bool {
+	for _, item := range value {
+		if item != 0 {
+			return false
+		}
+	}
+	return true
+}
 func normalizeMAC(value string) string {
 	if value == "" {
 		return ""

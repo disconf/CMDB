@@ -41,3 +41,23 @@ func TestPhysicalGraphNormalizesLLDPToHostSide(t *testing.T) {
 		t.Fatalf("unexpected normalized LLDP edge: %#v", graph.Edges)
 	}
 }
+
+func TestCapturePhysicalSnapshot(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	if _, err := cmdbService.CreateAsset(cmdb.CreateAssetInput{ID: "snapshot-switch", Name: "snapshot-switch", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test"}, "test"); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+	if _, err := cmdbService.CreateAsset(cmdb.CreateAssetInput{ID: "snapshot-host", Name: "snapshot-host", Type: "physical-server", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test"}, "test"); err != nil {
+		t.Fatalf("host: %v", err)
+	}
+	if _, err := cmdbService.CreateNetworkLink(cmdb.CreateNetworkLinkInput{SourceAssetID: "snapshot-host", SourceInterface: "eth0", TargetAssetID: "snapshot-switch", TargetPort: "GE0/0/1"}, "test"); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	snapshot, err := NewServiceWithCMDB(cmdbService).CaptureSnapshot("physical", "test", "tester")
+	if err != nil {
+		t.Fatalf("capture snapshot: %v", err)
+	}
+	if snapshot.NodeCount != 2 || snapshot.EdgeCount != 1 || len(snapshot.Payload) == 0 {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+}

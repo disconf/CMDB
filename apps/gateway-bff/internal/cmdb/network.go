@@ -12,22 +12,23 @@ import (
 
 // NetworkPort is a logical or physical port discovered on a network device.
 type NetworkPort struct {
-	ID              string `json:"id"`
-	AssetID         string `json:"assetId"`
-	AssetName       string `json:"assetName"`
-	IfIndex         string `json:"ifIndex"`
-	Name            string `json:"name"`
-	Description     string `json:"description,omitempty"`
-	Alias           string `json:"alias,omitempty"`
-	AdminStatus     string `json:"adminStatus"`
-	OperStatus      string `json:"operStatus"`
-	SpeedMbps       string `json:"speedMbps,omitempty"`
-	MACAddress      string `json:"macAddress,omitempty"`
-	VLAN            string `json:"vlan,omitempty"`
-	NeighborName    string `json:"neighborName,omitempty"`
-	NeighborPort    string `json:"neighborPort,omitempty"`
-	NeighborChassis string `json:"neighborChassis,omitempty"`
-	LastSeenAt      string `json:"lastSeenAt,omitempty"`
+	ID              string   `json:"id"`
+	AssetID         string   `json:"assetId"`
+	AssetName       string   `json:"assetName"`
+	IfIndex         string   `json:"ifIndex"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description,omitempty"`
+	Alias           string   `json:"alias,omitempty"`
+	AdminStatus     string   `json:"adminStatus"`
+	OperStatus      string   `json:"operStatus"`
+	SpeedMbps       string   `json:"speedMbps,omitempty"`
+	MACAddress      string   `json:"macAddress,omitempty"`
+	MACAddresses    []string `json:"macAddresses,omitempty"`
+	VLAN            string   `json:"vlan,omitempty"`
+	NeighborName    string   `json:"neighborName,omitempty"`
+	NeighborPort    string   `json:"neighborPort,omitempty"`
+	NeighborChassis string   `json:"neighborChassis,omitempty"`
+	LastSeenAt      string   `json:"lastSeenAt,omitempty"`
 }
 
 // NetworkInterface is a host NIC discovered by SSH or node_exporter inventory.
@@ -49,16 +50,20 @@ type NetworkInterface struct {
 
 // NetworkLink is a manually maintained or LLDP-discovered physical connection.
 type NetworkLink struct {
-	ID              string `json:"id"`
-	SourceAssetID   string `json:"sourceAssetId"`
-	SourceAssetName string `json:"sourceAssetName"`
-	SourceInterface string `json:"sourceInterface"`
-	TargetAssetID   string `json:"targetAssetId"`
-	TargetAssetName string `json:"targetAssetName"`
-	TargetPort      string `json:"targetPort"`
-	Status          string `json:"status"`
-	Source          string `json:"source"`
-	LastSeenAt      string `json:"lastSeenAt,omitempty"`
+	ID              string   `json:"id"`
+	SourceAssetID   string   `json:"sourceAssetId"`
+	SourceAssetName string   `json:"sourceAssetName"`
+	SourceInterface string   `json:"sourceInterface"`
+	TargetAssetID   string   `json:"targetAssetId"`
+	TargetAssetName string   `json:"targetAssetName"`
+	TargetPort      string   `json:"targetPort"`
+	Status          string   `json:"status"`
+	Source          string   `json:"source"`
+	Verification    string   `json:"verification"`
+	Confidence      int      `json:"confidence"`
+	Evidence        []string `json:"evidence,omitempty"`
+	LastVerifiedAt  string   `json:"lastVerifiedAt,omitempty"`
+	LastSeenAt      string   `json:"lastSeenAt,omitempty"`
 }
 
 type NetworkDeviceInventory struct {
@@ -234,7 +239,7 @@ func (s *Service) NetworkLinks() []NetworkLink {
 		}
 		return strings.ToLower(links[i].SourceAssetName) < strings.ToLower(links[j].SourceAssetName)
 	})
-	return links
+	return enrichNetworkLinks(links, assets)
 }
 
 func (s *Service) CreateNetworkLink(input CreateNetworkLinkInput, operator string) (NetworkLink, error) {
@@ -460,4 +465,207 @@ func hasNetworkPort(ports []NetworkPort, name string) bool {
 		}
 	}
 	return false
+}
+
+func enrichNetworkLinks(links []NetworkLink, assets []Asset) []NetworkLink {
+	byID := make(map[string]Asset, len(assets))
+	for _, asset := range assets {
+		byID[asset.ID] = asset
+	}
+	manualIndex := make(map[string]int)
+	seenLLDP := make(map[string]bool)
+	result := make([]NetworkLink, 0, len(links))
+	for _, link := range links {
+		if link.Source == "lldp" {
+			continue
+		}
+		key := physicalLinkKey(link)
+		if _, exists := manualIndex[key]; exists {
+			continue
+		}
+		manualIndex[key] = len(result)
+		result = append(result, link)
+	}
+	for _, link := range links {
+		if link.Source != "lldp" {
+			continue
+		}
+		key := physicalLinkKey(link)
+		if index, exists := manualIndex[key]; exists {
+			result[index].Evidence = append(result[index].Evidence, fmt.Sprintf("LLDP 邻居 %s / %s", link.SourceInterface, firstNonEmpty(link.TargetPort, link.TargetAssetName)))
+			continue
+		}
+		if seenLLDP[key] {
+			continue
+		}
+		seenLLDP[key] = true
+		result = append(result, link)
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	for index := range result {
+		if result[index].Source == "lldp" {
+			enrichLLDPLink(&result[index], byID)
+		} else {
+			enrichManualLink(&result[index], byID)
+		}
+		if result[index].LastVerifiedAt == "" {
+			result[index].LastVerifiedAt = now
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].SourceAssetName == result[j].SourceAssetName {
+			return result[i].SourceInterface < result[j].SourceInterface
+		}
+		return strings.ToLower(result[i].SourceAssetName) < strings.ToLower(result[j].SourceAssetName)
+	})
+	return result
+}
+
+func enrichManualLink(link *NetworkLink, byID map[string]Asset) {
+	link.Verification = "unverified"
+	link.Confidence = 55
+	sourceAsset, sourceOK := byID[link.SourceAssetID]
+	targetAsset, targetOK := byID[link.TargetAssetID]
+	if !sourceOK || !targetOK {
+		link.Evidence = append(link.Evidence, "链路端点资产不完整")
+		return
+	}
+	interfaceMAC := ""
+	for _, item := range parseNetworkInterfaces(sourceAsset) {
+		if strings.EqualFold(item.Name, link.SourceInterface) {
+			interfaceMAC = normalizeMACForCompare(item.MACAddress)
+			break
+		}
+	}
+	portMACs := []string{}
+	portFound := false
+	for _, port := range parseNetworkPorts(targetAsset) {
+		if strings.EqualFold(port.Name, link.TargetPort) || strings.EqualFold(port.IfIndex, link.TargetPort) {
+			portFound = true
+			if port.MACAddress != "" {
+				portMACs = append(portMACs, normalizeMACForCompare(port.MACAddress))
+			}
+			for _, mac := range port.MACAddresses {
+				portMACs = append(portMACs, normalizeMACForCompare(mac))
+			}
+			break
+		}
+	}
+	if interfaceMAC == "" {
+		link.Evidence = append(link.Evidence, "服务器网卡 MAC 尚未采集")
+	} else {
+		link.Evidence = append(link.Evidence, "服务器网卡 MAC "+interfaceMAC)
+	}
+	if !portFound {
+		link.Evidence = append(link.Evidence, "交换机端口清单尚未采集")
+		return
+	}
+	if interfaceMAC != "" && containsNormalizedMAC(portMACs, interfaceMAC) {
+		link.Verification = "confirmed"
+		link.Confidence = 100
+		link.Evidence = append(link.Evidence, "交换机端口 MAC 地址表匹配，链路已确认")
+		return
+	}
+	unique := uniqueNormalizedMACs(portMACs)
+	if len(unique) > 0 {
+		link.Verification = "conflict"
+		link.Confidence = 35
+		link.Evidence = append(link.Evidence, fmt.Sprintf("交换机端口学习到 %d 个其他 MAC，需人工复核", len(unique)))
+		return
+	}
+	link.Evidence = append(link.Evidence, "交换机端口暂未学习到 MAC，保留待验证")
+}
+
+func enrichLLDPLink(link *NetworkLink, byID map[string]Asset) {
+	link.Verification = "candidate"
+	link.Confidence = 70
+	link.Evidence = []string{"LLDP 邻居声明"}
+	if _, ok := byID[link.TargetAssetID]; ok {
+		link.Verification = "lldp-confirmed"
+		link.Confidence = 90
+	}
+	detail := strings.TrimSpace(link.TargetAssetName + " / " + link.TargetPort)
+	if detail != "" && detail != "/" {
+		link.Evidence = append(link.Evidence, "对端 "+detail)
+	}
+}
+
+func physicalLinkKey(link NetworkLink) string {
+	left := link.SourceAssetID + "|" + strings.ToLower(strings.TrimSpace(link.SourceInterface))
+	right := link.TargetAssetID + "|" + strings.ToLower(strings.TrimSpace(link.TargetPort))
+	if right < left {
+		left, right = right, left
+	}
+	return left + "::" + right
+}
+
+func normalizeMACForCompare(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	replacer := strings.NewReplacer(":", "", "-", "", ".", "", " ", "")
+	return replacer.Replace(value)
+}
+
+func containsNormalizedMAC(values []string, target string) bool {
+	for _, value := range values {
+		if normalizeMACForCompare(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueNormalizedMACs(values []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = normalizeMACForCompare(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+type NetworkLinkHistoryEntry struct {
+	ID         string   `json:"id"`
+	AssetID    string   `json:"assetId"`
+	AssetName  string   `json:"assetName"`
+	Action     string   `json:"action"`
+	Operator   string   `json:"operator"`
+	OccurredAt string   `json:"occurredAt"`
+	Changes    []Change `json:"changes"`
+}
+
+func (s *Service) NetworkLinkHistory(limit int) []NetworkLinkHistoryEntry {
+	if limit < 1 || limit > 200 {
+		limit = 50
+	}
+	s.mu.RLock()
+	names := make(map[string]string, len(s.assets))
+	for _, asset := range s.assets {
+		names[asset.ID] = asset.Name
+	}
+	entries := make([]NetworkLinkHistoryEntry, 0)
+	for assetID, history := range s.history {
+		for _, entry := range history {
+			linkChanges := make([]Change, 0)
+			for _, change := range entry.Changes {
+				if change.Field == "物理链路" {
+					linkChanges = append(linkChanges, change)
+				}
+			}
+			if len(linkChanges) == 0 {
+				continue
+			}
+			entries = append(entries, NetworkLinkHistoryEntry{ID: entry.ID, AssetID: assetID, AssetName: names[assetID], Action: entry.Action, Operator: entry.Operator, OccurredAt: entry.OccurredAt, Changes: linkChanges})
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].OccurredAt > entries[j].OccurredAt })
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries
 }

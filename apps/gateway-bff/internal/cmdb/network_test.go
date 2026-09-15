@@ -7,7 +7,7 @@ import (
 
 func TestNetworkLinkLifecycle(t *testing.T) {
 	service := NewService()
-	ports, _ := json.Marshal([]NetworkPort{{IfIndex: "1", Name: "GE0/0/1", AdminStatus: "up", OperStatus: "up", SpeedMbps: "1000"}})
+	ports, _ := json.Marshal([]NetworkPort{{IfIndex: "1", Name: "GE0/0/1", AdminStatus: "up", OperStatus: "up", SpeedMbps: "1000", MACAddresses: []string{"00:11:22:33:44:55"}}})
 	if _, err := service.CreateAsset(CreateAssetInput{ID: "net-link-switch", Name: "net-link-switch", Type: "network-device", Status: "online", IP: "10.9.0.1", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []Attribute{{Name: "network_ports", Label: "网络端口清单", Value: string(ports)}}}, "test"); err != nil {
 		t.Fatalf("create switch: %v", err)
 	}
@@ -26,6 +26,9 @@ func TestNetworkLinkLifecycle(t *testing.T) {
 	if len(links) != 1 || links[0].TargetPort != "GE0/0/1" {
 		t.Fatalf("unexpected links: %#v", links)
 	}
+	if links[0].Verification != "confirmed" || links[0].Confidence != 100 {
+		t.Fatalf("expected MAC-verified link: %#v", links[0])
+	}
 	interfacesResult, err := service.NetworkInterfaces("net-link-host")
 	if err != nil || len(interfacesResult) != 1 || interfacesResult[0].Link == nil {
 		t.Fatalf("interface binding missing: %#v %v", interfacesResult, err)
@@ -38,5 +41,8 @@ func TestNetworkLinkLifecycle(t *testing.T) {
 	}
 	if len(service.NetworkLinks()) != 0 {
 		t.Fatalf("expected link removal: %#v", service.NetworkLinks())
+	}
+	if history := service.NetworkLinkHistory(10); len(history) < 2 {
+		t.Fatalf("expected link create/delete history: %#v", history)
 	}
 }
