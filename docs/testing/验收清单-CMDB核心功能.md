@@ -159,5 +159,16 @@
 - [ ] 配置 Exporter 地址和端口后，Prometheus `cmdb-exporter` job 能通过 CMDB HTTP-SD 自动获取目标
 - [ ] Rancher 配置完成后可显示集群列表并一键跳转 Rancher 控制台
 - [ ] 执行 Rancher 集群同步后，K8s 集群资产生成或更新到 CMDB
+## 19. 中间件与数据库自动发现
+- [ ] CMDB 系统配置区显示“中间件与数据库自动发现”面板
+- [ ] 输入 IP/CIDR、SSH 端口和凭据后可发起扫描
+- [ ] 可识别 Kafka、MySQL/MariaDB、PostgreSQL、MongoDB、Redis、Nginx
+- [ ] 自动记录监听端口、进程名、启动用户、数据目录和日志路径
+- [ ] Kafka 可识别 JVM 端口
+- [ ] 常见 `*_exporter` 可识别并写入 Exporter 端口
+- [ ] 中间件资产写入 `middleware` 模型，数据库写入 `database` 模型
+- [ ] 服务资产与宿主机建立 `runs-on` 关系
+- [ ] 开启审批时，扫描结果先进入待审批列表
+- [ ] 重复扫描不会重复生成相同服务资产
 ## 备注
 - 各项验收如有失败，记录：步骤/期望/实际/控制台报错。

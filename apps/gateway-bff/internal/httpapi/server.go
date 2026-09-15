@@ -730,6 +730,22 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, result)
 	})
+	mux.HandleFunc("POST /api/v1/discovery/scan-services", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var in discovery.ServiceScanInput
+		if err := decodeJSON(r, &in); err != nil || len(in.CIDRs) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_SCAN_INPUT"})
+			return
+		}
+		result, err := discoveryService.ScanServices(r.Context(), in)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "SCAN_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/scan-node-exporter", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return

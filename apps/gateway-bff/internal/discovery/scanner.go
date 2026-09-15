@@ -56,6 +56,13 @@ type NodeExporterScanResult struct {
 var labelPattern = regexp.MustCompile(`([a-zA-Z0-9_]+)="([^"]*)"`)
 
 func expandCIDR(cidr string) ([]string, error) {
+	cidr = strings.TrimSpace(cidr)
+	if ip := net.ParseIP(cidr); ip != nil {
+		if ip.To4() == nil {
+			return nil, fmt.Errorf("IPv6 not supported")
+		}
+		return []string{ip.String()}, nil
+	}
 	_, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, err

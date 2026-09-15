@@ -68,3 +68,35 @@ POST /api/v1/cmdb/rancher/sync
 ```
 
 当前实现支持 Rancher 集群列表、跳转入口和 K8s 集群资产同步。节点、命名空间和工作负载可继续复用现有 K8s 采集器，后续再按 Rancher API 扩展同步。
+
+## 7. 中间件与数据库自动发现
+
+通过 SSH 执行只读命令：
+
+```text
+ss/netstat  -> 监听端口和进程
+ps          -> 进程、用户、启动参数
+参数解析    -> 数据目录、日志路径、JVM 端口
+Exporter    -> 常见 exporter 进程和端口
+```
+
+识别类型：
+
+- middleware：Kafka、Nginx
+- database：MySQL/MariaDB、PostgreSQL、MongoDB、Redis
+
+资产生成规则：
+
+- ID 由服务类型、IP、监听端口确定。
+- 中间件写入 `middleware` 模型，数据库写入 `database` 模型。
+- 自动继承宿主机的环境、项目组和机房信息。
+- 建立服务到宿主机的 `runs-on` 关系。
+- 扫描结果可进入审批队列，审批通过后再写入 CMDB。
+
+接口：
+
+```text
+POST /api/v1/discovery/scan-services
+```
+
+常用 Exporter 会自动识别；未识别到 Exporter 时资产仍会入库，并在监控目标页显示“待配置”。

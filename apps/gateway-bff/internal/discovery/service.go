@@ -124,6 +124,7 @@ type DiscoveredItem struct {
 	Message      string           `json:"message,omitempty"`
 	UpdatedAt    string           `json:"updatedAt,omitempty"`
 	Attributes   []cmdb.Attribute `json:"attributes"`
+	Relations    []cmdb.Relation  `json:"relations,omitempty"`
 	PreserveType bool             `json:"preserveType,omitempty"`
 }
 type AgentReport struct {
@@ -521,6 +522,14 @@ func (s *Service) markImported(item DiscoveredItem) error {
 	return nil
 }
 
+func isHostDiscoveryType(value string) bool {
+	switch value {
+	case "physical-server", "virtual-machine", "k8s-node":
+		return true
+	default:
+		return false
+	}
+}
 func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, error) {
 	if s.cmdb == nil {
 		if err := s.markImported(item); err != nil {
@@ -533,7 +542,7 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 		src = "discovery"
 	}
 	// Same host already known under a different ID -> merge/refresh, keep canonical asset.
-	if item.IP != "" {
+	if item.IP != "" && isHostDiscoveryType(item.Type) {
 		if existingID := s.cmdb.FindHostByIP(item.IP, item.ID); existingID != "" {
 			if _, err := s.cmdb.MergeHostInventory(existingID, src, item.Attributes); err != nil {
 				return "", err
@@ -549,7 +558,7 @@ func (s *Service) importDiscovered(item DiscoveredItem, source string) (string, 
 			return "merged", nil
 		}
 	}
-	_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: src, Tags: []string{src}, Attributes: item.Attributes}, "discovery-reconcile")
+	_, err := s.cmdb.CreateAsset(cmdb.CreateAssetInput{ID: item.ID, Name: item.Name, Type: item.Type, Status: "online", IP: item.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: src, Tags: []string{src}, Attributes: item.Attributes, Relations: item.Relations}, "discovery-reconcile")
 	if err != nil {
 		if errors.Is(err, cmdb.ErrConflict) {
 			// Same ID already exists -> refresh in place.
