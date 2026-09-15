@@ -86,6 +86,17 @@ type AssetPage struct {
 	Data []Asset  `json:"data"`
 	Meta PageMeta `json:"meta"`
 }
+type MonitorTarget struct {
+	AssetID    string `json:"assetId"`
+	AssetName  string `json:"assetName"`
+	AssetType  string `json:"assetType"`
+	Target     string `json:"target"`
+	Port       string `json:"port"`
+	Exporter   string `json:"exporter"`
+	Status     string `json:"status"`
+	Source     string `json:"source"`
+	LastSeenAt string `json:"lastSeenAt"`
+}
 type PrometheusTargetGroup struct {
 	Targets []string          `json:"targets"`
 	Labels  map[string]string `json:"labels"`

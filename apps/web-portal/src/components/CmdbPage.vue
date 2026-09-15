@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,reactive,ref} from 'vue'
-import {useRoute} from 'vue-router'
-import {Boxes,ChevronLeft,ChevronRight,Database,Download,Filter,Plus,RefreshCw,Search,Server,Tag,X,History,Pencil} from 'lucide-vue-next'
+import {useRoute,useRouter} from 'vue-router'
+import {Activity,Boxes,ChevronLeft,ChevronRight,Database,Download,ExternalLink,Filter,LayoutDashboard,Network,Plus,RefreshCw,Search,Server,Settings,Tag,Waypoints,X,History,Pencil} from 'lucide-vue-next'
 import {useCmdbStore} from '@/stores/useCmdbStore'
 import {statusLabel} from '@/features/cmdb/cmdbModel'
 import AssetEditor from './AssetEditor.vue'
@@ -11,13 +11,18 @@ import IdcManager from './IdcManager.vue'
 import CollectedAttributes from './CollectedAttributes.vue'
 import HostMonitoring from './HostMonitoring.vue'
 import K8sAssetBrowser from './K8sAssetBrowser.vue'
+import CmdbOverviewPanel from './CmdbOverviewPanel.vue'
+import MonitorTargetsPanel from './MonitorTargetsPanel.vue'
+import RancherPanel from './RancherPanel.vue'
 import type {AssetInput,ImportResult} from '@/features/cmdb/types'
 
 const store=useCmdbStore()
 const route=useRoute()
+const router=useRouter()
 const filters=reactive({search:'',type:'',status:'',projectGroup:'',page:1,pageSize:20})
 const editorMode=ref<'create'|'edit'|''>('')
 const view=ref<'assets'|'k8s'>('assets')
+const section=ref<'overview'|'assets'|'k8s'|'middleware'|'database'|'network'|'servers'|'rancher'|'relations'|'monitor'|'config'>('overview')
 const regularModels=computed(()=>store.models.filter(model=>!['physical-server','virtual-machine','k8s-node','k8s-cluster','k8s-namespace','k8s-workload','k8s-pod','k8s-service','k8s-ingress','k8s-pvc','k8s-pv','k8s-storageclass'].includes(model.code)))
 const editorSaving=ref(false)
 const editorError=ref('')
@@ -29,9 +34,10 @@ async function openAnalytics(){await store.loadAnalytics();showAnalytics.value=t
 const showIdc=ref(false)
 async function openIdc(){await store.loadIdcRooms();showIdc.value=true}
 function apply(){filters.page=1;void store.search({...filters})}
-function chooseType(type:string){view.value='assets';filters.type=filters.type===type?'':type;apply()}
-function chooseServers(){view.value='assets';filters.type='server';apply()}
-function chooseK8s(){view.value='k8s'}
+function chooseType(type:string){section.value='assets';view.value='assets';filters.type=filters.type===type?'':type;apply()}
+function chooseServers(){section.value='assets';view.value='assets';filters.type='server';apply()}
+function chooseK8s(){section.value='k8s';view.value='k8s'}
+function openSection(value:typeof section.value){section.value=value;if(value==='k8s'){view.value='k8s';return}if(value==='assets'||value==='middleware'||value==='database'||value==='network'||value==='servers'){view.value='assets';filters.type=value==='assets'?'':value==='network'?'network-device':value==='servers'?'server':value;apply()}}
 function page(delta:number){const next=filters.page+delta;if(next>0&&next<=store.meta.totalPages){filters.page=next;void store.search({...filters})}}
 async function save(input:AssetInput){editorSaving.value=true;editorError.value='';try{if(editorMode.value==='create')await store.create(input,{...filters});else if(store.selected)await store.update(store.selected.id,input,{...filters});editorMode.value=''}catch(reason){editorError.value=reason instanceof Error?reason.message:'保存失败，请检查字段或机房U位占用'}finally{editorSaving.value=false}}
 async function importRows(rows:AssetInput[],upsert:boolean){importResult.value=await store.importRows(rows,upsert,{...filters})}
@@ -42,10 +48,16 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
   <section class="cmdb-page">
     <header class="cmdb-heading"><div><span>CONFIGURATION MANAGEMENT DATABASE</span><h1>CMDB 资产中心</h1><p>统一管理资产模型、生命周期、归属关系与数据来源</p></div><div><button @click="openAnalytics">数据报表</button>
           <button @click="openIdc">机房管理</button><button @click="showModels=true"><Boxes/>模型管理</button><button @click="showImport=true"><Download/>批量导入</button><button class="primary" @click="editorMode='create';editorError=''"><Plus/>新增资产</button></div></header>
-    <div v-if="store.summary" class="cmdb-summary">
+    <nav class="cmdb-domain-nav"><button :class="{active:section==='overview'}" @click="openSection('overview')"><LayoutDashboard/>资产总览</button><button :class="{active:section==='k8s'}" @click="openSection('k8s')"><Boxes/>K8s 集群</button><button :class="{active:section==='middleware'}" @click="openSection('middleware')"><Activity/>中间件</button><button :class="{active:section==='database'}" @click="openSection('database')"><Database/>数据库</button><button :class="{active:section==='network'}" @click="openSection('network')"><Network/>网络设备</button><button :class="{active:section==='relations'}" @click="openSection('relations')"><Waypoints/>关系拓扑</button><button :class="{active:section==='monitor'}" @click="openSection('monitor')"><Activity/>监控目标</button><button :class="{active:section==='rancher'}" @click="openSection('rancher')"><Boxes/>Rancher</button><button :class="{active:section==='config'}" @click="openSection('config')"><Settings/>系统配置</button></nav>
+    <CmdbOverviewPanel v-if="section==='overview'" :summary="store.summary" :models="store.models" :assets="store.assets" :loading="store.isLoading" @navigate="openSection" @add="editorMode='create';editorError=''"/>
+    <MonitorTargetsPanel v-if="section==='monitor'"/>
+    <RancherPanel v-if="section==='rancher'"/>
+    <section v-if="section==='relations'" class="cmdb-domain-panel"><header><Waypoints/><div><h2>资产关系与物理拓扑</h2><p>关系骨架来自 CMDB，状态着色与影响分析结合监控数据。</p></div></header><div class="domain-action-grid"><article><strong>应用与服务依赖</strong><span>应用 → 中间件 → 数据库 → 主机 → 交换机</span><button @click="router.push('/topology')">打开拓扑中心 <ExternalLink/></button></article><article><strong>故障影响范围</strong><span>按项目组、环境、机房筛选并查看上下游影响路径</span><button @click="router.push('/topology')">查询影响范围 <ExternalLink/></button></article><article><strong>物理链路</strong><span>物理机网卡 → 交换机端口 → LLDP 邻居关系</span><button @click="openSection('network')">查看网络设备</button></article></div></section>
+    <section v-if="section==='config'" class="cmdb-domain-panel"><header><Settings/><div><h2>CMDB 系统配置</h2><p>管理资产模型、数据源、导入导出和机房模型。</p></div></header><div class="domain-action-grid"><article><strong>资产模型</strong><span>自定义资产类型、属性和关系定义</span><button @click="showModels=true">打开模型管理</button></article><article><strong>机房建模</strong><span>机房、模块、机柜、U位与电压信息</span><button @click="openIdc">打开机房管理</button></article><article><strong>批量导入</strong><span>CSV 模板导入、更新和错误反馈</span><button @click="showImport=true">打开导入</button></article><article><strong>数据源</strong><span>Rancher、SNMP、Agent、SSH 和 Exporter 配置</span><button @click="openSection('rancher')">Rancher 配置</button></article></div></section>
+    <div v-if="['assets','middleware','database','network','k8s'].includes(section)&&store.summary" class="cmdb-summary">
       <article><Database/><div><span>资产总数</span><strong>{{store.summary.total}}</strong></div></article><article><i class="online"></i><div><span>在线资产</span><strong>{{store.summary.online}}</strong></div></article><article><i class="warning"></i><div><span>异常资产</span><strong>{{store.summary.warning}}</strong></div></article><article><i class="offline"></i><div><span>离线资产</span><strong>{{store.summary.offline}}</strong></div></article><article><Boxes/><div><span>CI 模型</span><strong>{{store.summary.models}}</strong></div></article><article><Tag/><div><span>项目组</span><strong>{{store.summary.projectGroups}}</strong></div></article>
     </div>
-    <div class="cmdb-workspace">
+    <div v-if="['assets','middleware','database','network','k8s'].includes(section)" class="cmdb-workspace">
       <aside class="model-tree"><header><strong>CI 模型</strong><span>{{store.models.length}}</span></header><button :class="{active:view==='assets'&&!filters.type}" @click="chooseType('')"><Boxes/><span>全部资产</span><b>{{store.summary?.total}}</b></button><button :class="{active:view==='assets'&&filters.type==='server'}" @click="chooseServers"><Server/><span>服务器</span></button><button :class="{active:view==='k8s'}" @click="chooseK8s"><Boxes/><span>K8s 集群</span></button><button v-for="model in regularModels" :key="model.code" :class="{active:view==='assets'&&filters.type===model.code}" @click="chooseType(model.code)"><Server/><span>{{model.name}}</span><b>{{model.count}}</b></button></aside>
       <main class="asset-register"><K8sAssetBrowser v-if="view==='k8s'" @select="store.select"/><template v-else>
         <div class="asset-toolbar"><div class="search-box"><Search/><input v-model="filters.search" placeholder="搜索资产名称、编号或 IP" @keyup.enter="apply"><button @click="apply">搜索</button></div><select v-model="filters.status" @change="apply"><option value="">全部状态</option><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select><select v-model="filters.projectGroup" @change="apply"><option value="">全部项目组</option><option>核心系统组</option><option>电商业务组</option><option>容器平台组</option><option>基础设施组</option><option>数据平台组</option><option>研发效能组</option></select><button class="icon-button" aria-label="刷新" @click="store.search({...filters})"><RefreshCw/></button><button class="icon-button" aria-label="筛选"><Filter/></button></div>

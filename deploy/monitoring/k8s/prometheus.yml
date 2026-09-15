@@ -51,6 +51,20 @@ scrape_configs:
       - source_labels: [asset_name]
         target_label: instance
 
+  - job_name: cmdb-exporter
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/exporters
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance
+      - source_labels: [asset_type]
+        target_label: asset_type
+      - source_labels: [exporter]
+        target_label: exporter
   - job_name: cmdb-snmp
     metrics_path: /snmp
     params:

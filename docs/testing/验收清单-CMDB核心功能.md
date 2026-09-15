@@ -147,5 +147,17 @@
 - [ ] 外部执行器请求包含 `deploy/rollback`、发布信息、关联工单、操作人和一次性授权
 - [ ] 执行器调用失败时发布中心显示错误并记录 `release.dispatch_failed` 审计
 - [ ] 未配置外部执行器时，手动模式仍可由外部 GitLab/Harbor/Argo CD 事件推进状态
+## 18. CMDB 资产中心重构与监控目标
+- [ ] CMDB 页面显示资产总览、K8s、中间件、数据库、网络设备、关系拓扑、监控目标和系统配置工作区
+- [ ] 资产总览显示各类资产数量、健康状态、监控目标和最近资产
+- [ ] 中间件资产可选择 Kafka、Redis、Nginx 等类型，并维护端口、JVM 端口、数据/日志目录、进程和 Exporter
+- [ ] 数据库资产可选择 MySQL、MongoDB、PostgreSQL、Redis 等类型，并维护角色、连接地址、备份策略和 Exporter
+- [ ] 网络设备维护厂商、型号、管理 IP、SNMP 状态、端口数和 VLAN 数
+- [ ] 网络设备页面可进入关系拓扑，物理机网卡与交换机端口关系可在拓扑中心查看
+- [ ] 监控目标页面展示资产 Exporter 地址、端口、状态和数据来源
+- [ ] 未配置 Exporter 的中间件、数据库显示“待配置”
+- [ ] 配置 Exporter 地址和端口后，Prometheus `cmdb-exporter` job 能通过 CMDB HTTP-SD 自动获取目标
+- [ ] Rancher 配置完成后可显示集群列表并一键跳转 Rancher 控制台
+- [ ] 执行 Rancher 集群同步后，K8s 集群资产生成或更新到 CMDB
 ## 备注
 - 各项验收如有失败，记录：步骤/期望/实际/控制台报错。

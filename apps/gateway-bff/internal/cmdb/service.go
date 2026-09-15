@@ -219,6 +219,36 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "firmware", Label: "固件版本", Type: "text"},
 		{Name: "management_ip", Label: "管理IP", Type: "text"},
 		{Name: "snmp_community_ref", Label: "SNMP Community引用", Type: "text"},
+		{Name: "snmp_version", Label: "SNMP版本", Type: "text"},
+		{Name: "snmp_status", Label: "SNMP采集状态", Type: "text"},
+		{Name: "port_count", Label: "端口数量", Type: "text"},
+		{Name: "vlan_count", Label: "VLAN数量", Type: "text"},
+	},
+	"middleware": {
+		{Name: "middleware_type", Label: "中间件类型", Type: "text"},
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "cluster_nodes", Label: "集群节点", Type: "text"},
+		{Name: "listen_port", Label: "监听端口", Type: "text"},
+		{Name: "jvm_port", Label: "JVM端口", Type: "text"},
+		{Name: "data_dir", Label: "数据目录", Type: "text"},
+		{Name: "log_path", Label: "日志路径", Type: "text"},
+		{Name: "process_name", Label: "进程名称", Type: "text"},
+		{Name: "run_user", Label: "启动用户", Type: "text"},
+		{Name: "exporter_address", Label: "Exporter地址", Type: "text"},
+		{Name: "exporter_port", Label: "Exporter端口", Type: "text"},
+	},
+	"database": {
+		{Name: "database_type", Label: "数据库类型", Type: "text"},
+		{Name: "engine_version", Label: "数据库版本", Type: "text"},
+		{Name: "instance_role", Label: "实例角色", Type: "text"},
+		{Name: "listen_port", Label: "监听端口", Type: "text"},
+		{Name: "endpoint", Label: "连接地址", Type: "text"},
+		{Name: "data_dir", Label: "数据目录", Type: "text"},
+		{Name: "log_path", Label: "日志路径", Type: "text"},
+		{Name: "backup_policy", Label: "备份策略", Type: "text"},
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "exporter_address", Label: "Exporter地址", Type: "text"},
+		{Name: "exporter_port", Label: "Exporter端口", Type: "text"},
 	},
 }
 
@@ -514,6 +544,107 @@ func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
 	return groups
 }
 
+func (s *Service) MonitorTargets() []MonitorTarget {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]MonitorTarget, 0)
+	for _, asset := range s.assets {
+		if !isMonitorableAsset(asset.Type) {
+			continue
+		}
+		target := monitorTargetForAsset(asset)
+		result = append(result, target)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].AssetType == result[j].AssetType {
+			return result[i].AssetName < result[j].AssetName
+		}
+		return result[i].AssetType < result[j].AssetType
+	})
+	return result
+}
+
+func (s *Service) PrometheusExporterTargetGroups() []PrometheusTargetGroup {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groups := make([]PrometheusTargetGroup, 0)
+	for _, asset := range s.assets {
+		if asset.Status == "offline" {
+			continue
+		}
+		target := monitorTargetForAsset(asset)
+		if target.Target == "" || target.Exporter == "snmp_exporter" {
+			continue
+		}
+		groups = append(groups, PrometheusTargetGroup{
+			Targets: []string{target.Target},
+			Labels: map[string]string{
+				"asset_id":      asset.ID,
+				"asset_name":    asset.Name,
+				"asset_type":    asset.Type,
+				"environment":   asset.Environment,
+				"project_group": asset.ProjectGroup,
+				"exporter":      target.Exporter,
+				"service":       asset.Type,
+			},
+		})
+	}
+	return groups
+}
+
+func isMonitorableAsset(assetType string) bool {
+	switch assetType {
+	case "physical-server", "virtual-machine", "k8s-node", "middleware", "database", "network-device":
+		return true
+	default:
+		return false
+	}
+}
+
+func monitorTargetForAsset(asset Asset) MonitorTarget {
+	exporterAddress := attrValue(asset.Attributes, "exporter_address")
+	exporterPort := attrValue(asset.Attributes, "exporter_port")
+	status := asset.Status
+	exporter := exporterLabel(asset.Type)
+	if exporterAddress == "" {
+		exporterAddress = asset.IP
+	}
+	if exporterPort == "" {
+		if asset.Type == "physical-server" || asset.Type == "virtual-machine" || asset.Type == "k8s-node" {
+			if strings.EqualFold(attrValue(asset.Attributes, "node_exporter_status"), "active") {
+				exporterPort = attrValue(asset.Attributes, "node_exporter_port")
+			}
+		}
+	}
+	if exporterPort == "" && asset.Type == "network-device" {
+		exporterPort = "9116"
+	}
+	target := ""
+	if exporterAddress != "" && exporterPort != "" && asset.Type != "network-device" {
+		target = net.JoinHostPort(exporterAddress, exporterPort)
+	}
+	if target == "" {
+		status = "pending"
+	}
+	return MonitorTarget{
+		AssetID: asset.ID, AssetName: asset.Name, AssetType: asset.Type,
+		Target: target, Port: exporterPort, Exporter: exporter,
+		Status: status, Source: asset.Source, LastSeenAt: asset.LastSeenAt,
+	}
+}
+
+func exporterLabel(assetType string) string {
+	switch assetType {
+	case "network-device":
+		return "snmp_exporter"
+	case "database":
+		return "database_exporter"
+	case "middleware":
+		return "middleware_exporter"
+	default:
+		return "node_exporter"
+	}
+}
 func (s *Service) InventoryAssets() []Asset {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1056,6 +1187,19 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 		return Asset{}, err
 	}
 	return cloneAsset(created), nil
+}
+func (s *Service) UpsertExternalAsset(input CreateAssetInput, operator string) (Asset, error) {
+	if _, err := s.GetAsset(input.ID); err == nil {
+		return s.UpdateAsset(input.ID, UpdateAssetInput{
+			Name: input.Name, Status: input.Status, IP: input.IP, Environment: input.Environment,
+			ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location,
+			Tags: append([]string(nil), input.Tags...), Attributes: append([]Attribute(nil), input.Attributes...),
+			Relations: append([]Relation(nil), input.Relations...),
+		}, operator)
+	} else if !errors.Is(err, ErrNotFound) {
+		return Asset{}, err
+	}
+	return s.CreateAsset(input, operator)
 }
 func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string) (Asset, error) {
 	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Owner) == "" {

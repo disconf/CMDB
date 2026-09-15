@@ -74,6 +74,7 @@ func NewServer() *Server {
 	credentialsService := credentials.NewService()
 	k8sService := k8s.NewService(cmdbService)
 	auditService := audit.NewService()
+	registerRancherRoutes(mux, authService, auditService, cmdbService)
 	discoveryService.SetCredentialResolver(func(id string) (string, string, error) {
 		m, err := credentialsService.Resolve(id)
 		return m.Username, m.Secret, err
@@ -122,6 +123,14 @@ func NewServer() *Server {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, cmdbService.PrometheusTargetGroups(os.Getenv("CMDB_NODE_EXPORTER_PORT")))
+	})
+	mux.HandleFunc("GET /api/v1/monitor/service-discovery/exporters", func(w http.ResponseWriter, r *http.Request) {
+		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED"})
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, cmdbService.PrometheusExporterTargetGroups())
 	})
 	mux.HandleFunc("GET /api/v1/monitor/service-discovery/snmp", func(w http.ResponseWriter, r *http.Request) {
 		if !discoveryService.AuthorizeAgentToken(bearerToken(r)) {
@@ -203,6 +212,12 @@ func NewServer() *Server {
 	mux.HandleFunc("POST /api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		authService.Logout(bearerToken(r))
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/monitor-targets", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.MonitorTargets())
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/analytics", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
