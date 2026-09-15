@@ -1,2 +1,2 @@
-export const releaseStatusLabel=(s:string)=>({running:'发布中',success:'成功',failed:'失败','rolling-back':'回滚中'}[s]||s)
+export const releaseStatusLabel=(s:string)=>({awaiting_approval:'待审批',approved:'已授权',rejected:'已驳回',running:'发布中',success:'成功',failed:'失败','rolling-back':'回滚中',cancelled:'已取消'}[s]||s)
 export const stageProgress=(stages:{status:string}[])=>stages.length?Math.round(stages.filter(s=>s.status==='success').length/stages.length*100):0

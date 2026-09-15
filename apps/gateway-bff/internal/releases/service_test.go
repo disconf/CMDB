@@ -1,20 +1,45 @@
 package releases
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-func TestStartAndRollback(t *testing.T) {
+func TestApprovalAndExecutionAuthorization(t *testing.T) {
 	service := NewService()
-	item, err := service.Start(StartInput{Application: "订单服务", Version: "v2.8.0", Environment: "staging", Operator: "admin"})
-	if err != nil || item.Status != StatusRunning || item.Source != "manual" {
+	item, err := service.Start(StartInput{Application: "订单服务", Version: "v2.8.0", Environment: "staging", Operator: "creator"})
+	if err != nil || item.Status != StatusAwaitingApproval || item.Approval != "pending" {
 		t.Fatalf("start: %#v %v", item, err)
 	}
-	rolledBack, err := service.Rollback(item.ID, "admin")
+	if _, _, err = service.Approve(item.ID, "creator", "self approval"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected self approval rejection, got %v", err)
+	}
+	approved, token, err := service.Approve(item.ID, "approver", "approved")
+	if err != nil || approved.Status != StatusApproved || token == "" || approved.AuthorizationExpiresAt == "" {
+		t.Fatalf("approve: %#v token=%q err=%v", approved, token, err)
+	}
+	running, err := service.AuthorizeExecution(item.ID, token, "operator")
+	if err != nil || running.Status != StatusRunning || running.AuthorizationUsedAt == "" {
+		t.Fatalf("execute authorization: %#v %v", running, err)
+	}
+	if _, err = service.AuthorizeExecution(item.ID, token, "operator"); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("expected one-time authorization consumption, got %v", err)
+	}
+	rolledBack, err := service.Rollback(item.ID, "operator")
 	if err != nil || rolledBack.Status != StatusRollingBack {
 		t.Fatalf("rollback: %#v %v", rolledBack, err)
 	}
-	items, err := service.List()
-	if err != nil || len(items) == 0 {
-		t.Fatalf("list: %#v %v", items, err)
+}
+
+func TestManualReleaseCannotBypassApproval(t *testing.T) {
+	service := NewService()
+	item, err := service.Start(StartInput{Application: "payment", Version: "v1.0.0", Environment: "qa", Operator: "creator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.ApplyEvent(EventInput{Source: "gitlab", ExternalID: item.ID, Type: "pipeline", Application: item.Application, Version: item.Version, Environment: item.Environment, Status: "running"})
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("expected approval gate, got %v", err)
 	}
 }
 

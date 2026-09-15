@@ -2,7 +2,10 @@ package releases
 
 import (
 	"cmdb/gateway-bff/internal/demo"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -15,14 +18,20 @@ import (
 
 var ErrNotFound = errors.New("release not found")
 var ErrValidation = errors.New("validation")
+var ErrInvalidState = errors.New("invalid state")
+var ErrUnauthorized = errors.New("unauthorized")
+var ErrExpired = errors.New("authorization expired")
 
 const (
-	StatusPending     = "pending"
-	StatusRunning     = "running"
-	StatusSuccess     = "success"
-	StatusFailed      = "failed"
-	StatusRollingBack = "rolling-back"
-	StatusCancelled   = "cancelled"
+	StatusAwaitingApproval = "awaiting_approval"
+	StatusApproved         = "approved"
+	StatusRejected         = "rejected"
+	StatusPending          = "pending"
+	StatusRunning          = "running"
+	StatusSuccess          = "success"
+	StatusFailed           = "failed"
+	StatusRollingBack      = "rolling-back"
+	StatusCancelled        = "cancelled"
 )
 
 type Stage struct {
@@ -34,25 +43,34 @@ type Stage struct {
 }
 
 type Release struct {
-	ID              string  `json:"id"`
-	Application     string  `json:"application"`
-	Version         string  `json:"version"`
-	PreviousVersion string  `json:"previousVersion"`
-	Environment     string  `json:"environment"`
-	Status          string  `json:"status"`
-	Progress        int     `json:"progress"`
-	Operator        string  `json:"operator"`
-	StartedAt       string  `json:"startedAt"`
-	Strategy        string  `json:"strategy"`
-	Approval        string  `json:"approval"`
-	TicketID        string  `json:"ticketId"`
-	Source          string  `json:"source"`
-	ExternalID      string  `json:"externalId"`
-	Commit          string  `json:"commit"`
-	Stages          []Stage `json:"stages"`
+	ID                     string  `json:"id"`
+	Application            string  `json:"application"`
+	Version                string  `json:"version"`
+	PreviousVersion        string  `json:"previousVersion"`
+	Environment            string  `json:"environment"`
+	Status                 string  `json:"status"`
+	Progress               int     `json:"progress"`
+	Operator               string  `json:"operator"`
+	StartedAt              string  `json:"startedAt"`
+	Strategy               string  `json:"strategy"`
+	Approval               string  `json:"approval"`
+	TicketID               string  `json:"ticketId"`
+	Source                 string  `json:"source"`
+	ExternalID             string  `json:"externalId"`
+	Commit                 string  `json:"commit"`
+	ApprovedBy             string  `json:"approvedBy,omitempty"`
+	ApprovedAt             string  `json:"approvedAt,omitempty"`
+	ApprovalComment        string  `json:"approvalComment,omitempty"`
+	AuthorizationExpiresAt string  `json:"authorizationExpiresAt,omitempty"`
+	AuthorizationUsedAt    string  `json:"authorizationUsedAt,omitempty"`
+	Stages                 []Stage `json:"stages"`
 
-	startedAt time.Time
-	updatedAt time.Time
+	startedAt              time.Time
+	updatedAt              time.Time
+	approvedAt             time.Time
+	authorizationExpiresAt time.Time
+	authorizationUsedAt    time.Time
+	authorizationHash      string
 }
 
 type Artifact struct {
@@ -112,6 +130,15 @@ type Service struct {
 	db        *sql.DB
 }
 
+func approvalStages() []Stage {
+	return []Stage{
+		{ID: "build", Name: "构建制品", Status: StatusSuccess, Message: "制品已就绪"},
+		{ID: "scan", Name: "安全扫描", Status: StatusSuccess, Message: "安全扫描通过"},
+		{ID: "approve", Name: "发布门禁", Status: StatusPending, Message: "等待审批人确认"},
+		{ID: "deploy", Name: "部署应用", Status: StatusPending, Message: "审批通过后签发执行授权"},
+		{ID: "verify", Name: "指标验证", Status: StatusPending, Message: "等待部署完成"},
+	}
+}
 func stages(running bool) []Stage {
 	return []Stage{
 		{ID: "build", Name: "构建制品", Status: StatusSuccess, Duration: "01:42", Message: "镜像构建完成"},
@@ -238,9 +265,9 @@ func (s *Service) Start(in StartInput) (Release, error) {
 	now := time.Now()
 	item := Release{
 		ID: fmt.Sprintf("rel-manual-%d", now.UnixNano()), Application: in.Application, Version: in.Version,
-		PreviousVersion: "未提供", Environment: in.Environment, Status: StatusRunning, Progress: 20,
-		Operator: in.Operator, Strategy: "灰度发布", Approval: "approved", Source: "manual",
-		Stages: stages(true), startedAt: now, updatedAt: now,
+		PreviousVersion: "未提供", Environment: in.Environment, Status: StatusAwaitingApproval, Progress: 10,
+		Operator: in.Operator, Strategy: "灰度发布", Approval: "pending", Source: "manual",
+		Stages: approvalStages(), startedAt: now, updatedAt: now,
 	}
 	applyReleaseDerived(&item)
 	if s.db != nil {
@@ -256,6 +283,155 @@ func (s *Service) Start(in StartInput) (Release, error) {
 	s.mu.Unlock()
 	return cloneRelease(item), nil
 }
+func (s *Service) Approve(id, actor, comment string) (Release, string, error) {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return Release{}, "", ErrValidation
+	}
+	token, hash, expiresAt, err := newAuthorization()
+	if err != nil {
+		return Release{}, "", err
+	}
+	item, err := s.mutateRelease(id, func(current *Release, now time.Time) error {
+		if current.Status != StatusAwaitingApproval || current.Approval != "pending" {
+			return ErrInvalidState
+		}
+		if actor == current.Operator {
+			return ErrUnauthorized
+		}
+		current.Status = StatusApproved
+		current.Progress = 20
+		current.Approval = "approved"
+		current.ApprovedBy = actor
+		current.ApprovedAt = now.Format("2006-01-02 15:04")
+		current.ApprovalComment = strings.TrimSpace(comment)
+		current.authorizationHash = hash
+		current.authorizationExpiresAt = expiresAt
+		current.authorizationUsedAt = time.Time{}
+		current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "发布门禁", Status: StatusSuccess, Message: "审批通过，已签发一次性执行授权"})
+		current.Stages = upsertStage(current.Stages, Stage{ID: "deploy", Name: "部署应用", Status: StatusPending, Message: "执行授权有效，等待消费"})
+		current.updatedAt = now
+		applyReleaseDerived(current)
+		return nil
+	})
+	if err != nil {
+		return Release{}, "", err
+	}
+	return item, token, nil
+}
+
+func (s *Service) Reject(id, actor, comment string) (Release, error) {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return Release{}, ErrValidation
+	}
+	return s.mutateRelease(id, func(current *Release, now time.Time) error {
+		if current.Status != StatusAwaitingApproval || current.Approval != "pending" {
+			return ErrInvalidState
+		}
+		current.Status = StatusRejected
+		current.Progress = 10
+		current.Approval = "rejected"
+		current.ApprovedBy = actor
+		current.ApprovedAt = now.Format("2006-01-02 15:04")
+		current.ApprovalComment = strings.TrimSpace(comment)
+		current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "发布门禁", Status: StatusFailed, Message: "审批未通过"})
+		current.updatedAt = now
+		applyReleaseDerived(current)
+		return nil
+	})
+}
+
+func (s *Service) AuthorizeExecution(id, token, actor string) (Release, error) {
+	token = strings.TrimSpace(token)
+	actor = strings.TrimSpace(actor)
+	if token == "" || actor == "" {
+		return Release{}, ErrValidation
+	}
+	hash := hashAuthorization(token)
+	now := time.Now()
+	return s.mutateRelease(id, func(current *Release, changeTime time.Time) error {
+		if current.Status != StatusApproved || current.Approval != "approved" {
+			return ErrInvalidState
+		}
+		if current.authorizationHash == "" || subtle.ConstantTimeCompare([]byte(hash), []byte(current.authorizationHash)) != 1 {
+			return ErrUnauthorized
+		}
+		if !current.authorizationUsedAt.IsZero() {
+			return ErrInvalidState
+		}
+		if current.authorizationExpiresAt.IsZero() || !now.Before(current.authorizationExpiresAt) {
+			return ErrExpired
+		}
+		current.authorizationUsedAt = changeTime
+		current.Status = StatusRunning
+		current.Progress = 25
+		current.Stages = upsertStage(current.Stages, Stage{ID: "deploy", Name: "部署应用", Status: StatusRunning, Message: "一次性执行授权已消费，等待流水线继续部署"})
+		current.updatedAt = changeTime
+		applyReleaseDerived(current)
+		return nil
+	})
+}
+
+func (s *Service) mutateRelease(id string, change func(*Release, time.Time) error) (Release, error) {
+	now := time.Now()
+	if s.db != nil {
+		ctx, cancel := contextWithTimeout(8 * time.Second)
+		defer cancel()
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return Release{}, err
+		}
+		defer tx.Rollback()
+
+		item, err := loadReleaseByIDForUpdate(ctx, tx, id)
+		if err != nil {
+			return Release{}, err
+		}
+		if err := change(&item, now); err != nil {
+			return Release{}, err
+		}
+		item.updatedAt = now
+		applyReleaseDerived(&item)
+		if err := upsertRelease(ctx, tx, item); err != nil {
+			return Release{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return Release{}, err
+		}
+		return cloneRelease(item), nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.releases {
+		if s.releases[i].ID != id {
+			continue
+		}
+		item := cloneRelease(s.releases[i])
+		if err := change(&item, now); err != nil {
+			return Release{}, err
+		}
+		item.updatedAt = now
+		applyReleaseDerived(&item)
+		s.releases[i] = item
+		return cloneRelease(item), nil
+	}
+	return Release{}, ErrNotFound
+}
+
+func newAuthorization() (string, string, time.Time, error) {
+	value := make([]byte, 24)
+	if _, err := rand.Read(value); err != nil {
+		return "", "", time.Time{}, err
+	}
+	token := hex.EncodeToString(value)
+	return token, hashAuthorization(token), time.Now().Add(10 * time.Minute), nil
+}
+
+func hashAuthorization(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
 func (s *Service) Rollback(id, operator string) (Release, error) {
 	operator = strings.TrimSpace(operator)
 	if operator == "" {
@@ -270,6 +446,7 @@ func (s *Service) Rollback(id, operator string) (Release, error) {
 			return Release{}, err
 		}
 		defer tx.Rollback()
+
 		item, err := loadReleaseByIDForUpdate(ctx, tx, id)
 		if err != nil {
 			return Release{}, err
@@ -318,11 +495,19 @@ func (s *Service) ApplyEvent(in EventInput) (Release, error) {
 			return Release{}, err
 		}
 		defer tx.Rollback()
+		if _, pendingErr := findPendingManualRelease(ctx, tx, in); pendingErr == nil {
+			return Release{}, ErrInvalidState
+		} else if !errors.Is(pendingErr, ErrNotFound) {
+			return Release{}, pendingErr
+		}
 		item, err := loadReleaseByIDForUpdate(ctx, tx, id)
 		if errors.Is(err, ErrNotFound) {
 			item = newEventRelease(id, in, now)
 		} else if err != nil {
 			return Release{}, err
+		}
+		if item.Source == "manual" && item.Approval == "pending" {
+			return Release{}, ErrInvalidState
 		}
 		applyEvent(&item, in, now)
 		if err := upsertRelease(ctx, tx, item); err != nil {
@@ -340,6 +525,11 @@ func (s *Service) ApplyEvent(in EventInput) (Release, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for i := range s.releases {
+		if s.releases[i].Source == "manual" && s.releases[i].Approval == "pending" && s.releases[i].Application == in.Application && s.releases[i].Version == in.Version && s.releases[i].Environment == in.Environment {
+			return Release{}, ErrInvalidState
+		}
+	}
 	index := -1
 	for i := range s.releases {
 		if s.releases[i].ID == id {
@@ -355,6 +545,9 @@ func (s *Service) ApplyEvent(in EventInput) (Release, error) {
 			s.artifacts = upsertArtifactMemory(s.artifacts, artifact)
 		}
 		return cloneRelease(item), nil
+	}
+	if s.releases[index].Source == "manual" && s.releases[index].Approval == "pending" {
+		return Release{}, ErrInvalidState
 	}
 	applyEvent(&s.releases[index], in, now)
 	if artifact, ok := artifactFromEvent(in, now); ok {
@@ -598,6 +791,15 @@ func applyReleaseDerived(item *Release) {
 		item.updatedAt = item.startedAt
 	}
 	item.StartedAt = item.startedAt.Local().Format("2006-01-02 15:04")
+	if !item.approvedAt.IsZero() {
+		item.ApprovedAt = item.approvedAt.Local().Format("2006-01-02 15:04")
+	}
+	if !item.authorizationExpiresAt.IsZero() {
+		item.AuthorizationExpiresAt = item.authorizationExpiresAt.Local().Format(time.RFC3339)
+	}
+	if !item.authorizationUsedAt.IsZero() {
+		item.AuthorizationUsedAt = item.authorizationUsedAt.Local().Format(time.RFC3339)
+	}
 	if item.Stages == nil {
 		item.Stages = []Stage{}
 	}

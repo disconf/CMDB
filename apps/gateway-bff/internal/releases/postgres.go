@@ -27,8 +27,20 @@ CREATE TABLE IF NOT EXISTS release_deployments(
  source text NOT NULL DEFAULT 'manual',
  external_id text NOT NULL DEFAULT '',
  commit_sha text NOT NULL DEFAULT '',
- stages jsonb NOT NULL DEFAULT '[]'::jsonb
+ stages jsonb NOT NULL DEFAULT '[]'::jsonb,
+ approval_comment text NOT NULL DEFAULT '',
+ approved_by text NOT NULL DEFAULT '',
+ approved_at timestamptz,
+ authorization_hash text NOT NULL DEFAULT '',
+ authorization_expires_at timestamptz,
+ authorization_used_at timestamptz
 );
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approval_comment text NOT NULL DEFAULT '';
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS authorization_hash text NOT NULL DEFAULT '';
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS authorization_expires_at timestamptz;
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS authorization_used_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_release_deployments_updated ON release_deployments(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_release_deployments_application ON release_deployments(application,version,environment);
 DROP INDEX IF EXISTS idx_release_deployments_external;
@@ -81,23 +93,35 @@ func openPostgres(url string) (*sql.DB, error) {
 func contextWithTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), timeout)
 }
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
 func upsertRelease(ctx context.Context, execer releaseExecer, item Release) error {
 	stages, _ := json.Marshal(item.Stages)
 	_, err := execer.ExecContext(ctx, `
 INSERT INTO release_deployments(
  id,application,version,previous_version,environment,status,progress,operator_name,started_at,updated_at,
- strategy,approval,ticket_id,source,external_id,commit_sha,stages
-) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+ strategy,approval,ticket_id,source,external_id,commit_sha,stages,approval_comment,approved_by,approved_at,
+ authorization_hash,authorization_expires_at,authorization_used_at
+) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 ON CONFLICT(id) DO UPDATE SET
  application=excluded.application,version=excluded.version,previous_version=excluded.previous_version,
  environment=excluded.environment,status=excluded.status,progress=excluded.progress,
  operator_name=excluded.operator_name,updated_at=excluded.updated_at,strategy=excluded.strategy,
  approval=excluded.approval,ticket_id=excluded.ticket_id,source=excluded.source,
- external_id=excluded.external_id,commit_sha=excluded.commit_sha,stages=excluded.stages`,
+ external_id=excluded.external_id,commit_sha=excluded.commit_sha,stages=excluded.stages,
+ approval_comment=excluded.approval_comment,approved_by=excluded.approved_by,approved_at=excluded.approved_at,
+ authorization_hash=excluded.authorization_hash,authorization_expires_at=excluded.authorization_expires_at,
+ authorization_used_at=excluded.authorization_used_at`,
 		item.ID, item.Application, item.Version, item.PreviousVersion, item.Environment,
 		item.Status, item.Progress, item.Operator, item.startedAt, item.updatedAt,
 		item.Strategy, item.Approval, item.TicketID, item.Source, item.ExternalID,
-		item.Commit, stages,
+		item.Commit, stages, item.ApprovalComment, item.ApprovedBy, nullableTime(item.approvedAt),
+		item.authorizationHash, nullableTime(item.authorizationExpiresAt), nullableTime(item.authorizationUsedAt),
 	)
 	return err
 }
@@ -135,7 +159,8 @@ func loadReleases(ctx context.Context, queryer releaseQueryer) ([]Release, error
 
 const releaseSelectSQL = `SELECT
  id,application,version,previous_version,environment,status,progress,operator_name,started_at,updated_at,
- strategy,approval,ticket_id,source,external_id,commit_sha,stages
+ strategy,approval,ticket_id,source,external_id,commit_sha,stages,approval_comment,approved_by,approved_at,
+ authorization_hash,authorization_expires_at,authorization_used_at
 FROM release_deployments`
 
 func loadReleaseByIDForUpdate(ctx context.Context, tx *sql.Tx, id string) (Release, error) {
@@ -151,14 +176,29 @@ func loadReleaseByIDForUpdate(ctx context.Context, tx *sql.Tx, id string) (Relea
 	return item, nil
 }
 
+func findPendingManualRelease(ctx context.Context, tx *sql.Tx, in EventInput) (Release, error) {
+	row := tx.QueryRowContext(ctx, releaseSelectSQL+` WHERE source='manual' AND approval='pending' AND application=$1 AND version=$2 AND environment=$3 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`, in.Application, in.Version, in.Environment)
+	item, err := scanRelease(row)
+	if err == sql.ErrNoRows {
+		return Release{}, ErrNotFound
+	}
+	if err != nil {
+		return Release{}, err
+	}
+	applyReleaseDerived(&item)
+	return item, nil
+}
 func scanRelease(scanner releaseScanner) (Release, error) {
 	var item Release
 	var stages []byte
+	var approvedAt, authorizationExpiresAt, authorizationUsedAt sql.NullTime
 	if err := scanner.Scan(
 		&item.ID, &item.Application, &item.Version, &item.PreviousVersion,
 		&item.Environment, &item.Status, &item.Progress, &item.Operator,
 		&item.startedAt, &item.updatedAt, &item.Strategy, &item.Approval,
 		&item.TicketID, &item.Source, &item.ExternalID, &item.Commit, &stages,
+		&item.ApprovalComment, &item.ApprovedBy, &approvedAt,
+		&item.authorizationHash, &authorizationExpiresAt, &authorizationUsedAt,
 	); err != nil {
 		return Release{}, err
 	}
@@ -167,6 +207,15 @@ func scanRelease(scanner releaseScanner) (Release, error) {
 	}
 	if item.Stages == nil {
 		item.Stages = []Stage{}
+	}
+	if approvedAt.Valid {
+		item.approvedAt = approvedAt.Time
+	}
+	if authorizationExpiresAt.Valid {
+		item.authorizationExpiresAt = authorizationExpiresAt.Time
+	}
+	if authorizationUsedAt.Valid {
+		item.authorizationUsedAt = authorizationUsedAt.Time
 	}
 	return item, nil
 }

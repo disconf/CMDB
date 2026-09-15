@@ -60,3 +60,45 @@ func TestPostgresReleaseEventLifecycle(t *testing.T) {
 		t.Fatalf("artifacts: %#v %v", artifacts, err)
 	}
 }
+
+func TestPostgresManualApprovalLifecycle(t *testing.T) {
+	url := os.Getenv("CMDB_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("CMDB_TEST_DATABASE_URL is not configured")
+	}
+	db, err := openPostgres(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := &Service{db: db}
+	item, err := service.Start(StartInput{Application: "integration-approval", Version: "v1.0.0-test", Environment: "qa", Operator: "creator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM release_deployments WHERE id=$1`, item.ID)
+	})
+	approved, token, err := service.Approve(item.ID, "approver", "integration approved")
+	if err != nil || approved.Status != StatusApproved || token == "" {
+		t.Fatalf("approve: %#v token=%q err=%v", approved, token, err)
+	}
+	running, err := service.AuthorizeExecution(item.ID, token, "operator")
+	if err != nil || running.Status != StatusRunning || running.AuthorizationUsedAt == "" {
+		t.Fatalf("authorize execution: %#v %v", running, err)
+	}
+	loaded, err := service.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, candidate := range loaded {
+		if candidate.ID == item.ID && candidate.AuthorizationUsedAt != "" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("approved release %s not persisted", item.ID)
+	}
+}

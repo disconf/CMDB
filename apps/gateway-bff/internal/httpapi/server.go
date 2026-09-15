@@ -2449,6 +2449,96 @@ func NewServer() *Server {
 		auditService.Record(u.Username, "release.start", x.ID, x.Application+" "+x.Version)
 		writeJSON(w, 201, x)
 	})
+	mux.HandleFunc("POST /api/v1/releases/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:manage") {
+			return
+		}
+		var in struct {
+			Comment string `json:"comment"`
+		}
+		_ = decodeJSON(r, &in)
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, token, err := releasesService.Approve(r.PathValue("id"), u.Username, in.Comment)
+		if errors.Is(err, releases.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RELEASE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, releases.ErrInvalidState) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "RELEASE_INVALID_STATE", "message": "当前发布状态不允许审批"})
+			return
+		}
+		if errors.Is(err, releases.ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "RELEASE_SELF_APPROVAL_FORBIDDEN", "message": "发布申请人不能审批自己的发布"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_APPROVAL_FAILED"})
+			return
+		}
+		auditService.Record(u.Username, "release.approve", item.ID, item.Application+" "+item.Version)
+		writeJSON(w, http.StatusOK, map[string]any{"release": item, "authorizationToken": token, "expiresAt": item.AuthorizationExpiresAt})
+	})
+	mux.HandleFunc("POST /api/v1/releases/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:manage") {
+			return
+		}
+		var in struct {
+			Comment string `json:"comment"`
+		}
+		_ = decodeJSON(r, &in)
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := releasesService.Reject(r.PathValue("id"), u.Username, in.Comment)
+		if errors.Is(err, releases.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RELEASE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, releases.ErrInvalidState) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "RELEASE_INVALID_STATE"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_REJECT_FAILED"})
+			return
+		}
+		auditService.Record(u.Username, "release.reject", item.ID, item.ApprovalComment)
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/releases/{id}/execute", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:manage") {
+			return
+		}
+		var in struct {
+			AuthorizationToken string `json:"authorizationToken"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := releasesService.AuthorizeExecution(r.PathValue("id"), in.AuthorizationToken, u.Username)
+		if errors.Is(err, releases.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RELEASE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, releases.ErrUnauthorized) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "RELEASE_AUTHORIZATION_INVALID"})
+			return
+		}
+		if errors.Is(err, releases.ErrExpired) {
+			writeJSON(w, http.StatusGone, map[string]string{"code": "RELEASE_AUTHORIZATION_EXPIRED"})
+			return
+		}
+		if errors.Is(err, releases.ErrInvalidState) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "RELEASE_AUTHORIZATION_USED"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_EXECUTE_FAILED"})
+			return
+		}
+		auditService.Record(u.Username, "release.execute_authorize", item.ID, item.Application+" "+item.Version)
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("POST /api/v1/releases/events", func(w http.ResponseWriter, r *http.Request) {
 		if !authorizeReleaseWebhook(w, r) {
 			return
@@ -2461,6 +2551,10 @@ func NewServer() *Server {
 		item, err := releasesService.ApplyEvent(in)
 		if errors.Is(err, releases.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if errors.Is(err, releases.ErrInvalidState) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "RELEASE_APPROVAL_REQUIRED", "message": "存在待审批的手工发布，外部事件不能绕过审批"})
 			return
 		}
 		if err != nil {
