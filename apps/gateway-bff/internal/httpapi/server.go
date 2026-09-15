@@ -2503,6 +2503,12 @@ func NewServer() *Server {
 		auditService.Record(u.Username, "release.reject", item.ID, item.ApprovalComment)
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("GET /api/v1/releases/executor", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, releasesService.ExecutorInfo())
+	})
 	mux.HandleFunc("POST /api/v1/releases/{id}/execute", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:manage") {
 			return
@@ -2536,7 +2542,16 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_EXECUTE_FAILED"})
 			return
 		}
-		auditService.Record(u.Username, "release.execute_authorize", item.ID, item.Application+" "+item.Version)
+		action := "deploy"
+		if item.Status == releases.StatusRollingBack {
+			action = "rollback"
+		}
+		if err := releasesService.Dispatch(r.Context(), item, action, in.AuthorizationToken); err != nil {
+			auditService.Record(u.Username, "release.dispatch_failed", item.ID, err.Error())
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "RELEASE_DISPATCH_FAILED", "message": "发布执行器调用失败"})
+			return
+		}
+		auditService.Record(u.Username, "release.execute_authorize", item.ID, action)
 		writeJSON(w, http.StatusOK, item)
 	})
 	mux.HandleFunc("POST /api/v1/releases/events", func(w http.ResponseWriter, r *http.Request) {

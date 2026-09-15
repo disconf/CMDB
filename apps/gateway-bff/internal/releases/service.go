@@ -23,15 +23,18 @@ var ErrUnauthorized = errors.New("unauthorized")
 var ErrExpired = errors.New("authorization expired")
 
 const (
-	StatusAwaitingApproval = "awaiting_approval"
-	StatusApproved         = "approved"
-	StatusRejected         = "rejected"
-	StatusPending          = "pending"
-	StatusRunning          = "running"
-	StatusSuccess          = "success"
-	StatusFailed           = "failed"
-	StatusRollingBack      = "rolling-back"
-	StatusCancelled        = "cancelled"
+	StatusAwaitingApproval         = "awaiting_approval"
+	StatusApproved                 = "approved"
+	StatusRejected                 = "rejected"
+	StatusRollbackAwaitingApproval = "rollback_awaiting_approval"
+	StatusRollbackApproved         = "rollback_approved"
+	StatusRollbackRejected         = "rollback_rejected"
+	StatusPending                  = "pending"
+	StatusRunning                  = "running"
+	StatusSuccess                  = "success"
+	StatusFailed                   = "failed"
+	StatusRollingBack              = "rolling-back"
+	StatusCancelled                = "cancelled"
 )
 
 type Stage struct {
@@ -58,6 +61,8 @@ type Release struct {
 	Source                 string  `json:"source"`
 	ExternalID             string  `json:"externalId"`
 	Commit                 string  `json:"commit"`
+	ApprovalType           string  `json:"approvalType,omitempty"`
+	ApprovalRequester      string  `json:"approvalRequester,omitempty"`
 	ApprovedBy             string  `json:"approvedBy,omitempty"`
 	ApprovedAt             string  `json:"approvedAt,omitempty"`
 	ApprovalComment        string  `json:"approvalComment,omitempty"`
@@ -123,11 +128,12 @@ type Summary struct {
 }
 
 type Service struct {
-	mu        sync.RWMutex
-	releases  []Release
-	artifacts []Artifact
-	next      int
-	db        *sql.DB
+	mu         sync.RWMutex
+	releases   []Release
+	artifacts  []Artifact
+	next       int
+	db         *sql.DB
+	dispatcher Dispatcher
 }
 
 func approvalStages() []Stage {
@@ -150,7 +156,7 @@ func stages(running bool) []Stage {
 }
 
 func NewService() *Service {
-	s := &Service{next: 1}
+	s := &Service{next: 1, dispatcher: newDispatcherFromEnv()}
 	if demo.Enabled() {
 		now := time.Now()
 		s.releases = []Release{
@@ -266,7 +272,7 @@ func (s *Service) Start(in StartInput) (Release, error) {
 	item := Release{
 		ID: fmt.Sprintf("rel-manual-%d", now.UnixNano()), Application: in.Application, Version: in.Version,
 		PreviousVersion: "未提供", Environment: in.Environment, Status: StatusAwaitingApproval, Progress: 10,
-		Operator: in.Operator, Strategy: "灰度发布", Approval: "pending", Source: "manual",
+		Operator: in.Operator, Strategy: "灰度发布", Approval: "pending", ApprovalType: "deployment", ApprovalRequester: in.Operator, Source: "manual",
 		Stages: approvalStages(), startedAt: now, updatedAt: now,
 	}
 	applyReleaseDerived(&item)
@@ -293,14 +299,31 @@ func (s *Service) Approve(id, actor, comment string) (Release, string, error) {
 		return Release{}, "", err
 	}
 	item, err := s.mutateRelease(id, func(current *Release, now time.Time) error {
-		if current.Status != StatusAwaitingApproval || current.Approval != "pending" {
+		if current.Approval != "pending" {
 			return ErrInvalidState
 		}
-		if actor == current.Operator {
+		requester := firstNonEmpty(current.ApprovalRequester, current.Operator)
+		if actor == requester {
 			return ErrUnauthorized
 		}
-		current.Status = StatusApproved
-		current.Progress = 20
+		rollback := current.ApprovalType == "rollback"
+		if rollback {
+			if current.Status != StatusRollbackAwaitingApproval {
+				return ErrInvalidState
+			}
+			current.Status = StatusRollbackApproved
+			current.Progress = 15
+			current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "回滚审批", Status: StatusSuccess, Message: "回滚审批通过，已签发一次性执行授权"})
+			current.Stages = upsertStage(current.Stages, Stage{ID: "rollback", Name: "版本回滚", Status: StatusPending, Message: "回滚授权有效，等待消费"})
+		} else {
+			if current.Status != StatusAwaitingApproval {
+				return ErrInvalidState
+			}
+			current.Status = StatusApproved
+			current.Progress = 20
+			current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "发布门禁", Status: StatusSuccess, Message: "审批通过，已签发一次性执行授权"})
+			current.Stages = upsertStage(current.Stages, Stage{ID: "deploy", Name: "部署应用", Status: StatusPending, Message: "执行授权有效，等待消费"})
+		}
 		current.Approval = "approved"
 		current.ApprovedBy = actor
 		current.ApprovedAt = now.Format("2006-01-02 15:04")
@@ -308,8 +331,6 @@ func (s *Service) Approve(id, actor, comment string) (Release, string, error) {
 		current.authorizationHash = hash
 		current.authorizationExpiresAt = expiresAt
 		current.authorizationUsedAt = time.Time{}
-		current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "发布门禁", Status: StatusSuccess, Message: "审批通过，已签发一次性执行授权"})
-		current.Stages = upsertStage(current.Stages, Stage{ID: "deploy", Name: "部署应用", Status: StatusPending, Message: "执行授权有效，等待消费"})
 		current.updatedAt = now
 		applyReleaseDerived(current)
 		return nil
@@ -319,29 +340,40 @@ func (s *Service) Approve(id, actor, comment string) (Release, string, error) {
 	}
 	return item, token, nil
 }
-
 func (s *Service) Reject(id, actor, comment string) (Release, error) {
 	actor = strings.TrimSpace(actor)
 	if actor == "" {
 		return Release{}, ErrValidation
 	}
 	return s.mutateRelease(id, func(current *Release, now time.Time) error {
-		if current.Status != StatusAwaitingApproval || current.Approval != "pending" {
+		if current.Approval != "pending" {
 			return ErrInvalidState
 		}
-		current.Status = StatusRejected
-		current.Progress = 10
+		rollback := current.ApprovalType == "rollback"
+		if rollback {
+			if current.Status != StatusRollbackAwaitingApproval {
+				return ErrInvalidState
+			}
+			current.Status = StatusRollbackRejected
+			current.Progress = 15
+			current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "回滚审批", Status: StatusFailed, Message: "回滚审批未通过"})
+		} else {
+			if current.Status != StatusAwaitingApproval {
+				return ErrInvalidState
+			}
+			current.Status = StatusRejected
+			current.Progress = 10
+			current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "发布门禁", Status: StatusFailed, Message: "审批未通过"})
+		}
 		current.Approval = "rejected"
 		current.ApprovedBy = actor
 		current.ApprovedAt = now.Format("2006-01-02 15:04")
 		current.ApprovalComment = strings.TrimSpace(comment)
-		current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "发布门禁", Status: StatusFailed, Message: "审批未通过"})
 		current.updatedAt = now
 		applyReleaseDerived(current)
 		return nil
 	})
 }
-
 func (s *Service) AuthorizeExecution(id, token, actor string) (Release, error) {
 	token = strings.TrimSpace(token)
 	actor = strings.TrimSpace(actor)
@@ -351,7 +383,11 @@ func (s *Service) AuthorizeExecution(id, token, actor string) (Release, error) {
 	hash := hashAuthorization(token)
 	now := time.Now()
 	return s.mutateRelease(id, func(current *Release, changeTime time.Time) error {
-		if current.Status != StatusApproved || current.Approval != "approved" {
+		rollback := current.Status == StatusRollbackApproved
+		if current.Status != StatusApproved && !rollback {
+			return ErrInvalidState
+		}
+		if current.Approval != "approved" {
 			return ErrInvalidState
 		}
 		if current.authorizationHash == "" || subtle.ConstantTimeCompare([]byte(hash), []byte(current.authorizationHash)) != 1 {
@@ -364,15 +400,20 @@ func (s *Service) AuthorizeExecution(id, token, actor string) (Release, error) {
 			return ErrExpired
 		}
 		current.authorizationUsedAt = changeTime
-		current.Status = StatusRunning
-		current.Progress = 25
-		current.Stages = upsertStage(current.Stages, Stage{ID: "deploy", Name: "部署应用", Status: StatusRunning, Message: "一次性执行授权已消费，等待流水线继续部署"})
+		if rollback {
+			current.Status = StatusRollingBack
+			current.Progress = 15
+			current.Stages = upsertStage(current.Stages, Stage{ID: "rollback", Name: "版本回滚", Status: StatusRunning, Message: "一次性回滚授权已消费，正在恢复流量"})
+		} else {
+			current.Status = StatusRunning
+			current.Progress = 25
+			current.Stages = upsertStage(current.Stages, Stage{ID: "deploy", Name: "部署应用", Status: StatusRunning, Message: "一次性执行授权已消费，等待流水线继续部署"})
+		}
 		current.updatedAt = changeTime
 		applyReleaseDerived(current)
 		return nil
 	})
 }
-
 func (s *Service) mutateRelease(id string, change func(*Release, time.Time) error) (Release, error) {
 	now := time.Now()
 	if s.db != nil {
@@ -437,48 +478,28 @@ func (s *Service) Rollback(id, operator string) (Release, error) {
 	if operator == "" {
 		return Release{}, ErrValidation
 	}
-	now := time.Now()
-	if s.db != nil {
-		ctx, cancel := contextWithTimeout(8 * time.Second)
-		defer cancel()
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return Release{}, err
+	return s.mutateRelease(id, func(current *Release, now time.Time) error {
+		if current.Status != StatusSuccess && current.Status != StatusFailed {
+			return ErrInvalidState
 		}
-		defer tx.Rollback()
-
-		item, err := loadReleaseByIDForUpdate(ctx, tx, id)
-		if err != nil {
-			return Release{}, err
-		}
-		item.Status = StatusRollingBack
-		item.Operator = operator
-		item.Progress = 15
-		item.Stages = append(item.Stages, Stage{ID: "rollback", Name: "回滚至 " + item.PreviousVersion, Status: StatusRunning, Message: "正在恢复流量"})
-		item.updatedAt = now
-		applyReleaseDerived(&item)
-		if err := upsertRelease(ctx, tx, item); err != nil {
-			return Release{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return Release{}, err
-		}
-		return cloneRelease(item), nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.releases {
-		if s.releases[i].ID == id {
-			s.releases[i].Status = StatusRollingBack
-			s.releases[i].Operator = operator
-			s.releases[i].Progress = 15
-			s.releases[i].Stages = append(s.releases[i].Stages, Stage{ID: "rollback", Name: "回滚至 " + s.releases[i].PreviousVersion, Status: StatusRunning, Message: "正在恢复流量"})
-			s.releases[i].updatedAt = now
-			applyReleaseDerived(&s.releases[i])
-			return cloneRelease(s.releases[i]), nil
-		}
-	}
-	return Release{}, ErrNotFound
+		current.Status = StatusRollbackAwaitingApproval
+		current.Progress = 15
+		current.Approval = "pending"
+		current.ApprovalType = "rollback"
+		current.ApprovalRequester = operator
+		current.ApprovedBy = ""
+		current.ApprovedAt = ""
+		current.ApprovalComment = ""
+		current.approvedAt = time.Time{}
+		current.authorizationHash = ""
+		current.authorizationExpiresAt = time.Time{}
+		current.authorizationUsedAt = time.Time{}
+		current.Stages = upsertStage(current.Stages, Stage{ID: "approve", Name: "回滚审批", Status: StatusPending, Message: "等待其他管理员审批回滚申请"})
+		current.Stages = upsertStage(current.Stages, Stage{ID: "rollback", Name: "版本回滚", Status: StatusPending, Message: "回滚审批通过后签发一次性授权"})
+		current.updatedAt = now
+		applyReleaseDerived(current)
+		return nil
+	})
 }
 func (s *Service) ApplyEvent(in EventInput) (Release, error) {
 	normalizeEventInput(&in)
@@ -799,6 +820,9 @@ func applyReleaseDerived(item *Release) {
 	}
 	if !item.authorizationUsedAt.IsZero() {
 		item.AuthorizationUsedAt = item.authorizationUsedAt.Local().Format(time.RFC3339)
+	}
+	if item.ApprovalType == "" {
+		item.ApprovalType = "deployment"
 	}
 	if item.Stages == nil {
 		item.Stages = []Stage{}

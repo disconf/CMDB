@@ -3,6 +3,7 @@ package releases
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestApprovalAndExecutionAuthorization(t *testing.T) {
@@ -25,9 +26,23 @@ func TestApprovalAndExecutionAuthorization(t *testing.T) {
 	if _, err = service.AuthorizeExecution(item.ID, token, "operator"); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("expected one-time authorization consumption, got %v", err)
 	}
-	rolledBack, err := service.Rollback(item.ID, "operator")
-	if err != nil || rolledBack.Status != StatusRollingBack {
-		t.Fatalf("rollback: %#v %v", rolledBack, err)
+	if _, err = service.mutateRelease(item.ID, func(current *Release, _ time.Time) error {
+		current.Status = StatusSuccess
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rollbackRequested, err := service.Rollback(item.ID, "operator")
+	if err != nil || rollbackRequested.Status != StatusRollbackAwaitingApproval {
+		t.Fatalf("rollback request: %#v %v", rollbackRequested, err)
+	}
+	rollbackApproved, rollbackToken, err := service.Approve(item.ID, "approver-2", "rollback approved")
+	if err != nil || rollbackApproved.Status != StatusRollbackApproved || rollbackToken == "" {
+		t.Fatalf("rollback approve: %#v token=%q err=%v", rollbackApproved, rollbackToken, err)
+	}
+	rollingBack, err := service.AuthorizeExecution(item.ID, rollbackToken, "operator")
+	if err != nil || rollingBack.Status != StatusRollingBack {
+		t.Fatalf("rollback authorization: %#v %v", rollingBack, err)
 	}
 }
 

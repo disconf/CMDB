@@ -87,13 +87,31 @@ func TestPostgresManualApprovalLifecycle(t *testing.T) {
 	if err != nil || running.Status != StatusRunning || running.AuthorizationUsedAt == "" {
 		t.Fatalf("authorize execution: %#v %v", running, err)
 	}
+	if _, err = service.mutateRelease(item.ID, func(current *Release, _ time.Time) error {
+		current.Status = StatusSuccess
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rollbackRequested, err := service.Rollback(item.ID, "operator")
+	if err != nil || rollbackRequested.Status != StatusRollbackAwaitingApproval {
+		t.Fatalf("rollback request: %#v %v", rollbackRequested, err)
+	}
+	rollbackApproved, rollbackToken, err := service.Approve(item.ID, "approver-2", "rollback approved")
+	if err != nil || rollbackApproved.Status != StatusRollbackApproved || rollbackToken == "" {
+		t.Fatalf("rollback approve: %#v token=%q err=%v", rollbackApproved, rollbackToken, err)
+	}
+	rollingBack, err := service.AuthorizeExecution(item.ID, rollbackToken, "operator")
+	if err != nil || rollingBack.Status != StatusRollingBack {
+		t.Fatalf("rollback authorize: %#v %v", rollingBack, err)
+	}
 	loaded, err := service.List()
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, candidate := range loaded {
-		if candidate.ID == item.ID && candidate.AuthorizationUsedAt != "" {
+		if candidate.ID == item.ID && candidate.AuthorizationUsedAt != "" && candidate.Status == StatusRollingBack {
 			found = true
 			break
 		}

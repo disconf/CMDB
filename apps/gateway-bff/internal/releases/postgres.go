@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS release_deployments(
  updated_at timestamptz NOT NULL DEFAULT now(),
  strategy text NOT NULL DEFAULT '',
  approval text NOT NULL DEFAULT '',
+ approval_type text NOT NULL DEFAULT 'deployment',
+ approval_requester text NOT NULL DEFAULT '',
  ticket_id text NOT NULL DEFAULT '',
  source text NOT NULL DEFAULT 'manual',
  external_id text NOT NULL DEFAULT '',
@@ -35,6 +37,8 @@ CREATE TABLE IF NOT EXISTS release_deployments(
  authorization_expires_at timestamptz,
  authorization_used_at timestamptz
 );
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approval_type text NOT NULL DEFAULT 'deployment';
+ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approval_requester text NOT NULL DEFAULT '';
 ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approval_comment text NOT NULL DEFAULT '';
 ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';
 ALTER TABLE release_deployments ADD COLUMN IF NOT EXISTS approved_at timestamptz;
@@ -105,27 +109,28 @@ func upsertRelease(ctx context.Context, execer releaseExecer, item Release) erro
 	_, err := execer.ExecContext(ctx, `
 INSERT INTO release_deployments(
  id,application,version,previous_version,environment,status,progress,operator_name,started_at,updated_at,
- strategy,approval,ticket_id,source,external_id,commit_sha,stages,approval_comment,approved_by,approved_at,
+ strategy,approval,approval_type,approval_requester,ticket_id,source,external_id,commit_sha,stages,approval_comment,approved_by,approved_at,
  authorization_hash,authorization_expires_at,authorization_used_at
-) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
 ON CONFLICT(id) DO UPDATE SET
  application=excluded.application,version=excluded.version,previous_version=excluded.previous_version,
  environment=excluded.environment,status=excluded.status,progress=excluded.progress,
  operator_name=excluded.operator_name,updated_at=excluded.updated_at,strategy=excluded.strategy,
- approval=excluded.approval,ticket_id=excluded.ticket_id,source=excluded.source,
+ approval=excluded.approval,approval_type=excluded.approval_type,approval_requester=excluded.approval_requester,
+ ticket_id=excluded.ticket_id,source=excluded.source,
  external_id=excluded.external_id,commit_sha=excluded.commit_sha,stages=excluded.stages,
  approval_comment=excluded.approval_comment,approved_by=excluded.approved_by,approved_at=excluded.approved_at,
  authorization_hash=excluded.authorization_hash,authorization_expires_at=excluded.authorization_expires_at,
  authorization_used_at=excluded.authorization_used_at`,
 		item.ID, item.Application, item.Version, item.PreviousVersion, item.Environment,
 		item.Status, item.Progress, item.Operator, item.startedAt, item.updatedAt,
-		item.Strategy, item.Approval, item.TicketID, item.Source, item.ExternalID,
-		item.Commit, stages, item.ApprovalComment, item.ApprovedBy, nullableTime(item.approvedAt),
-		item.authorizationHash, nullableTime(item.authorizationExpiresAt), nullableTime(item.authorizationUsedAt),
+		item.Strategy, item.Approval, item.ApprovalType, item.ApprovalRequester, item.TicketID,
+		item.Source, item.ExternalID, item.Commit, stages, item.ApprovalComment,
+		item.ApprovedBy, nullableTime(item.approvedAt), item.authorizationHash,
+		nullableTime(item.authorizationExpiresAt), nullableTime(item.authorizationUsedAt),
 	)
 	return err
 }
-
 func upsertArtifact(ctx context.Context, execer releaseExecer, item Artifact) error {
 	_, err := execer.ExecContext(ctx, `
 INSERT INTO release_artifacts(id,application,version,commit_sha,size,created_at,security,source,url)
@@ -159,7 +164,7 @@ func loadReleases(ctx context.Context, queryer releaseQueryer) ([]Release, error
 
 const releaseSelectSQL = `SELECT
  id,application,version,previous_version,environment,status,progress,operator_name,started_at,updated_at,
- strategy,approval,ticket_id,source,external_id,commit_sha,stages,approval_comment,approved_by,approved_at,
+ strategy,approval,approval_type,approval_requester,ticket_id,source,external_id,commit_sha,stages,approval_comment,approved_by,approved_at,
  authorization_hash,authorization_expires_at,authorization_used_at
 FROM release_deployments`
 
@@ -196,7 +201,8 @@ func scanRelease(scanner releaseScanner) (Release, error) {
 		&item.ID, &item.Application, &item.Version, &item.PreviousVersion,
 		&item.Environment, &item.Status, &item.Progress, &item.Operator,
 		&item.startedAt, &item.updatedAt, &item.Strategy, &item.Approval,
-		&item.TicketID, &item.Source, &item.ExternalID, &item.Commit, &stages,
+		&item.ApprovalType, &item.ApprovalRequester, &item.TicketID, &item.Source,
+		&item.ExternalID, &item.Commit, &stages,
 		&item.ApprovalComment, &item.ApprovedBy, &approvedAt,
 		&item.authorizationHash, &authorizationExpiresAt, &authorizationUsedAt,
 	); err != nil {
