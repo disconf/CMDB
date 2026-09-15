@@ -15,8 +15,30 @@ const headers=computed(()=>({Authorization:`Bearer ${auth.token}`,'Content-Type'
 const sshCredentials=computed(()=>credentials.value.filter(item=>item.kind==='ssh'))
 const activeOperation=computed(()=>operations.value.find(item=>item.id===operationId.value))
 async function request<T>(url:string,options?:RequestInit){const response=await fetch(url,{...options,headers:headers.value});if(!response.ok){let detail=`请求失败 (${response.status})`;try{const body=await response.json() as {message?:string};detail=body.message||detail}catch{}throw new Error(detail)}return response.json() as Promise<T>}
-async function load(){try{const [ops,history,creds,options]=await Promise.all([request<Operation[]>('/api/v1/discovery/remote-operations'),request<Execution[]>('/api/v1/discovery/remote-executions'),listCredentials(auth.token),request<TargetOptions>('/api/v1/discovery/remote-target-options')]);operations.value=ops;executions.value=history;credentials.value=creds;targetOptions.value=options;error.value=''}catch(reason){error.value=reason instanceof Error?reason.message:'远程执行数据加载失败'}}
-function selectorPayload(){return {projectGroups:targetMode.value==='projectGroup'?selectedGroups.value:[],tags:targetMode.value==='tag'?selectedTags.value:[],ips:targetMode.value==='ip'?ipText.value.split(/[,\s]+/).map(value=>value.trim()).filter(Boolean):[],assetIds:[]}}
+function settledValue<T>(result: PromiseSettledResult<T>, fallback: T): T {
+  return result.status === 'fulfilled' ? result.value : fallback
+}
+async function load(){
+  try {
+    const results = await Promise.allSettled([
+      request<Operation[]>('/api/v1/discovery/remote-operations'),
+      request<Execution[]>('/api/v1/discovery/remote-executions'),
+      listCredentials(auth.token),
+      request<TargetOptions>('/api/v1/discovery/remote-target-options'),
+    ])
+    operations.value = settledValue(results[0], [] as Operation[])
+    executions.value = settledValue(results[1], [] as Execution[])
+    credentials.value = settledValue(results[2], [] as Credential[])
+    targetOptions.value = settledValue(results[3], { projectGroups: [], tags: [] })
+    if ([results[0], results[3]].some(result => result.status === 'rejected')) {
+      error.value = '核心批量执行数据加载失败，请检查账号权限或后端服务'
+    } else {
+      error.value = ''
+    }
+  } catch(reason) {
+    error.value = reason instanceof Error ? reason.message : '远程执行数据加载失败'
+  }
+}function selectorPayload(){return {projectGroups:targetMode.value==='projectGroup'?selectedGroups.value:[],tags:targetMode.value==='tag'?selectedTags.value:[],ips:targetMode.value==='ip'?ipText.value.split(/[,\s]+/).map(value=>value.trim()).filter(Boolean):[],assetIds:[]}}
 async function resolveTargets(){resolving.value=true;error.value='';message.value='';try{const result=await request<TargetResolve>('/api/v1/discovery/remote-targets/resolve',{method:'POST',body:JSON.stringify(selectorPayload())});resolvedTargets.value=result.targets;resolvedAssets.value=result.assets;message.value=`已匹配 ${result.assets.length} 台主机，去重后 ${result.targets.length} 个 IP`}catch(reason){resolvedTargets.value=[];resolvedAssets.value=[];error.value=reason instanceof Error?reason.message:'目标解析失败'}finally{resolving.value=false}}
 async function submit(){busy.value=true;error.value='';message.value='';try{if(!resolvedTargets.value.length)await resolveTargets();if(!resolvedTargets.value.length)return;const execution=await request<Execution>('/api/v1/discovery/remote-executions',{method:'POST',body:JSON.stringify({operationId:commandMode.value==='preset'?operationId.value:'',command:commandMode.value==='custom'?customCommand.value:'',targets:resolvedTargets.value,port:port.value,credentialId:credentialId.value})});message.value=`${execution.id} 已提交，等待审批后执行`;await load()}catch(reason){error.value=reason instanceof Error?reason.message:'提交失败'}finally{busy.value=false}}
 async function approve(id:string){busy.value=true;error.value='';try{await request(`/api/v1/discovery/remote-executions/${encodeURIComponent(id)}/approve`,{method:'POST'});message.value=`${id} 已审批并开始执行`;await load()}catch(reason){error.value=reason instanceof Error?reason.message:'审批失败'}finally{busy.value=false}}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { Activity, BellRing, Bot, Box, ChevronDown, ClipboardCheck, Database, Gauge, LayoutDashboard, LogOut, Maximize2, Network, Radar, RadioTower, Rocket, Search, Server, Settings, Terminal, TicketCheck, Wrench } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Activity, BellRing, Bot, Box, ChevronDown, ClipboardCheck, Database, FileUp, Gauge, LayoutDashboard, LogOut, Maximize2, Network, Play, Radar, RadioTower, Rocket, Search, Server, Settings, ShieldAlert, ShieldCheck, Terminal, TicketCheck, Wrench } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import DashboardPanel from '@/components/DashboardPanel.vue'
 import LoginPage from '@/components/LoginPage.vue'
@@ -20,10 +20,16 @@ import TrendChart from '@/components/TrendChart.vue'
 import { useDashboardStore } from '@/stores/useDashboardStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { formatUpdateTime } from '@/features/dashboard/dashboardModel'
+import { remoteSections, resolveRemoteSection } from '@/features/remote/remoteNavigation'
 
 const store = useDashboardStore(); const auth=useAuthStore(); const route=useRoute(); const router=useRouter()
 const iconMap = { Database, RadioTower, BellRing, ClipboardCheck }
 const navigationIcons={LayoutDashboard,Database,Network,Radar,BellRing,ClipboardCheck,TicketCheck,Rocket,Wrench,Bot,Settings,Terminal}
+const remoteSectionIcons={overview:LayoutDashboard,sessions:Terminal,files:FileUp,execution:Play,approvals:ShieldAlert,security:ShieldCheck}
+const remoteExpanded=ref(route.path.startsWith('/remote'))
+const remoteSection=computed(()=>resolveRemoteSection(route.path))
+watch(()=>route.path,path=>{if(path.startsWith('/remote')) remoteExpanded.value=true},{immediate:true})
+function openModule(item:{code:string;path:string}){if(item.code==='remote'){remoteExpanded.value=true;void router.push('/remote/overview');return}void router.push(item.path)}
 const currentTime = computed(()=>store.overview ? formatUpdateTime(store.overview.updatedAt) : '--')
 let timer: ReturnType<typeof setInterval> | undefined; let controller: AbortController | undefined
 function refresh(){ controller?.abort(); controller=new AbortController(); void store.load(controller.signal) }
@@ -35,7 +41,7 @@ async function signOut(){await auth.signOut();await router.replace('/login')}
 <template>
   <LoginPage v-if="route.path==='/login'" />
   <div v-else class="app-shell">
-    <aside class="sidebar"><div class="brand"><span class="brand-mark"><Gauge /></span><strong>智能运维中心</strong></div><nav aria-label="主导航"><button v-for="item in auth.modules" :key="item.code" :class="{active:route.path===item.path}" @click="router.push(item.path)"><component :is="navigationIcons[item.icon as keyof typeof navigationIcons]" /><span>{{item.name}}</span></button></nav><div class="system-status"><i></i><div><strong>系统运行正常</strong><span>12 个核心服务在线</span></div></div></aside>
+    <aside class="sidebar"><div class="brand"><span class="brand-mark"><Gauge /></span><strong>智能运维中心</strong></div><nav aria-label="主导航"><template v-for="item in auth.modules" :key="item.code"><button :class="{active:item.code==='remote'?route.path.startsWith(item.path):route.path===item.path}" @click="openModule(item)"><component :is="navigationIcons[item.icon as keyof typeof navigationIcons]" /><span>{{item.name}}</span></button><div v-if="item.code==='remote' && remoteExpanded" class="sidebar-subnav"><button v-for="child in remoteSections" :key="child.id" :class="{active:remoteSection===child.id}" @click="router.push(child.path)"><component :is="remoteSectionIcons[child.id]"/><span>{{child.shortName}}</span></button></div></template></nav><div class="system-status"><i></i><div><strong>系统运行正常</strong><span>12 个核心服务在线</span></div></div></aside>
     <main>
       <header class="topbar"><div class="scope"><span class="status"><i></i>运行正常</span><span>数据中心</span><button>华东 · 上海 <ChevronDown /></button></div><div class="top-actions"><span class="clock">{{currentTime}}</span><button aria-label="搜索"><Search /></button><button aria-label="全屏" @click="fullscreen"><Maximize2 /></button><button class="avatar">{{auth.user?.displayName.slice(0,1)}}</button><span>{{auth.user?.displayName}}</span><button class="logout-action" aria-label="退出登录" @click="signOut"><LogOut /></button></div></header>
       <div v-if="store.error" class="error-banner">{{store.error}} <button @click="refresh">重新加载</button></div>
@@ -61,7 +67,7 @@ async function signOut(){await auth.signOut();await router.replace('/login')}
       </section>
       <CmdbPage v-else-if="route.path==='/cmdb'" />
       <DiscoveryPage v-else-if="route.path==='/discovery'" />
-      <RemoteAccessPage v-else-if="route.path==='/remote'" />
+      <RemoteAccessPage v-else-if="route.path.startsWith('/remote')" :section="remoteSection" />
       <TopologyPage v-else-if="route.path==='/topology'" />
       <MonitorPage v-else-if="route.path==='/monitor'" />
       <JobsPage v-else-if="route.path==='/jobs'" />

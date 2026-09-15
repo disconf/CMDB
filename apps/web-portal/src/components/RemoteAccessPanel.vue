@@ -29,6 +29,14 @@ type PolicyAudit = { id:string; actor:string; action:string; target:string; deta
 type PolicyBatchError = { subjectType:string; subject:string; message:string }
 type PolicyBatchResult = { applied:SecurityPolicy[]; errors:PolicyBatchError[] }
 
+const props = defineProps<{ view?: string }>()
+const activeView = computed(() => props.view || 'sessions')
+const panelHeading = computed(() => ({
+  sessions: { title: '终端会话', description: '建立 WebSSH、协作接入并管理在线会话和交互终端' },
+  files: { title: '文件传输', description: '在终端安全策略约束下执行受控上传与下载' },
+  approvals: { title: '审批与审计', description: '处理高风险命令审批，并回放历史会话和终端录像' },
+  security: { title: '安全设置', description: '维护账户授权、主机指纹与终端安全策略' },
+}[activeView.value] || { title: '终端会话', description: '建立 WebSSH、协作接入并管理在线会话和交互终端' }))
 const auth = useAuthStore()
 const assets = ref<Asset[]>([])
 const grants = ref<Grant[]>([])
@@ -129,7 +137,7 @@ const filteredHistory = computed(() => {
     return matchesQuery && matchesStatus
   })
 })
-const isPlatformAdmin = computed(() => auth.user?.roles.some(role => role === 'admin' || role === 'platform-admin') ?? false)
+const isPlatformAdmin = computed(() => (auth.user?.roles || []).some(role => role === 'admin' || role === 'platform-admin'))
 const canManageSelectedSession = computed(() => Boolean(selectedSession.value && (isPlatformAdmin.value || selectedSession.value.operator === auth.user?.username)))
 const terminalReadOnly = computed(() => terminalAccess.value === 'readonly' || selectedSession.value?.accessMode === 'readonly')
 const watermarkText = computed(() => `${auth.user?.username || 'unknown'} · ${watermarkTime.value} · ${selectedSession.value?.assetName || 'CMDB 远程运维'}`)
@@ -396,11 +404,14 @@ function startSessionPolling() {
   sessionPoll = setInterval(() => { void refreshSessions() }, 15000)
 }
 
+function settledValue<T>(result: PromiseSettledResult<T>, fallback: T): T {
+  return result.status === 'fulfilled' ? result.value : fallback
+}
 async function load() {
   busy.value = true
   error.value = ''
   try {
-    const [assetPage, gs, ss, cs, hks, hs, approvals, effective, policies, templates, audits, users, roles] = await Promise.all([
+    const results = await Promise.allSettled([
       request<{data:Asset[]}>('/api/v1/cmdb/assets?page=1&pageSize=100&type=server'),
       request<Grant[]>('/api/v1/discovery/access-grants'),
       request<Session[]>('/api/v1/discovery/remote-sessions'),
@@ -415,19 +426,22 @@ async function load() {
       isPlatformAdmin.value ? request<PolicyUser[]>('/api/v1/system/users') : Promise.resolve([] as PolicyUser[]),
       isPlatformAdmin.value ? request<PolicyRole[]>('/api/v1/system/roles') : Promise.resolve([] as PolicyRole[]),
     ])
-    assets.value = assetPage.data
-    grants.value = gs
-    sessions.value = ss
-    credentials.value = cs
-    hostKeys.value = hks
-    history.value = hs
-    terminalApprovals.value = approvals
-    effectivePolicy.value = effective
-    securityPolicies.value = policies
-    policyTemplates.value = templates
-    policyAudits.value = audits
-    policyUsers.value = users
-    policyRoles.value = roles
+    assets.value = settledValue(results[0], { data: [] as Asset[] }).data
+    grants.value = settledValue(results[1], [] as Grant[])
+    sessions.value = settledValue(results[2], [] as Session[])
+    credentials.value = settledValue(results[3], [] as Credential[])
+    hostKeys.value = settledValue(results[4], [] as HostKey[])
+    history.value = settledValue(results[5], [] as Session[])
+    terminalApprovals.value = settledValue(results[6], [] as TerminalApproval[])
+    effectivePolicy.value = settledValue(results[7], undefined as SecurityPolicy | undefined)
+    securityPolicies.value = settledValue(results[8], [] as SecurityPolicy[])
+    policyTemplates.value = settledValue(results[9], [] as PolicyTemplate[])
+    policyAudits.value = settledValue(results[10], [] as PolicyAudit[])
+    policyUsers.value = settledValue(results[11], [] as PolicyUser[])
+    policyRoles.value = settledValue(results[12], [] as PolicyRole[])
+    if ([results[0], results[2], results[7]].some(result => result.status === 'rejected')) {
+      error.value = '核心远程运维数据加载失败，请检查账号权限或后端服务'
+    }
     if (!selectedAssetId.value && assets.value.length) selectedAssetId.value = assets.value[0].id
     if (!selectedSessionId.value && sessions.value.length) selectedSessionId.value = sessions.value[0].id
     if (replaySession.value) replaySession.value = history.value.find(item => item.id === replaySession.value?.id) || replaySession.value
@@ -832,12 +846,12 @@ onBeforeUnmount(() => {
 <template>
   <section class="remote-access">
     <header>
-      <div><h2>远程终端与文件传输</h2><span>基于资产级授权，命令、文件操作和会话回放全程审计</span></div>
+      <div><h2>{{ panelHeading.title }}</h2><span>{{ panelHeading.description }}</span></div>
       <button @click="load"><RefreshCw :class="{spin:busy}"/></button>
     </header>
     <div v-if="error" class="access-error">{{error}}</div>
-    <div class="access-grid">
-      <section class="access-card">
+    <div class="access-grid" :data-view="activeView">
+      <section v-if="activeView==='security'" class="access-card">
         <h3><ShieldCheck/>账户授权</h3>
         <div class="access-form grant-form">
           <div class="grant-main-row">
@@ -866,7 +880,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="access-card">
+      <section v-if="activeView==='security'" class="access-card">
         <h3><ShieldCheck/>主机指纹</h3>
         <div class="access-form">
           <button @click="probeHostKey">探测当前资产指纹</button>
@@ -875,7 +889,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="access-card">
+      <section v-if="activeView==='sessions'" class="access-card">
         <h3><TerminalIcon/>远程会话</h3>
         <div class="access-form">
           <select v-model="selectedAssetId"><option v-for="asset in assets" :key="asset.id" :value="asset.id">{{asset.name}} · {{asset.ip}}</option></select>
@@ -918,17 +932,28 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="access-card">
-        <h3><FileUp/>文件传输</h3>
-        <label>上传目标路径<input v-model="uploadPath"></label>
-        <input type="file" @change="uploadFile=($event.target as HTMLInputElement).files?.[0]">
-        <button :disabled="!selectedSessionId||!uploadFile||terminalReadOnly" @click="upload"><Upload/>上传</button>
-        <label>下载远程路径<input v-model="downloadPath"></label>
-        <button :disabled="!selectedSessionId||terminalReadOnly" @click="download">下载</button>
-        <p>当前生效文件策略：{{policyFileSummary}}。路径不允许包含 `..`，服务端仍会按最终策略再次校验。</p>
+      <section v-if="activeView==='files'" class="access-card file-transfer-card">
+        <header class="file-transfer-head">
+          <div><h3><FileUp/>文件传输</h3><span>围绕当前远程会话，在账号生效策略的路径和大小范围内执行上传、下载。</span></div>
+          <b :data-ready="Boolean(selectedSessionId)">{{selectedSessionId ? '会话已选择' : '尚未选择会话'}}</b>
+        </header>
+        <div class="file-transfer-grid">
+          <article class="file-transfer-lane">
+            <header><Upload/><div><strong>上传到远程主机</strong><span>选择本地文件并指定目标路径</span></div></header>
+            <label>上传目标路径<input v-model="uploadPath" placeholder="/tmp/upload.bin"></label>
+            <input type="file" @change="uploadFile=($event.target as HTMLInputElement).files?.[0]">
+            <button class="primary" :disabled="!selectedSessionId||!uploadFile||terminalReadOnly" @click="upload"><Upload/>上传文件</button>
+          </article>
+          <article class="file-transfer-lane">
+            <header><FileUp/><div><strong>从远程主机下载</strong><span>输入远程路径并下载到本地</span></div></header>
+            <label>下载远程路径<input v-model="downloadPath" placeholder="/etc/os-release"></label>
+            <button class="primary" :disabled="!selectedSessionId||terminalReadOnly" @click="download"><FileUp/>下载文件</button>
+          </article>
+        </div>
+        <p class="policy-effective">当前生效文件策略：{{policyFileSummary}}。路径不允许包含 `..`，服务端仍会按最终策略再次校验。</p>
       </section>
 
-      <section class="access-card live-terminal-card">
+      <section v-if="activeView==='sessions'" class="access-card live-terminal-card">
         <header class="live-terminal-head">
           <div><h3><TerminalIcon/>交互式 WebSSH</h3><span>PTY 实时终端，逐屏录像写入 PostgreSQL；高风险命令在执行前自动阻止</span></div>
           <div class="terminal-actions">
@@ -944,7 +969,7 @@ onBeforeUnmount(() => {
         <div v-if="!terminalMode" class="terminal-empty"><TerminalIcon/><strong>选择或新建远程会话后连接</strong><span>支持交互输入、窗口缩放、逐屏录像与风险命令阻断</span></div>
       </section>
 
-      <section v-if="isPlatformAdmin" class="access-card policy-card">
+      <section v-if="activeView==='security' && isPlatformAdmin" class="access-card policy-card">
         <header class="policy-head"><div><h3><ShieldCheck/>终端安全策略中心</h3><span>用户策略优先于角色策略，角色策略优先于全局默认策略；修改与批量分发全程审计</span></div><b>{{securityPolicies.length}} 条策略</b></header>
         <div class="policy-template-center">
           <header><div><h4><History/>策略模板与版本</h4><span>模板持久化保存，每次编辑自动生成不可变版本；应用模板只填充参数，不会直接修改线上策略</span></div><button class="primary" @click="startCreatePolicyTemplate">将当前配置存为模板</button></header>
@@ -1015,7 +1040,7 @@ onBeforeUnmount(() => {
           </ul>
         </div>
       </section>
-      <section class="access-card approval-card">
+      <section v-if="activeView==='approvals'" class="access-card approval-card">
         <header class="approval-head">
           <div><h3><ShieldAlert/>高风险命令审批</h3><span>命令先暂停，平台管理员批准后按一次性授权放行；拒绝或超时均不会执行</span></div>
           <b :data-active="pendingApprovalCount > 0">{{pendingApprovalCount}} 条待处理</b>
@@ -1042,7 +1067,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="access-card history-card">
+      <section v-if="activeView==='approvals'" class="access-card history-card">
         <header class="history-head"><div><h3><History/>历史会话与命令回放</h3><span>会话日志持久化保存，重启后仍可审计和回放</span></div><b>{{filteredHistory.length}} 条</b></header>
         <div class="history-toolbar">
           <label class="search-box"><Search/><input v-model="historyQuery" placeholder="搜索资产、IP、操作人或会话 ID"></label>
@@ -1099,4 +1124,28 @@ onBeforeUnmount(() => {
 
 .grant-form{gap:9px}.grant-main-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grant-main-row input:not([type=checkbox]){min-width:150px}.grant-scope-picker{display:flex;gap:6px;max-height:150px;overflow:auto;padding:8px;border:1px solid #16445c;background:#04121c;flex-wrap:wrap}.grant-scope-picker label{display:flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid #17415a;background:#082638;color:#dcecff;font-size:11px;cursor:pointer}.grant-scope-picker label:hover{border-color:#22d3ee}.grant-scope-picker em{color:#64748b;font-size:10px;font-style:normal}.policy-template-center{margin-top:12px;padding:11px;border:1px solid #16445c;background:#061620}.policy-template-center>header,.policy-template-history>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.policy-template-center h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-template-center>header span,.policy-template-editor>header span{display:block;margin-top:3px;color:#6f91a5;font-size:10px}.policy-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin-top:9px}.policy-template-grid article{display:grid;gap:6px;padding:10px;border:1px solid #17415a;background:#082638}.policy-template-grid article.disabled{opacity:.5}.policy-template-grid article>header{display:flex;justify-content:space-between;gap:8px}.policy-template-grid article p{margin:0;color:#8fb2c4;font-size:10px}.policy-template-grid article small{color:#6f91a5;font-size:9px}.policy-template-grid article footer,.policy-template-editor footer{display:flex;gap:6px;flex-wrap:wrap}.policy-template-empty{display:grid;place-items:center;min-height:110px;color:#64748b;font-size:11px;border:1px dashed #17415a}.policy-template-editor{display:grid;gap:7px;margin-top:10px;padding:10px;border:1px solid #155e75;background:#04121c}.policy-template-editor input{padding:7px;border:1px solid #22465f;background:#061725;color:#dcecff}.policy-template-editor label{color:#8fb2c4;font-size:10px}.policy-template-history{display:grid;gap:5px;margin-top:10px;padding:9px;border:1px solid #123043;background:#040f17}.policy-template-history article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 5px;border-top:1px solid #123043}.policy-template-history article>div{display:grid;gap:2px}.policy-template-history span,.policy-template-history small{color:#7894a8;font-size:9px}
 
-.lease-strip{display:grid;grid-template-columns:auto auto 1fr;gap:4px 8px;align-items:center;margin-top:9px;padding:8px 10px;border:1px solid #16445c;border-radius:8px;background:#061a29}.lease-strip>span{color:#6f91a5;font-size:10px}.lease-strip>strong{color:#a5f3fc;font-size:11px}.lease-strip>small{color:#8fb2c4;font-size:10px}.lease-strip>em{grid-column:1/-1;color:#64748b;font-size:9px;font-style:normal}.lease-strip[data-state=online]{border-color:#155e75;background:#07212e}.lease-strip[data-state=pending]{border-color:#854d0e;background:#2a1e08}.lease-strip[data-state=offline]{border-color:#7f1d1d;background:#2c1116}@media(max-width:1200px){.lease-strip{grid-template-columns:auto 1fr}}</style>
+.lease-strip{display:grid;grid-template-columns:auto auto 1fr;gap:4px 8px;align-items:center;margin-top:9px;padding:8px 10px;border:1px solid #16445c;border-radius:8px;background:#061a29}.lease-strip>span{color:#6f91a5;font-size:10px}.lease-strip>strong{color:#a5f3fc;font-size:11px}.lease-strip>small{color:#8fb2c4;font-size:10px}.lease-strip>em{grid-column:1/-1;color:#64748b;font-size:9px;font-style:normal}.lease-strip[data-state=online]{border-color:#155e75;background:#07212e}.lease-strip[data-state=pending]{border-color:#854d0e;background:#2a1e08}.lease-strip[data-state=offline]{border-color:#7f1d1d;background:#2c1116}@media(max-width:1200px){.lease-strip{grid-template-columns:auto 1fr}}.access-grid[data-view=sessions]{grid-template-columns:minmax(380px,.9fr) minmax(620px,1.5fr)}
+.access-grid[data-view=sessions] .live-terminal-card{grid-column:auto}
+.access-grid[data-view=sessions] .live-terminal-head{flex-wrap:wrap}
+.access-grid[data-view=sessions] .terminal-actions{justify-content:flex-end;flex-wrap:wrap}
+.access-grid[data-view=sessions] .terminal-actions button,.access-grid[data-view=sessions] .terminal-actions b{white-space:nowrap}
+.access-grid[data-view=files]{grid-template-columns:minmax(0,960px)}
+.file-transfer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.file-transfer-head>div{display:grid;gap:4px}
+.file-transfer-head h3{margin:0}
+.file-transfer-head>div>span{color:#6f91a5;font-size:10px}
+.file-transfer-head>b{padding:5px 10px;border-radius:999px;background:#101c25;color:#8fb2c4;font-size:10px;white-space:nowrap}
+.file-transfer-head>b[data-ready=true]{background:#0b2f2b;color:#5eead4}
+.file-transfer-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.file-transfer-lane{display:grid;align-content:start;gap:10px;padding:14px;border:1px solid #16445c;background:#061620}
+.file-transfer-lane>header{display:flex;align-items:center;gap:9px}
+.file-transfer-lane>header svg{width:18px;color:#22d3ee}
+.file-transfer-lane>header>div{display:grid;gap:3px}
+.file-transfer-lane strong{font-size:12px}
+.file-transfer-lane header span{color:#6f91a5;font-size:9px}
+.file-transfer-lane label{display:grid;gap:5px;color:#8fb2c4;font-size:10px}
+.file-transfer-lane input{width:100%;box-sizing:border-box;padding:9px;border:1px solid #22465f;background:#061725;color:#dcecff}
+.file-transfer-lane button{justify-self:start;white-space:nowrap}
+.access-grid[data-view=approvals]{grid-template-columns:1fr}
+.access-grid[data-view=security]{grid-template-columns:1fr}
+.access-grid[data-view=security] .access-card{min-width:0}</style>
