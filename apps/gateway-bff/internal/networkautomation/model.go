@@ -58,5 +58,6 @@ type Report struct {
 	Resolved         int      `json:"resolved"`
 	VerificationJobs int      `json:"verificationJobs"`
 	AlertsSynced     int      `json:"alertsSynced"`
+	Snapshots        int      `json:"snapshots"`
 	Errors           []string `json:"errors,omitempty"`
 }

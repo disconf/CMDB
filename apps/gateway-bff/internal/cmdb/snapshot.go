@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+var topologySnapshotSequence uint64
 
 type TopologySnapshot struct {
 	ID          string          `json:"id"`
@@ -39,7 +42,7 @@ func (s *Service) SaveTopologySnapshot(input TopologySnapshotInput) (TopologySna
 		return TopologySnapshot{}, ErrValidation
 	}
 	snapshot := TopologySnapshot{
-		ID: fmt.Sprintf("snap-%d", time.Now().UnixNano()), Kind: input.Kind, Environment: input.Environment,
+		ID: fmt.Sprintf("snap-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&topologySnapshotSequence, 1)), Kind: input.Kind, Environment: input.Environment,
 		NodeCount: input.NodeCount, EdgeCount: input.EdgeCount, Payload: append(json.RawMessage(nil), input.Payload...),
 		Operator: input.Operator, CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 	}

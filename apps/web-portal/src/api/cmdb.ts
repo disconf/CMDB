@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -59,3 +59,6 @@ export const updateNetworkAutomationPolicy=(token:string,id:string,input:Partial
 export const deleteNetworkAutomationPolicy=(token:string,id:string)=>del<void>(`/api/v1/cmdb/network-automation-policies/${encodeURIComponent(id)}`,token)
 export const evaluateNetworkAutomation=(token:string)=>send<NetworkAutomationReport>('/api/v1/cmdb/network-automation-policies/evaluate',token,'POST',{})
 export const fetchNetworkAutomationLifecycle=(token:string)=>get<NetworkAutomationLifecycle[]>('/api/v1/cmdb/network-automation-lifecycle',token)
+export const fetchNetworkTopologySnapshots=(token:string,limit=20)=>get<TopologySnapshot[]>(`/api/v1/cmdb/network-topology-snapshots?limit=${limit}`,token)
+export const captureNetworkTopologySnapshot=(token:string)=>send<TopologySnapshot>('/api/v1/cmdb/network-topology-snapshots',token,'POST',{})
+export const fetchNetworkTopologyDiff=(token:string,from='',to='')=>get<NetworkDiff>(`/api/v1/cmdb/network-topology-diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,token)

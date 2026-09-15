@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/networkautomation"
@@ -80,6 +81,40 @@ func registerNetworkAutomationRoutes(mux *http.ServeMux, authService *auth.Servi
 			return
 		}
 		writeJSON(w, http.StatusOK, report)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/network-topology-snapshots", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		snapshot, err := service.CaptureNetworkSnapshot(user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "SNAPSHOT_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, snapshot)
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-topology-snapshots", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		writeJSON(w, http.StatusOK, service.NetworkSnapshots(limit))
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-topology-diff", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		diff, err := service.NetworkDiff(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+		if errors.Is(err, networkautomation.ErrSnapshotNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "SNAPSHOT_NOT_FOUND", "message": "网络快照不存在"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "DIFF_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, diff)
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/network-automation-lifecycle", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {

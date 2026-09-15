@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { acknowledgeNetworkAnomaly, createNetworkAnomalyTicket, fetchNetworkAnomalies, fetchNetworkDevices, fetchNetworkLinkHistory, fetchNetworkLinks, fetchVLANInventory, resolveNetworkAnomaly, syncNetworkAnomalies } from '@/api/cmdb'
 import { useAuthStore } from '@/stores/useAuthStore'
 import NetworkAutomationPanel from './NetworkAutomationPanel.vue'
+import NetworkTopologyDiffPanel from './NetworkTopologyDiffPanel.vue'
 import type { NetworkAnomaly, NetworkDeviceInventory, NetworkLink, NetworkLinkHistoryEntry, VLANInventory } from '@/features/cmdb/types'
 
 const auth = useAuthStore()
@@ -183,7 +184,7 @@ onMounted(load)
         <div v-if="!anomalies.length" class="network-empty">当前没有检测到网络异常</div>
       </div>
     </section>
-    <NetworkAutomationPanel />
+    <NetworkAutomationPanel />`r`n    <NetworkTopologyDiffPanel />
   </section>
 </template>
 

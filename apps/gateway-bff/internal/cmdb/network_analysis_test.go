@@ -23,7 +23,7 @@ func TestVLANInventoryAndAnomalyDetection(t *testing.T) {
 	for _, item := range anomalies {
 		seen[item.Type] = true
 	}
-	if !seen["mac-port-flapping"] || !seen["arp-ip-conflict"] {
+	if !seen["mac-port-flapping"] || !seen["arp-ip-conflict"] || !seen["unmanaged-access"] {
 		t.Fatalf("expected MAC/ARP anomalies: %#v", anomalies)
 	}
 	acked, err := service.AcknowledgeNetworkAnomaly(anomalies[0].ID, "admin", "已确认")

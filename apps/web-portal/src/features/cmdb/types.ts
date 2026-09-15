@@ -34,3 +34,7 @@ export interface NetworkAnomaly { id:string;type:string;severity:string;status:s
 export interface NetworkAutomationPolicy { id:string;name:string;enabled:boolean;priority:number;severity:string;anomalyType:string;environment:string;projectGroup:string;location:string;autoTicket:boolean;assignee:string;escalationMinutes:number;escalateTo:string;verificationTemplate:string;createdAt:string;updatedAt:string }
 export interface NetworkAutomationLifecycle { anomalyId:string;policyId:string;status:string;title?:string;severity?:string;target?:string;firstSeenAt:string;lastSeenAt:string;resolvedAt?:string;ticketId?:string;escalatedAt?:string;verificationJobId?:string }
 export interface NetworkAutomationReport { evaluated:number;policies:number;autoTickets:number;escalated:number;resolved:number;verificationJobs:number;alertsSynced:number;errors?:string[] }
+
+export interface NetworkDiffSummary { added:number;removed:number;changed:number;unknownAccess:number }
+export interface NetworkDiffChange { kind:string;action:string;id:string;name:string;detail:string;before?:string;after?:string }
+export interface NetworkDiff { from:string;to:string;generatedAt:string;summary:NetworkDiffSummary;changes:NetworkDiffChange[] }

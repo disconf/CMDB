@@ -151,6 +151,7 @@ func (s *Service) NetworkAnomalies() []NetworkAnomaly {
 	anomalies := []NetworkAnomaly{}
 	arpByIP := map[string][]arpObservation{}
 	macTargets := map[string]map[string]arpObservation{}
+	knownMACs := knownNetworkMACs(assets)
 	for _, asset := range assets {
 		if asset.Type != "network-device" && asset.Type != "load-balancer" {
 			continue
@@ -167,6 +168,13 @@ func (s *Service) NetworkAnomalies() []NetworkAnomaly {
 					macTargets[obs.MAC] = map[string]arpObservation{}
 				}
 				macTargets[obs.MAC][obs.DeviceID+"|"+obs.PortName+"|"+obs.VLAN] = obs
+				if entry.AssetID == "" && !knownMACs[obs.MAC] {
+					severity := "warning"
+					if _, knownIP := byIP[obs.IP]; !knownIP {
+						severity = "critical"
+					}
+					addNetworkAnomaly(&anomalies, "unmanaged-access", severity, "发现未授权或未纳管接入", fmt.Sprintf("%s 端口 %s 上发现未知 IP %s / MAC %s", asset.Name, port.Name, obs.IP, obs.MAC), "", "", asset.ID, asset.Name, port.Name, obs.VLAN, obs.IP, obs.MAC, []string{"ARP 中的 IP/MAC 未匹配 CMDB 资产"})
+				}
 				if deviceMACs[obs.MAC] == nil {
 					deviceMACs[obs.MAC] = map[string]arpObservation{}
 				}
@@ -344,6 +352,27 @@ func networkAnomalyID(parts ...string) string {
 	return "net-anomaly-" + hex.EncodeToString(sum[:8])
 }
 
+func knownNetworkMACs(assets []Asset) map[string]bool {
+	result := map[string]bool{}
+	for _, asset := range assets {
+		for _, item := range parseNetworkInterfaces(asset) {
+			if mac := normalizeMACForCompare(item.MACAddress); mac != "" {
+				result[mac] = true
+			}
+		}
+		for _, port := range parseNetworkPorts(asset) {
+			if mac := normalizeMACForCompare(port.MACAddress); mac != "" {
+				result[mac] = true
+			}
+			for _, mac := range port.MACAddresses {
+				if normalized := normalizeMACForCompare(mac); normalized != "" {
+					result[normalized] = true
+				}
+			}
+		}
+	}
+	return result
+}
 func interfaceMACSet(asset Asset) map[string]bool {
 	result := map[string]bool{}
 	for _, item := range parseNetworkInterfaces(asset) {

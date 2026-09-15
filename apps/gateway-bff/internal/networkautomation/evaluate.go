@@ -107,6 +107,9 @@ func (s *Service) Evaluate(operator string) (Report, error) {
 		}
 		report.Resolved++
 	}
+	if s.maybeCaptureNetworkSnapshot(operator) {
+		report.Snapshots = 1
+	}
 	count, err := s.monitor.SyncCMDBAnomalies(firing)
 	report.AlertsSynced = count
 	if err != nil {
