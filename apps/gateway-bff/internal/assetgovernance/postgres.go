@@ -39,6 +39,10 @@ func openPostgres(databaseURL string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if _, err = db.ExecContext(ctx, governanceRuleSchema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 

@@ -11,13 +11,16 @@ import (
 )
 
 type Report struct {
-	Evaluated int      `json:"evaluated"`
-	Issues    int      `json:"issues"`
-	Critical  int      `json:"critical"`
-	Warning   int      `json:"warning"`
-	Tickets   int      `json:"tickets"`
-	Alerts    int      `json:"alerts"`
-	Errors    []string `json:"errors,omitempty"`
+	Evaluated     int      `json:"evaluated"`
+	Issues        int      `json:"issues"`
+	Critical      int      `json:"critical"`
+	Warning       int      `json:"warning"`
+	Tickets       int      `json:"tickets"`
+	Alerts        int      `json:"alerts"`
+	RuleEvaluated int      `json:"ruleEvaluated"`
+	RuleMatched   int      `json:"ruleMatched"`
+	RuleAssigned  int      `json:"ruleAssigned"`
+	Errors        []string `json:"errors,omitempty"`
 }
 
 func (s *Service) Issues() []Issue {
@@ -25,8 +28,9 @@ func (s *Service) Issues() []Issue {
 }
 
 func (s *Service) Evaluate(operator string) (Report, error) {
+	ruleReport := s.EvaluateGovernanceRules(operator)
 	issues := s.collectIssues(true)
-	report := Report{Issues: len(issues)}
+	report := Report{Issues: len(issues), RuleEvaluated: ruleReport.Evaluated, RuleMatched: ruleReport.Matched, RuleAssigned: ruleReport.Assigned}
 	for _, issue := range issues {
 		report.Evaluated++
 		if issue.Severity == "critical" {

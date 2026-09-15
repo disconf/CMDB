@@ -33,4 +33,25 @@ func TestPostgresGovernanceReviewPersistence(t *testing.T) {
 	if !ok || loaded.Status != "confirmed" || loaded.Owner != review.Owner || loaded.TicketID != review.TicketID {
 		t.Fatalf("unexpected governance review: %#v", loaded)
 	}
+	rule := GovernanceRule{ID: "integration-governance-rule", Name: "integration-rule", Enabled: true, Priority: 20, MatchAssetType: "physical-server", MatchIPCIDR: "172.28.68.0/24", Owner: "integration-owner", CreatedBy: "integration", CreatedAt: now, UpdatedAt: now}
+	if err = upsertGovernanceRule(context.Background(), db, rule); err != nil {
+		t.Fatalf("persist governance rule: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_asset_governance_rules WHERE id=$1", rule.ID)
+	})
+	rules, err := loadGovernanceRules(context.Background(), db)
+	if err != nil {
+		t.Fatalf("load governance rules: %v", err)
+	}
+	foundRule := false
+	for _, item := range rules {
+		if item.ID == rule.ID && item.Owner == rule.Owner && item.MatchIPCIDR == rule.MatchIPCIDR {
+			foundRule = true
+			break
+		}
+	}
+	if !foundRule {
+		t.Fatalf("governance rule not found: %#v", rules)
+	}
 }

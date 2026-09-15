@@ -155,6 +155,16 @@ func auditAction(method, path string) string {
 		return "cmdb.asset_governance.retire"
 	case method == http.MethodPost && path == "/api/v1/cmdb/asset-governance/evaluate":
 		return "cmdb.asset_governance.evaluate"
+	case method == http.MethodPost && path == "/api/v1/cmdb/asset-governance/rules":
+		return "cmdb.asset_governance_rule.create"
+	case method == http.MethodPut && strings.HasPrefix(path, "/api/v1/cmdb/asset-governance/rules/"):
+		return "cmdb.asset_governance_rule.update"
+	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/asset-governance/rules/"):
+		return "cmdb.asset_governance_rule.delete"
+	case method == http.MethodPost && path == "/api/v1/cmdb/asset-governance/rules/evaluate":
+		return "cmdb.asset_governance_rule.evaluate"
+	case method == http.MethodPost && path == "/api/v1/cmdb/asset-governance/assets/bulk":
+		return "cmdb.asset_governance.bulk"
 	case method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/cmdb/network-links/"):
 		return "cmdb.network_link.delete"
 	case method == http.MethodPost && path == "/api/v1/cmdb/models":

@@ -63,10 +63,11 @@ type Service struct {
 	tickets *tickets.Service
 	monitor *monitor.Service
 	reviews map[string]Review
+	rules   []GovernanceRule
 }
 
 func NewService(cmdbService *cmdb.Service, ticketsService *tickets.Service, monitorService *monitor.Service) *Service {
-	service := &Service{cmdb: cmdbService, tickets: ticketsService, monitor: monitorService, reviews: map[string]Review{}}
+	service := &Service{cmdb: cmdbService, tickets: ticketsService, monitor: monitorService, reviews: map[string]Review{}, rules: []GovernanceRule{}}
 	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
 		db, err := openPostgres(url)
 		if err != nil {
@@ -78,6 +79,11 @@ func NewService(cmdbService *cmdb.Service, ticketsService *tickets.Service, moni
 			panic(fmt.Sprintf("load asset governance reviews: %v", loadErr))
 		}
 		service.reviews = reviews
+		rules, rulesErr := loadGovernanceRules(context.Background(), db)
+		if rulesErr != nil {
+			panic(fmt.Sprintf("load asset governance rules: %v", rulesErr))
+		}
+		service.rules = rules
 	}
 	return service
 }

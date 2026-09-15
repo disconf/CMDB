@@ -16,6 +16,100 @@ func registerAssetGovernanceRoutes(mux *http.ServeMux, authService *auth.Service
 		}
 		writeJSON(w, http.StatusOK, service.Issues())
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/asset-governance/rules", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, service.GovernanceRules())
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/asset-governance/rules", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input assetgovernance.GovernanceRuleInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST", "message": "请求格式不正确"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.CreateGovernanceRule(input, user.Username)
+		if errors.Is(err, assetgovernance.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "规则名称、负责人和至少一个匹配条件不能为空"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "GOVERNANCE_RULE_CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/cmdb/asset-governance/rules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input assetgovernance.GovernanceRuleInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST", "message": "请求格式不正确"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := service.UpdateGovernanceRule(r.PathValue("id"), input, user.Username)
+		if errors.Is(err, assetgovernance.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "GOVERNANCE_RULE_NOT_FOUND", "message": "治理规则不存在"})
+			return
+		}
+		if errors.Is(err, assetgovernance.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "规则名称、负责人和至少一个匹配条件不能为空"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "GOVERNANCE_RULE_UPDATE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/cmdb/asset-governance/rules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		if err := service.DeleteGovernanceRule(r.PathValue("id")); err != nil {
+			if errors.Is(err, assetgovernance.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"code": "GOVERNANCE_RULE_NOT_FOUND", "message": "治理规则不存在"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "GOVERNANCE_RULE_DELETE_FAILED", "message": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/asset-governance/rules/evaluate", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, service.EvaluateGovernanceRules(user.Username))
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/asset-governance/assets/bulk", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input assetgovernance.AssetGovernanceBulkInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST", "message": "请求格式不正确"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		result, err := service.BulkGovernance(input, user.Username)
+		if errors.Is(err, assetgovernance.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "批量操作参数无效，单次最多处理 500 台资产"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "BULK_GOVERNANCE_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("POST /api/v1/cmdb/asset-governance/evaluate", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return

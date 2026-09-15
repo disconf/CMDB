@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview,AssetGovernanceRule,AssetGovernanceRuleInput,AssetGovernanceRuleReport,AssetGovernanceBulkResult } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -79,3 +79,11 @@ export const evaluateAssetGovernance=(token:string)=>send<AssetGovernanceReport>
 export const assignAssetGovernance=(token:string,assetId:string,input:{owner:string;projectGroup:string;location:string;note:string})=>send<Asset>(`/api/v1/cmdb/asset-governance/assets/${encodeURIComponent(assetId)}/assign`,token,'POST',input)
 export const confirmAssetGovernance=(token:string,assetId:string,note='')=>send<AssetGovernanceReview>(`/api/v1/cmdb/asset-governance/assets/${encodeURIComponent(assetId)}/confirm`,token,'POST',{note})
 export const retireAssetGovernance=(token:string,assetId:string,note='')=>send<AssetGovernanceReview>(`/api/v1/cmdb/asset-governance/assets/${encodeURIComponent(assetId)}/retire`,token,'POST',{note})
+
+
+export const fetchAssetGovernanceRules=(token:string)=>get<AssetGovernanceRule[]>('/api/v1/cmdb/asset-governance/rules',token)
+export const createAssetGovernanceRule=(token:string,input:AssetGovernanceRuleInput)=>send<AssetGovernanceRule>('/api/v1/cmdb/asset-governance/rules',token,'POST',input)
+export const updateAssetGovernanceRule=(token:string,id:string,input:AssetGovernanceRuleInput)=>send<AssetGovernanceRule>(`/api/v1/cmdb/asset-governance/rules/${encodeURIComponent(id)}`,token,'PUT',input)
+export const deleteAssetGovernanceRule=(token:string,id:string)=>del<void>(`/api/v1/cmdb/asset-governance/rules/${encodeURIComponent(id)}`,token)
+export const evaluateAssetGovernanceRules=(token:string)=>send<AssetGovernanceRuleReport>('/api/v1/cmdb/asset-governance/rules/evaluate',token,'POST',{})
+export const bulkAssetGovernance=(token:string,input:{assetIds:string[];action:'assign'|'confirm'|'retire';owner?:string;projectGroup?:string;location?:string;note?:string})=>send<AssetGovernanceBulkResult>('/api/v1/cmdb/asset-governance/assets/bulk',token,'POST',input)
