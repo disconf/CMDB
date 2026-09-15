@@ -143,6 +143,7 @@ func NewServer() *Server {
 			return
 		}
 		syncAssetHealthFromAlerts(cmdbService, monitorService, payload)
+		syncTicketsFromAlerts(ticketsService, auditService, payload)
 		writeJSON(w, http.StatusAccepted, map[string]int{"accepted": accepted})
 	})
 	mux.HandleFunc("POST /api/v1/agent/report", func(w http.ResponseWriter, r *http.Request) {
@@ -2272,13 +2273,38 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "ticket:view") {
 			return
 		}
-		writeJSON(w, 200, ticketsService.Summary())
+		result, err := ticketsService.Summary()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_SUMMARY_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("GET /api/v1/tickets", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "ticket:view") {
 			return
 		}
-		writeJSON(w, 200, ticketsService.List())
+		items, err := ticketsService.List()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_LIST_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
+	mux.HandleFunc("GET /api/v1/tickets/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "ticket:view") {
+			return
+		}
+		item, err := ticketsService.Get(r.PathValue("id"))
+		if errors.Is(err, tickets.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "TICKET_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
 	})
 	mux.HandleFunc("POST /api/v1/tickets", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "ticket:manage") {
@@ -2286,49 +2312,90 @@ func NewServer() *Server {
 		}
 		var in tickets.CreateInput
 		if decodeJSON(r, &in) != nil {
-			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
 		in.Applicant = u.Username
-		x, err := ticketsService.Create(in)
+		item, err := ticketsService.Create(in)
 		if errors.Is(err, tickets.ErrValidation) {
-			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "工单标题、类型或必填字段无效"})
 			return
 		}
-		writeJSON(w, 201, x)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_CREATE_FAILED"})
+			return
+		}
+		auditService.Record(u.Username, "ticket.create", item.ID, item.Title)
+		writeJSON(w, http.StatusCreated, item)
 	})
-	mux.HandleFunc("POST /api/v1/tickets/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+	decideTicket := func(action string, decision func(string, string, string) (tickets.Ticket, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !authorize(w, r, authService, "ticket:manage") {
+				return
+			}
+			var in struct {
+				Comment string `json:"comment"`
+			}
+			_ = decodeJSON(r, &in)
+			u, _ := authService.CurrentUser(bearerToken(r))
+			item, err := decision(r.PathValue("id"), u.Username, in.Comment)
+			if errors.Is(err, tickets.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"code": "TICKET_NOT_FOUND"})
+				return
+			}
+			if errors.Is(err, tickets.ErrInvalidState) {
+				writeJSON(w, http.StatusConflict, map[string]string{"code": "TICKET_INVALID_STATE", "message": "当前工单状态不允许该操作"})
+				return
+			}
+			if errors.Is(err, tickets.ErrValidation) {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+				return
+			}
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_UPDATE_FAILED"})
+				return
+			}
+			auditService.Record(u.Username, "ticket."+action, item.ID, in.Comment)
+			writeJSON(w, http.StatusOK, item)
+		}
+	}
+	mux.HandleFunc("POST /api/v1/tickets/{id}/approve", decideTicket("approve", ticketsService.Approve))
+	mux.HandleFunc("POST /api/v1/tickets/{id}/reject", decideTicket("reject", ticketsService.Reject))
+	mux.HandleFunc("POST /api/v1/tickets/{id}/comment", decideTicket("comment", ticketsService.Comment))
+	mux.HandleFunc("POST /api/v1/tickets/{id}/close", decideTicket("close", ticketsService.Close))
+	mux.HandleFunc("POST /api/v1/tickets/{id}/cancel", decideTicket("cancel", ticketsService.Cancel))
+	mux.HandleFunc("POST /api/v1/tickets/{id}/assign", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "ticket:manage") {
 			return
 		}
 		var in struct {
-			Comment string `json:"comment"`
+			Assignee string `json:"assignee"`
 		}
-		_ = decodeJSON(r, &in)
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
 		u, _ := authService.CurrentUser(bearerToken(r))
-		x, err := ticketsService.Approve(r.PathValue("id"), u.Username, in.Comment)
+		item, err := ticketsService.Assign(r.PathValue("id"), in.Assignee, u.Username)
 		if errors.Is(err, tickets.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"code": "TICKET_NOT_FOUND"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "TICKET_NOT_FOUND"})
 			return
 		}
-		writeJSON(w, 200, x)
-	})
-	mux.HandleFunc("POST /api/v1/tickets/{id}/reject", func(w http.ResponseWriter, r *http.Request) {
-		if !authorize(w, r, authService, "ticket:manage") {
+		if errors.Is(err, tickets.ErrInvalidState) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "TICKET_INVALID_STATE"})
 			return
 		}
-		var in struct {
-			Comment string `json:"comment"`
-		}
-		_ = decodeJSON(r, &in)
-		u, _ := authService.CurrentUser(bearerToken(r))
-		x, err := ticketsService.Reject(r.PathValue("id"), u.Username, in.Comment)
-		if errors.Is(err, tickets.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"code": "TICKET_NOT_FOUND"})
+		if errors.Is(err, tickets.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
 			return
 		}
-		writeJSON(w, 200, x)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_UPDATE_FAILED"})
+			return
+		}
+		auditService.Record(u.Username, "ticket.assign", item.ID, item.Assignee)
+		writeJSON(w, http.StatusOK, item)
 	})
 	mux.HandleFunc("GET /api/v1/releases/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:view") {
@@ -2574,6 +2641,42 @@ func syncAssetHealthFromAlerts(cmdbService *cmdb.Service, monitorService *monito
 		}
 	}
 }
+func syncTicketsFromAlerts(ticketService *tickets.Service, auditService *audit.Service, payload monitor.WebhookPayload) {
+	for _, incoming := range payload.Alerts {
+		status := incoming.Status
+		if payload.Status == "resolved" {
+			status = "resolved"
+		}
+		id := incoming.Fingerprint
+		if id == "" {
+			id = "alertmanager-" + incoming.StartsAt.UTC().Format("20060102T150405Z")
+		}
+		title := incoming.Annotations["summary"]
+		if title == "" {
+			title = incoming.Labels["alertname"]
+		}
+		item, created, err := ticketService.SyncAlert(tickets.AlertInput{
+			ID: id, Title: title, Severity: incoming.Labels["severity"], Status: status,
+			Target:  firstNonEmpty(incoming.Labels["cmdb_asset_id"], incoming.Labels["instance"]),
+			Message: firstNonEmpty(incoming.Annotations["description"], incoming.Annotations["summary"]),
+			Owner:   incoming.Labels["owner"],
+		})
+		if err != nil {
+			slog.Error("sync ticket from alert", "alert_id", id, "error", err)
+			continue
+		}
+		if item.ID == "" {
+			continue
+		}
+		if created {
+			auditService.Record("alertmanager", "ticket.auto_create", item.ID, title)
+		}
+		if status == "resolved" {
+			auditService.Record("alertmanager", "ticket.auto_close", item.ID, "告警恢复")
+		}
+	}
+}
+
 func authorizeRunnerToken(w http.ResponseWriter, r *http.Request) bool {
 	expected := strings.TrimSpace(os.Getenv("ANSIBLE_RUNNER_TOKEN"))
 	provided := bearerToken(r)
