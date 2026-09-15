@@ -223,8 +223,31 @@ func (s *Service) Schedules() []Schedule {
 	return cloneSchedules(s.schedules)
 }
 func (s *Service) ExecutorInfo() ExecutorInfo { return s.executor.Info() }
-func (s *Service) Jobs() []Job                { s.mu.RLock(); defer s.mu.RUnlock(); return cloneJobs(s.jobs) }
+func (s *Service) Jobs() []Job {
+	if s.db != nil {
+		if jobs, err := loadJobs(context.Background(), s.db); err == nil {
+			s.mu.Lock()
+			s.jobs = cloneJobs(jobs)
+			s.mu.Unlock()
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneJobs(s.jobs)
+}
 func (s *Service) Get(id string) (Job, error) {
+	if s.db != nil {
+		j, err := loadJobByID(context.Background(), s.db, id)
+		if err == nil {
+			s.mu.Lock()
+			s.upsertJobMemoryLocked(j)
+			s.mu.Unlock()
+			return cloneJob(j), nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return Job{}, err
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, j := range s.jobs {
@@ -233,6 +256,15 @@ func (s *Service) Get(id string) (Job, error) {
 		}
 	}
 	return Job{}, ErrNotFound
+}
+func (s *Service) upsertJobMemoryLocked(job Job) {
+	for i := range s.jobs {
+		if s.jobs[i].ID == job.ID {
+			s.jobs[i] = job
+			return
+		}
+	}
+	s.jobs = append([]Job{job}, s.jobs...)
 }
 func (s *Service) Summary() Summary {
 	s.mu.RLock()
@@ -311,6 +343,9 @@ func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
 func (s *Service) Run(id string) (Job, error)   { return s.start(id, false) }
 func (s *Service) Retry(id string) (Job, error) { return s.start(id, true) }
 func (s *Service) Approve(id, approver string) (Job, error) {
+	if _, err := s.Get(id); err != nil {
+		return Job{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.jobs {
@@ -329,6 +364,9 @@ func (s *Service) Approve(id, approver string) (Job, error) {
 	return Job{}, ErrNotFound
 }
 func (s *Service) start(id string, retry bool) (Job, error) {
+	if _, err := s.Get(id); err != nil {
+		return Job{}, err
+	}
 	s.mu.Lock()
 	idx := -1
 	for i := range s.jobs {
@@ -362,6 +400,9 @@ func (s *Service) start(id string, retry bool) (Job, error) {
 	return out, nil
 }
 func (s *Service) Cancel(id string) (Job, error) {
+	if _, err := s.Get(id); err != nil {
+		return Job{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.jobs {
@@ -442,6 +483,7 @@ func (s *Service) persistLocked(j Job) {
 func cloneJob(j Job) Job {
 	j.Targets = append([]string(nil), j.Targets...)
 	j.Logs = append([]Log(nil), j.Logs...)
+	j.Variables = cloneStringMap(j.Variables)
 	return j
 }
 func cloneJobs(items []Job) []Job {

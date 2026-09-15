@@ -448,6 +448,7 @@ func (s *Service) ScanSSH(ctx context.Context, in SSHScanInput) (SSHScanResult, 
 			default:
 			}
 			if host := runSSHInventory(address, port, username, password, 1500*time.Millisecond); host != nil {
+				host.Attributes = append(host.Attributes, cmdb.Attribute{Name: "ssh_port", Label: "SSH端口", Value: strconv.Itoa(port)})
 				mu.Lock()
 				found = append(found, host)
 				mu.Unlock()

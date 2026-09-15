@@ -69,28 +69,23 @@ func openPostgres(url string) (*sql.DB, []Job, error) {
 		db.Close()
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,variables FROM job_executions ORDER BY updated_at DESC LIMIT 500`)
-	if err != nil {
-		return nil, nil, err
+	jobs, loadErr := loadJobs(ctx, db)
+	if loadErr != nil {
+		db.Close()
+		return nil, nil, loadErr
 	}
-	defer rows.Close()
-	var out []Job
-	for rows.Next() {
-		var j Job
-		var targets, logs, variables []byte
-		if err = rows.Scan(&j.ID, &j.TemplateID, &j.Name, &targets, &j.Status, &j.Progress, &j.Operator, &j.StartedAt, &j.Duration, &logs, &j.TimeoutSeconds, &j.Attempt, &j.ApprovedBy, &j.PlaybookID, &variables); err != nil {
-			return nil, nil, err
+	out := make([]Job, 0, len(jobs))
+	for _, job := range jobs {
+		normalized, recovered := normalizeInterruptedJob(job)
+		if recovered {
+			if err = upsertJob(ctx, db, normalized); err != nil {
+				db.Close()
+				return nil, nil, err
+			}
 		}
-		_ = json.Unmarshal(targets, &j.Targets)
-		_ = json.Unmarshal(logs, &j.Logs)
-		_ = json.Unmarshal(variables, &j.Variables)
-		if j.Status == "running" {
-			j.Status = "failed"
-			j.Logs = append(j.Logs, Log{time.Now().Format("15:04:05"), "error", "网关重启导致执行中断，可手动重试"})
-		}
-		out = append(out, j)
+		out = append(out, normalized)
 	}
-	return db, out, rows.Err()
+	return db, out, nil
 }
 func upsertJob(ctx context.Context, db *sql.DB, j Job) error {
 	targets, _ := json.Marshal(j.Targets)
@@ -195,4 +190,54 @@ func upsertPlaybook(ctx context.Context, db *sql.DB, item Playbook) error {
 func deletePlaybookRow(ctx context.Context, db *sql.DB, id string) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM job_playbooks WHERE id=$1`, id)
 	return err
+}
+
+func loadJobs(ctx context.Context, db *sql.DB) ([]Job, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,variables FROM job_executions ORDER BY updated_at DESC LIMIT 500`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Job, 0)
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, job)
+	}
+	return out, rows.Err()
+}
+
+func loadJobByID(ctx context.Context, db *sql.DB, id string) (Job, error) {
+	row := db.QueryRowContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,variables FROM job_executions WHERE id=$1`, id)
+	job, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return Job{}, ErrNotFound
+	}
+	return job, err
+}
+
+type jobScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanJob(row jobScanner) (Job, error) {
+	var job Job
+	var targets, logs, variables []byte
+	if err := row.Scan(&job.ID, &job.TemplateID, &job.Name, &targets, &job.Status, &job.Progress, &job.Operator, &job.StartedAt, &job.Duration, &logs, &job.TimeoutSeconds, &job.Attempt, &job.ApprovedBy, &job.PlaybookID, &variables); err != nil {
+		return Job{}, err
+	}
+	_ = json.Unmarshal(targets, &job.Targets)
+	_ = json.Unmarshal(logs, &job.Logs)
+	_ = json.Unmarshal(variables, &job.Variables)
+	return job, nil
+}
+func normalizeInterruptedJob(job Job) (Job, bool) {
+	if job.Status != "running" {
+		return job, false
+	}
+	job.Status = "failed"
+	job.Logs = append(job.Logs, Log{time.Now().Format("15:04:05"), "error", "网关重启导致执行中断，可手动重试"})
+	return job, true
 }

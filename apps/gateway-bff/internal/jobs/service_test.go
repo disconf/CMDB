@@ -62,3 +62,21 @@ func TestUnsafeTemplateAndHighRiskApproval(t *testing.T) {
 		t.Fatalf("approval %#v %v", j, err)
 	}
 }
+func TestNormalizeInterruptedJob(t *testing.T) {
+	job, recovered := normalizeInterruptedJob(Job{ID: "job-1", Status: "running", Logs: []Log{{Time: "10:00:00", Level: "info", Message: "started"}}})
+	if !recovered || job.Status != "failed" || len(job.Logs) != 2 || job.Logs[1].Level != "error" {
+		t.Fatalf("normalized job = %#v, recovered = %v", job, recovered)
+	}
+	if _, recovered = normalizeInterruptedJob(Job{ID: "job-2", Status: "success"}); recovered {
+		t.Fatal("completed job must not be marked interrupted")
+	}
+}
+
+func TestCloneJobCopiesVariables(t *testing.T) {
+	original := Job{Variables: map[string]string{"env": "qa"}}
+	cloned := cloneJob(original)
+	cloned.Variables["env"] = "prod"
+	if original.Variables["env"] != "qa" {
+		t.Fatal("cloneJob must copy variables")
+	}
+}

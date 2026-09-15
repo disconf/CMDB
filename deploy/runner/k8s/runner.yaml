@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cmdb-ansible-runner
+  namespace: ops-qa
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cmdb-ansible-runner
+  namespace: ops-qa
+  labels:
+    app.kubernetes.io/name: cmdb-ansible-runner
+    app.kubernetes.io/part-of: cmdb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cmdb-ansible-runner
+  template:
+    metadata:
+      labels:
+        app: cmdb-ansible-runner
+        app.kubernetes.io/name: cmdb-ansible-runner
+        app.kubernetes.io/part-of: cmdb
+    spec:
+      serviceAccountName: cmdb-ansible-runner
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: cmdb-registry
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: harbor.qa.bcavt.com/cmdb/ansible-runner-service:1.0.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8090
+          envFrom:
+            - secretRef:
+                name: cmdb-ansible-runner-env
+          env:
+            - name: HOME
+              value: /tmp/cmdb-runner
+            - name: SSH_PRIVATE_KEY_PATH
+              value: /run/secrets/id_ed25519
+            - name: KNOWN_HOSTS_PATH
+              value: /run/cmdb/known_hosts
+          volumeMounts:
+            - name: runner-ssh
+              mountPath: /run/secrets
+              readOnly: true
+            - name: runner-known-hosts
+              mountPath: /run/cmdb
+              readOnly: true
+            - name: runner-work
+              mountPath: /tmp/cmdb-runner
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: runner-ssh
+          secret:
+            secretName: cmdb-ansible-runner-ssh
+            defaultMode: 0440
+            items:
+              - key: id_ed25519
+                path: id_ed25519
+        - name: runner-known-hosts
+          configMap:
+            name: cmdb-known-hosts
+            defaultMode: 0444
+            items:
+              - key: known_hosts
+                path: known_hosts
+        - name: runner-work
+          emptyDir:
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cmdb-ansible-runner
+  namespace: ops-qa
+  labels:
+    app.kubernetes.io/name: cmdb-ansible-runner
+    app.kubernetes.io/part-of: cmdb
+spec:
+  type: ClusterIP
+  selector:
+    app: cmdb-ansible-runner
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http

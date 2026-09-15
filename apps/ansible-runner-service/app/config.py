@@ -6,13 +6,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config=SettingsConfigDict(env_file=".env",extra="ignore")
     runner_api_token:str=Field(min_length=16)
-    cmdb_base_url:str="http://gateway-bff:8080"
+    cmdb_base_url:str="http://gateway:8080"
     cmdb_token:str=""
+    cmdb_internal_token:str=""
     runner_command_map_json:str='{"health-check --full":"health-check.yml","install-node-exporter":"install-node-exporter.yml"}'
     playbook_dir:str="/opt/runner/playbooks"
     work_dir:str="/tmp/cmdb-runner"
-    max_targets:int=100
+    max_targets:int=Field(default=100,ge=1,le=1000)
     ssh_user:str="ansible"
+    ssh_port:int=Field(default=22,ge=1,le=65535)
+    ssh_password:str=""
     ssh_private_key_path:str="/run/secrets/ssh_private_key"
     known_hosts_path:str="/run/secrets/known_hosts"
     vault_password_file:str=""

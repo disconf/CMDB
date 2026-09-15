@@ -1,9 +1,11 @@
 # Ansible Runner Service
 
-1. 复制 `deploy/runner.env.example` 为 `deploy/runner.env`，填写随机服务令牌和用于读取CMDB的Keycloak服务账号Token。
-2. 在 `deploy/runner` 执行 `docker compose up -d --build`。
-3. 网关配置相同的令牌，并设置 `ANSIBLE_RUNNER_URL=http://宿主机地址:8090`。
-4. 重启网关，访问 `/api/v1/jobs/executor`，确认模式为 `ansible-runner`。
+1. 复制 `deploy/runner.env.example` 为 `deploy/runner.env`。
+2. 设置随机 `RUNNER_API_TOKEN`，并同步设置网关 `ANSIBLE_RUNNER_TOKEN`。
+3. 设置 `CMDB_INTERNAL_TOKEN`，值必须与网关 `ANSIBLE_RUNNER_TOKEN` 相同；Runner通过该令牌调用网关内部资产接口，避免把Keycloak长期Token写入Runner。
+4. 在 `deploy/runner` 执行 `docker compose up -d --build`。
+5. 网关设置 `ANSIBLE_RUNNER_URL=http://runner-service:8090`。
+6. 重启网关，访问 `/api/v1/jobs/executor`，确认模式为 `ansible-runner`。
 
 ## SSH安全准备
 

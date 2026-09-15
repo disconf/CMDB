@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -68,6 +69,21 @@ func NewServer() *Server {
 	})
 	mux.HandleFunc("GET /api/v1/ready", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	})
+	mux.HandleFunc("GET /internal/runner/cmdb/assets/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeRunnerToken(w, r) {
+			return
+		}
+		asset, err := cmdbService.GetAsset(r.PathValue("id"))
+		if errors.Is(err, cmdb.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ASSET_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": asset.ID, "ip": asset.IP, "sshPort": runnerAssetSSHPort(asset)})
 	})
 	mux.Handle("GET /metrics", platformMetrics.Handler())
 	mux.HandleFunc("GET /api/v1/monitor/service-discovery/node-exporter", func(w http.ResponseWriter, r *http.Request) {
@@ -2517,6 +2533,32 @@ func syncAssetHealthFromAlerts(cmdbService *cmdb.Service, monitorService *monito
 		}
 	}
 }
+func authorizeRunnerToken(w http.ResponseWriter, r *http.Request) bool {
+	expected := strings.TrimSpace(os.Getenv("ANSIBLE_RUNNER_TOKEN"))
+	provided := bearerToken(r)
+	if provided == "" {
+		provided = strings.TrimSpace(r.Header.Get("X-Runner-Token"))
+	}
+	if expected == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED", "message": "Runner 认证失败"})
+		return false
+	}
+	return true
+}
+
+func runnerAssetSSHPort(asset cmdb.Asset) int {
+	for _, attr := range asset.Attributes {
+		name := strings.ToLower(strings.TrimSpace(attr.Name))
+		if name != "ssh_port" && name != "sshport" && name != "ssh port" {
+			continue
+		}
+		if port, err := strconv.Atoi(strings.TrimSpace(attr.Value)); err == nil && port > 0 && port <= 65535 {
+			return port
+		}
+	}
+	return 22
+}
+
 func bearerToken(r *http.Request) string {
 	const prefix = "Bearer "
 	value := r.Header.Get("Authorization")

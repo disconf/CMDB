@@ -8,9 +8,10 @@ export type Job={id:string;templateId:string;name:string;targets:string[];status
 export type Schedule={id:string;name:string;templateId:string;templateName:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;nextRun:string;lastRun:string;lastStatus:string;lastJobId:string;createdBy:string}
 export type ScheduleInput={name:string;templateId:string;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean}
 export type Summary={templates:number;running:number;successToday:number;failedToday:number;schedules:number;playbooks:number}
+export type ExecutorInfo={mode:string;ready:boolean;endpoint:string}
 
 async function request<T>(path:string,token:string,init?:RequestInit):Promise<T>{const response=await fetch(path,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init?.headers||{})}});const data=await response.json().catch(()=>({message:'请求失败'}));if(!response.ok)throw new Error((data as {message?:string}).message||`请求失败 (${response.status})`);return data as T}
-export const fetchJobData=(token:string)=>Promise.all([request<Summary>('/api/v1/jobs/summary',token),request<Template[]>('/api/v1/jobs/templates',token),request<Job[]>('/api/v1/jobs/executions',token),request<Schedule[]>('/api/v1/jobs/schedules',token),request<Playbook[]>('/api/v1/jobs/playbooks',token)])
+export const fetchJobData=(token:string)=>Promise.all([request<Summary>('/api/v1/jobs/summary',token),request<Template[]>('/api/v1/jobs/templates',token),request<Job[]>('/api/v1/jobs/executions',token),request<Schedule[]>('/api/v1/jobs/schedules',token),request<Playbook[]>('/api/v1/jobs/playbooks',token),request<ExecutorInfo>('/api/v1/jobs/executor',token)])
 export const fetchJobAssets=(token:string)=>request<AssetPage>('/api/v1/cmdb/assets?page=1&pageSize=100',token)
 export const createTemplate=(token:string,input:Omit<Template,'id'|'lastRun'|'enabled'>)=>request<Template>('/api/v1/jobs/templates',token,{method:'POST',body:JSON.stringify(input)})
 export const toggleTemplate=(token:string,id:string)=>request<Template>(`/api/v1/jobs/templates/${id}/toggle`,token,{method:'POST'})
