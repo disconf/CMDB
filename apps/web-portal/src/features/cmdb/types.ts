@@ -27,3 +27,6 @@ export interface PhysicalGraph { nodes:PhysicalNode[];edges:PhysicalEdge[];updat
 
 export interface TopologySnapshot { id:string;kind:string;environment:string;nodeCount:number;edgeCount:number;payload?:unknown;operator:string;createdAt:string }
 export interface NetworkLinkHistoryEntry { id:string;assetId:string;assetName:string;action:string;operator:string;occurredAt:string;changes:Array<{field:string;before:string;after:string}> }
+export interface VLANMember { deviceId:string;deviceName:string;portName:string;ifIndex:string;assetId?:string;assetName?:string;status:string;macAddresses?:string[];arpCount:number;neighborName?:string;lastSeenAt?:string }
+export interface VLANInventory { vlan:string;memberCount:number;upMembers:number;conflictMembers:number;learnedMacCount:number;arpEntryCount:number;members:VLANMember[];updatedAt:string }
+export interface NetworkAnomaly { id:string;type:string;severity:string;status:string;title:string;detail:string;assetId?:string;assetName?:string;deviceId?:string;deviceName?:string;portName?:string;vlan?:string;ip?:string;macAddress?:string;evidence?:string[];detectedAt:string }

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Cable, Camera, Clock3, GitBranch, Maximize2, Network, RefreshCw, RotateCcw, Search, Server, Waypoints, X } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { captureTopologySnapshot, fetchPhysicalTopology, fetchTopologySnapshot, fetchTopologySnapshots } from '@/api/cmdb'
+import { captureTopologySnapshot, fetchPhysicalTopology, fetchTopologySnapshot, fetchTopologySnapshots, fetchVLANInventory } from '@/api/cmdb'
 import { healthLabel, impactCount } from '@/features/topology/topologyModel'
 
 type Node = { id:string; name:string; kind:string; layer?:number; status:string; owner?:string; ip?:string; assetType?:string; location?:string; portCount?:number; upPortCount?:number }
@@ -10,7 +10,7 @@ type Edge = { id:string; source:string; target:string; relation:string; status?:
 type Graph = { nodes:Node[]; edges:Edge[]; updatedAt:string }
 type ImpactNode = Node & { distance:number; direction:'upstream'|'downstream'|string; path:string[] }
 type Impact = { root:Node; affected:ImpactNode[]; paths:string[][]; summary:{ total:number; healthy:number; warning:number; critical:number } }
-type Mode = 'business'|'physical'
+type Mode = 'business'|'physical'|'vlan'
 type Snapshot = { id:string;kind:string;environment:string;nodeCount:number;edgeCount:number;operator:string;createdAt:string;payload?:unknown }
 
 const auth = useAuthStore()
@@ -41,8 +41,28 @@ const nodeNameByID = computed(() => Object.fromEntries(graph.value.nodes.map(nod
 const selectedEdges = computed(() => selected.value ? graph.value.edges.filter(edge => edge.source === selected.value?.id || edge.target === selected.value?.id) : [])
 const physicalNodeCount = computed(() => graph.value.nodes.filter(node => ['physical-server','virtual-machine','k8s-node'].includes(node.assetType || '')).length)
 const physicalSwitchCount = computed(() => graph.value.nodes.filter(node => ['network-device','load-balancer'].includes(node.assetType || '')).length)
+const vlanCount = computed(() => mode.value === 'vlan' ? graph.value.nodes.filter(node => node.kind === 'VLAN').length : 0)
+const vlanMemberCount = computed(() => mode.value === 'vlan' ? graph.value.nodes.filter(node => node.kind !== 'VLAN').length : 0)
 
-function verificationLabel(value?:string) {
+async function buildVLANGraph() {
+  const items = await fetchVLANInventory(auth.token)
+  const nodes:Node[] = []
+  const edges:Edge[] = []
+  const seen = new Set<string>()
+  for (const vlan of items) {
+    const vlanID = `vlan:${vlan.vlan}`
+    nodes.push({ id:vlanID, name:`VLAN ${vlan.vlan}`, kind:'VLAN', layer:0, status:vlan.conflictMembers?'warning':'healthy', owner:'网络', portCount:vlan.memberCount, upPortCount:vlan.upMembers })
+    for (const member of vlan.members) {
+      const memberID = member.assetId || `${member.deviceId}:${member.portName}`
+      if (!seen.has(memberID)) {
+        nodes.push({ id:memberID, name:member.assetName || member.portName, kind:member.assetId?'资产':'交换机端口', layer:1, status:member.status==='up'?'healthy':'offline', owner:member.deviceName, location:`${member.deviceName} / ${member.portName}`, portCount:1, upPortCount:member.status==='up'?1:0 })
+        seen.add(memberID)
+      }
+      edges.push({ id:`${vlanID}:${member.deviceId}:${member.portName}`, source:vlanID, target:memberID, relation:`${member.deviceName}/${member.portName}`, sourceType:'vlan', verification:'confirmed', confidence:100, evidence:[`${member.arpCount} 条 ARP`, `${member.macAddresses?.length||0} 个 MAC`] })
+    }
+  }
+  return { nodes, edges, updatedAt: new Date().toLocaleString('zh-CN',{hour12:false}) }
+}function verificationLabel(value?:string) {
   return ({ confirmed:'已确认', conflict:'冲突待复核', 'lldp-confirmed':'LLDP 已确认', candidate:'LLDP 候选', unverified:'待验证' } as Record<string,string>)[value || ''] || '待验证'
 }
 function verificationTone(value?:string) {
@@ -70,8 +90,11 @@ function endpointLabel(edge:Edge, side:'source'|'target') { const id = side === 
 async function load() {
   loading.value = true
   try {
-    if (mode.value === 'physical') {
-      graph.value = await fetchPhysicalTopology(auth.token)
+    if (mode.value === 'vlan') {
+      graph.value = await buildVLANGraph()
+      selected.value = graph.value.nodes[0]
+      impact.value = undefined
+    } else if (mode.value === 'physical') {      graph.value = await fetchPhysicalTopology(auth.token)
       snapshots.value = await fetchTopologySnapshots(auth.token, 'physical', '', 12)
       selected.value = graph.value.nodes[0]
       impact.value = undefined
@@ -84,7 +107,7 @@ async function load() {
 async function switchMode(value:Mode) { mode.value = value; selected.value = undefined; impact.value = undefined; query.value = ''; await load() }
 async function select(node:Node) {
   selected.value = node
-  if (mode.value === 'physical') { impact.value = undefined; return }
+  if (mode.value !== 'business') { impact.value = undefined; return }
   const response = await fetch(`/api/v1/topology/nodes/${encodeURIComponent(node.id)}/impact`, { headers: headers.value })
   impact.value = await response.json()
 }
@@ -94,26 +117,32 @@ onMounted(load)
 <template>
   <section class="topology-page">
     <header class="topology-heading">
-      <div><span>RELATIONSHIP &amp; IMPACT MAP</span><h1>{{ mode === 'physical' ? '物理网络拓扑' : '资产拓扑中心' }}</h1><p>{{ mode === 'physical' ? '服务器网卡 → 交换机端口 → LLDP 邻居关系' : '项目 → 应用 → 服务 → 实例 → 基础设施' }}</p></div>
+      <div><span>RELATIONSHIP &amp; IMPACT MAP</span><h1>{{ mode === 'physical' ? '物理网络拓扑' : mode === 'vlan' ? 'VLAN 端口拓扑' : '资产拓扑中心' }}</h1><p>{{ mode === 'physical' ? '服务器网卡 → 交换机端口 → LLDP 邻居关系' : mode === 'vlan' ? 'VLAN → 成员端口 → 资产与 ARP 证据' : '项目 → 应用 → 服务 → 实例 → 基础设施' }}</p></div>
       <div><label><Search/><input v-model="query" placeholder="搜索拓扑节点"></label><button @click="load"><RefreshCw :class="{spin:loading}"/>刷新</button><button><Maximize2/>全屏画布</button></div>
     </header>
-    <nav class="topology-mode-tabs"><button :class="{active:mode==='business'}" @click="switchMode('business')"><GitBranch/>业务关系拓扑</button><button :class="{active:mode==='physical'}" @click="switchMode('physical')"><Cable/>物理网络拓扑</button></nav>
-    <div class="topology-stats"><span>节点 <b>{{graph.nodes.length}}</b></span><span>关系 <b>{{graph.edges.length}}</b></span><template v-if="mode==='physical'"><span>服务器 <b>{{physicalNodeCount}}</b></span><span>网络设备 <b>{{physicalSwitchCount}}</b></span></template><span v-else>异常 <b>{{graph.nodes.filter(n=>n.status!=='healthy').length}}</b></span><span>更新时间 <b>{{graph.updatedAt}}</b></span></div>
+    <nav class="topology-mode-tabs"><button :class="{active:mode==='business'}" @click="switchMode('business')"><GitBranch/>业务关系拓扑</button><button :class="{active:mode==='physical'}" @click="switchMode('physical')"><Cable/>物理网络拓扑</button><button :class="{active:mode==='vlan'}" @click="switchMode('vlan')"><Network/>VLAN 视图</button></nav>
+    <div class="topology-stats"><span>节点 <b>{{graph.nodes.length}}</b></span><span>关系 <b>{{graph.edges.length}}</b></span><template v-if="mode==='physical'"><span>服务器 <b>{{physicalNodeCount}}</b></span><span>网络设备 <b>{{physicalSwitchCount}}</b></span></template><template v-else-if="mode==='vlan'"><span>VLAN <b>{{vlanCount}}</b></span><span>成员端口 <b>{{vlanMemberCount}}</b></span></template><span v-else>异常 <b>{{graph.nodes.filter(n=>n.status!=='healthy').length}}</b></span><span>更新时间 <b>{{graph.updatedAt}}</b></span></div>
     <div v-if="mode==='physical'" class="snapshot-strip"><button class="primary" @click="captureSnapshot"><Camera/>保存当前快照</button><button v-if="snapshotView" @click="returnLive"><RotateCcw/>返回实时拓扑</button><span v-for="snapshot in snapshots.slice(0,6)" :key="snapshot.id" class="snapshot-item"><Clock3/><button @click="viewSnapshot(snapshot.id)"><strong>{{ snapshot.createdAt }}</strong><small>{{ snapshot.nodeCount }} 节点 · {{ snapshot.edgeCount }} 链路 · {{ snapshot.operator }}</small></button></span></div>
     <div class="topology-workspace">
       <main class="graph-canvas" :class="{physical:mode==='physical'}">
-        <div class="layer-labels"><span v-for="(name,i) in mode==='physical' ? ['服务器侧','网络设备侧'] : ['项目','应用','服务','实例','基础设施']" :key="name" :style="{left:(45+(mode==='physical'?i*600:i*220))+'px'}">{{name}}</span></div>
+        <div class="layer-labels"><span v-for="(name,i) in mode==='physical' ? ['服务器侧','网络设备侧'] : mode==='vlan' ? ['VLAN','成员端口/资产'] : ['项目','应用','服务','实例','基础设施']" :key="name" :style="{left:(45+(mode==='physical'?i*600:i*220))+'px'}">{{name}}</span></div>
         <svg :viewBox="mode==='physical' ? '0 0 1200 620' : '0 0 1100 440'" preserveAspectRatio="xMinYMin meet"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z"/></marker></defs><g class="edges"><path v-for="edge in graph.edges" :key="edge.id" :d="`M ${positions[edge.source]?.x+65} ${positions[edge.source]?.y} C ${positions[edge.source]?.x+120} ${positions[edge.source]?.y}, ${positions[edge.target]?.x-120} ${positions[edge.target]?.y}, ${positions[edge.target]?.x-65} ${positions[edge.target]?.y}`"/><text v-for="edge in graph.edges" :key="'t'+edge.id" :x="(positions[edge.source]?.x+positions[edge.target]?.x)/2" :y="(positions[edge.source]?.y+positions[edge.target]?.y)/2-7">{{edge.relation}}</text></g></svg>
-        <button v-for="node in visibleNodes" :key="node.id" class="graph-node" :class="{selected:selected?.id===node.id}" :data-status="node.status" :style="{left:(positions[node.id]?.x-65)+'px',top:(positions[node.id]?.y-34)+'px'}" @click="select(node)"><Network v-if="mode==='physical'&&node.assetType==='network-device'"/><Server v-else/><span><strong>{{node.name}}</strong><small>{{node.ip||node.kind}}</small><em v-if="mode==='physical'&&node.portCount">{{node.upPortCount}} / {{node.portCount}} 端口</em></span><i></i></button>
+        <button v-for="node in visibleNodes" :key="node.id" class="graph-node" :class="{selected:selected?.id===node.id}" :data-status="node.status" :style="{left:(positions[node.id]?.x-65)+'px',top:(positions[node.id]?.y-34)+'px'}" @click="select(node)"><Network v-if="(mode==='physical'&&node.assetType==='network-device')||(mode==='vlan'&&node.kind==='VLAN')"/><Server v-else/><span><strong>{{node.name}}</strong><small>{{node.ip||node.kind}}</small><em v-if="mode==='physical'&&node.portCount">{{node.upPortCount}} / {{node.portCount}} 端口</em></span><i></i></button>
         <div class="graph-legend"><span v-for="s in ['healthy','warning','critical']" :key="s"><i :data-status="s"></i>{{healthLabel(s)}}</span></div>
       </main>
       <aside v-if="selected" class="impact-panel">
-        <header><div><span>{{ mode==='physical' ? 'PHYSICAL LINK DETAIL' : 'IMPACT ANALYSIS' }}</span><h2>{{selected.name}}</h2></div><button @click="selected=undefined;impact=undefined"><X/></button></header>
+        <header><div><span>{{ mode==='physical' ? 'PHYSICAL LINK DETAIL' : mode==='vlan' ? 'VLAN MEMBERS' : 'IMPACT ANALYSIS' }}</span><h2>{{selected.name}}</h2></div><button @click="selected=undefined;impact=undefined"><X/></button></header>
         <template v-if="mode==='physical'">
           <div class="impact-score"><Waypoints/><div><strong>{{ selectedEdges.length }}</strong><span>关联物理链路</span></div></div>
           <dl><div><dt>节点类型</dt><dd>{{ selected.kind }}</dd></div><div><dt>健康状态</dt><dd :data-status="selected.status">{{healthLabel(selected.status)}}</dd></div><div><dt>IP 地址</dt><dd>{{selected.ip||'—'}}</dd></div><div><dt>位置</dt><dd>{{selected.location||'—'}}</dd></div><div><dt>端口摘要</dt><dd>{{selected.portCount ? `${selected.upPortCount} / ${selected.portCount} 在线` : '—'}}</dd></div></dl>
           <h3>物理链路 <small>基于人工绑定和 LLDP 自动发现</small></h3>
           <div class="affected-list physical-links"><div v-for="edge in selectedEdges" :key="edge.id"><Cable/><span><strong>{{ endpointLabel(edge,'source') }}</strong><small>→ {{ endpointLabel(edge,'target') }}</small><small>{{ edge.sourceType==='lldp' ? 'LLDP 自动发现' : '人工绑定' }} · {{ edge.lastSeenAt || '时间未知' }}</small><small class="edge-verification" :data-tone="verificationTone(edge.verification)">{{ verificationLabel(edge.verification) }} {{ edge.confidence || 0 }}% · {{ (edge.evidence||[]).join('；') }}</small></span><b>{{edge.relation}}</b></div><div v-if="!selectedEdges.length" class="rule-empty">当前节点没有已发现的物理链路</div></div>
+        </template>
+        <template v-else-if="mode==='vlan'">
+          <div class="impact-score"><Network/><div><strong>{{ selectedEdges.length }}</strong><span>关联成员与链路</span></div></div>
+          <dl><div><dt>节点类型</dt><dd>{{selected.kind}}</dd></div><div><dt>状态</dt><dd :data-status="selected.status">{{healthLabel(selected.status)}}</dd></div><div><dt>所属设备/网络</dt><dd>{{selected.owner}}</dd></div><div><dt>位置</dt><dd>{{selected.location||'—'}}</dd></div><div><dt>端口/成员</dt><dd>{{selected.portCount||'—'}}</dd></div></dl>
+          <h3>VLAN 成员 <small>端口、资产、ARP 与 MAC 汇总</small></h3>
+          <div class="affected-list physical-links"><div v-for="edge in selectedEdges" :key="edge.id"><Network/><span><strong>{{ endpointLabel(edge, edge.source===selected.id?'target':'source') }}</strong><small>{{ edge.relation }}</small><small class="edge-verification" :data-tone="verificationTone(edge.verification)">{{ verificationLabel(edge.verification) }} · {{ (edge.evidence||[]).join('；') }}</small></span><b>{{edge.relation}}</b></div><div v-if="!selectedEdges.length" class="rule-empty">当前 VLAN 没有关联成员</div></div>
         </template>
         <template v-else>
           <div class="impact-score"><GitBranch/><div><strong>{{ impactCount(impact) }}</strong><span>关联影响节点</span></div></div>

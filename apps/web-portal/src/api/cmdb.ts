@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -47,3 +47,5 @@ export const fetchNetworkLinkHistory=(token:string,limit=20)=>get<NetworkLinkHis
 export const fetchTopologySnapshots=(token:string,kind='physical',environment='',limit=20)=>get<TopologySnapshot[]>(`/api/v1/topology/snapshots?kind=${encodeURIComponent(kind)}&environment=${encodeURIComponent(environment)}&limit=${limit}`,token)
 export const fetchTopologySnapshot=(token:string,id:string)=>get<TopologySnapshot>(`/api/v1/topology/snapshots/${encodeURIComponent(id)}`,token)
 export const captureTopologySnapshot=(token:string,kind='physical',environment='')=>send<TopologySnapshot>('/api/v1/topology/snapshots',token,'POST',{kind,environment})
+export const fetchVLANInventory=(token:string)=>get<VLANInventory[]>('/api/v1/cmdb/vlans',token)
+export const fetchNetworkAnomalies=(token:string)=>get<NetworkAnomaly[]>('/api/v1/cmdb/network-anomalies',token)

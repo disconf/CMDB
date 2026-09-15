@@ -60,6 +60,18 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		writeJSON(w, http.StatusOK, cmdbService.NetworkLinkHistory(limit))
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/vlans", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.VLANInventory())
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/network-anomalies", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.NetworkAnomalies())
+	})
 	mux.HandleFunc("POST /api/v1/cmdb/network-links", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return
