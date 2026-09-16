@@ -17,6 +17,7 @@ import (
 	"cmdb/gateway-bff/internal/audit"
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/credentials"
 )
 
 type rancherCluster struct {
@@ -51,19 +52,83 @@ type rancherClient struct {
 	client  *http.Client
 }
 
-func registerRancherRoutes(mux *http.ServeMux, authService *auth.Service, auditService *audit.Service, cmdbService *cmdb.Service) {
+func registerRancherRoutes(mux *http.ServeMux, authService *auth.Service, auditService *audit.Service, cmdbService *cmdb.Service, credentialsService *credentials.Service) {
 	mux.HandleFunc("GET /api/v1/cmdb/rancher/config", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		baseURL, _, _, _ := rancherSettings()
-		writeJSON(w, http.StatusOK, map[string]any{"configured": baseURL != "", "url": baseURL})
+		config, ok := cmdbService.IntegrationConfig("rancher")
+		if !ok {
+			baseURL, _, _, insecure := rancherSettings()
+			config = cmdb.IntegrationConfig{Provider: "rancher", URL: baseURL, Insecure: insecure, Enabled: baseURL != "", AuthType: "token"}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"configured": config.URL != "" && config.Enabled, "provider": config.Provider, "url": config.URL, "username": config.Username, "authType": config.AuthType, "insecure": config.Insecure, "enabled": config.Enabled, "credentialId": config.CredentialID, "updatedAt": config.UpdatedAt})
+	})
+	mux.HandleFunc("PUT /api/v1/cmdb/rancher/config", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			URL      string `json:"url"`
+			Username string `json:"username"`
+			AuthType string `json:"authType"`
+			Secret   string `json:"secret"`
+			Insecure bool   `json:"insecure"`
+			Enabled  bool   `json:"enabled"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		existing, _ := cmdbService.IntegrationConfig("rancher")
+		credentialID := existing.CredentialID
+		if strings.TrimSpace(input.Secret) != "" {
+			credential, err := credentialsService.Create(credentials.CreateInput{Name: "Rancher 集成凭据", Kind: "rancher", Username: input.Username, Secret: input.Secret, Group: "integrations", Description: "Rancher API 登录凭据"})
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "VAULT_UNAVAILABLE", "message": err.Error()})
+				return
+			}
+			credentialID = credential.ID
+		}
+		config, err := cmdbService.SaveIntegrationConfig(cmdb.IntegrationConfigInput{Provider: "rancher", URL: input.URL, Username: input.Username, CredentialID: credentialID, AuthType: input.AuthType, Insecure: input.Insecure, Enabled: input.Enabled}, "api")
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "Rancher 地址不能为空"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "cmdb.rancher_config.update", "rancher", config.URL)
+		writeJSON(w, http.StatusOK, map[string]any{"configured": config.Enabled && config.URL != "", "url": config.URL, "username": config.Username, "authType": config.AuthType, "insecure": config.Insecure, "enabled": config.Enabled, "credentialId": config.CredentialID, "updatedAt": config.UpdatedAt})
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/rancher/config/test", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			URL      string `json:"url"`
+			Username string `json:"username"`
+			AuthType string `json:"authType"`
+			Secret   string `json:"secret"`
+			Insecure bool   `json:"insecure"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		client, err := buildRancherClient(r.Context(), input.URL, input.Username, input.Secret, input.AuthType, input.Insecure)
+		if err == nil {
+			_, err = client.Clusters(r.Context())
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "RANCHER_TEST_FAILED", "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/rancher/clusters", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		client, err := newRancherClient(r.Context())
+		client, err := newConfiguredRancherClient(r.Context(), cmdbService, credentialsService)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "RANCHER_UNAVAILABLE", "message": err.Error()})
 			return
@@ -80,7 +145,7 @@ func registerRancherRoutes(mux *http.ServeMux, authService *auth.Service, auditS
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		result, err := syncRancherInventory(r.Context(), cmdbService, user.Username)
+		result, err := syncRancherInventoryConfigured(r.Context(), cmdbService, credentialsService, user.Username)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "RANCHER_SYNC_FAILED", "message": err.Error()})
 			return
@@ -123,6 +188,66 @@ func newRancherClient(ctx context.Context) (*rancherClient, error) {
 	return rancher, nil
 }
 
+func newConfiguredRancherClient(ctx context.Context, cmdbService *cmdb.Service, credentialsService *credentials.Service) (*rancherClient, error) {
+	config, ok := cmdbService.IntegrationConfig("rancher")
+	if !ok || !config.Enabled || strings.TrimSpace(config.URL) == "" {
+		return newRancherClient(ctx)
+	}
+	username := config.Username
+	secret := ""
+	if config.CredentialID != "" {
+		material, err := credentialsService.Resolve(config.CredentialID)
+		if err != nil {
+			return nil, fmt.Errorf("读取 Rancher 凭据失败: %w", err)
+		}
+		if username == "" {
+			username = material.Username
+		}
+		secret = material.Secret
+	}
+	return buildRancherClient(ctx, config.URL, username, secret, config.AuthType, config.Insecure)
+}
+
+func buildRancherClient(ctx context.Context, baseURL, username, secret, authType string, insecure bool) (*rancherClient, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return nil, errors.New("Rancher 地址不能为空")
+	}
+	if strings.TrimSpace(secret) == "" {
+		envURL, envToken, envCredentials, envInsecure := rancherSettings()
+		if envURL != "" && strings.EqualFold(envURL, baseURL) {
+			secret = envToken
+			if authType == "password" {
+				parts := strings.SplitN(envCredentials, "\x00", 2)
+				if len(parts) == 2 {
+					username, secret = parts[0], parts[1]
+				}
+			}
+			insecure = insecure || envInsecure
+		}
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	if insecure {
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	rancher := &rancherClient{baseURL: baseURL, client: client}
+	if strings.EqualFold(authType, "password") {
+		if username == "" || secret == "" {
+			return nil, errors.New("Rancher 用户名和密码未配置")
+		}
+		token, err := rancher.login(ctx, username, secret)
+		if err != nil {
+			return nil, err
+		}
+		rancher.token = token
+		return rancher, nil
+	}
+	if secret == "" {
+		return nil, errors.New("Rancher API Token 未配置")
+	}
+	rancher.token = secret
+	return rancher, nil
+}
 func (c *rancherClient) login(ctx context.Context, username, password string) (string, error) {
 	payload, _ := json.Marshal(map[string]string{"username": username, "password": password, "responseType": "token"})
 	endpoint := c.baseURL + "/v3-public/localProviders/local?action=login"
@@ -352,6 +477,18 @@ func syncRancherInventory(ctx context.Context, cmdbService *cmdb.Service, operat
 	if err != nil {
 		return rancherSyncResult{}, err
 	}
+	return syncRancherInventoryWithClient(ctx, cmdbService, client, operator)
+}
+
+func syncRancherInventoryConfigured(ctx context.Context, cmdbService *cmdb.Service, credentialsService *credentials.Service, operator string) (rancherSyncResult, error) {
+	client, err := newConfiguredRancherClient(ctx, cmdbService, credentialsService)
+	if err != nil {
+		return rancherSyncResult{}, err
+	}
+	return syncRancherInventoryWithClient(ctx, cmdbService, client, operator)
+}
+
+func syncRancherInventoryWithClient(ctx context.Context, cmdbService *cmdb.Service, client *rancherClient, operator string) (rancherSyncResult, error) {
 	clusters, err := client.Clusters(ctx)
 	if err != nil {
 		return rancherSyncResult{}, err

@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { Plus, Trash2, X } from 'lucide-vue-next'
 import type { Asset, AssetInput, Attribute, CiModel, IdcRoom, Relation } from '@/features/cmdb/types'
 import { validateAssetForm } from '@/features/cmdb/assetForm'
+import { fetchAssetOptions } from '@/api/cmdb'
+import { useAuthStore } from '@/stores/useAuthStore'
+import ResponsibilityEditor from './ResponsibilityEditor.vue'
 
 const props = defineProps<{ asset?: Asset; models: CiModel[]; idcRooms?: IdcRoom[]; saving?: boolean; serverError?: string }>()
 const emit = defineEmits<{ close: []; save: [value: AssetInput] }>()
@@ -26,24 +29,63 @@ const form = reactive<{ id: string; name: string; type: string; status: string; 
 const tagsText = ref(form.tags.join('|'))
 const attrs = ref<Attribute[]>((props.asset?.attributes ?? []).map((a) => ({ name: a.name, label: a.label, value: a.value })))
 const relations = ref<Relation[]>((props.asset?.relations ?? []).map((r) => ({ type: r.type, targetId: r.targetId, targetName: r.targetName })))
+const auth = useAuthStore()
+const hostType = ref<'physical'|'cluster'>('physical')
+const hostTargetId = ref('')
+const hostOptions = ref<Asset[]>([])
+const typeChanged = computed(() => Boolean(props.asset && form.type !== props.asset.type))
+const serverTypeSuggestion = computed(() => {
+  const raw = attrValue('virtualization_type')
+  if (!raw || raw === 'none') return '未检测到虚拟化，建议物理机'
+  return `检测到 ${raw}，建议虚拟机`
+})
+const compatibleHosts = computed(() => hostOptions.value.filter(item => hostType.value === 'cluster' ? item.type === 'k8s-cluster' : item.type === 'physical-server'))
 function fieldMeta(name: string) { return modelFields().find((f) => f.name === name) }
 function isSelectField(name: string) { const f = fieldMeta(name); return !!f && f.type === 'select' && !!f.options?.length }
 function selectOptions(name: string) { return fieldMeta(name)?.options ?? [] }
 function addRelation() { relations.value.push({ type: 'belongs-to', targetId: '', targetName: '' }) }
 function removeRelation(index: number) { relations.value.splice(index, 1) }
+async function loadHostOptions() {
+  try { hostOptions.value = await fetchAssetOptions(auth.token, ['physical-server', 'k8s-cluster']) } catch { hostOptions.value = [] }
+  hydrateHostSelection()
+}
+function hydrateHostSelection() {
+  const relation = relations.value.find(item => item.type === 'runs-on')
+  if (!relation) return
+  hostTargetId.value = relation.targetId
+  const target = hostOptions.value.find(item => item.id === relation.targetId)
+  if (target) hostType.value = target.type === 'k8s-cluster' ? 'cluster' : 'physical'
+}
+function syncHostRelation() {
+  relations.value = relations.value.filter(item => item.type !== 'runs-on')
+  if (form.type !== 'virtual-machine' || !hostTargetId.value) return
+  const target = hostOptions.value.find(item => item.id === hostTargetId.value)
+  relations.value.push({ type: 'runs-on', targetId: hostTargetId.value, targetName: target?.name || hostTargetId.value })
+}
+function clearPhysicalLocation() {
+  clearAttr('idc_name'); clearAttr('module_name'); clearAttr('rack_no'); clearAttr('rack_id'); clearAttr('u_position'); clearAttr('voltage')
+  idcRoomId.value = ''; idcModuleId.value = ''; idcRackId.value = ''; idcU.value = ''
+}
 
 function modelFields() {
   const model = props.models.find((m) => m.code === form.type)
   return model ? model.fields : []
 }
 function prefillFromModel() {
-  if (isEdit.value) return
   const existing = new Set(attrs.value.map((a) => a.name))
   const added = modelFields().filter((f) => !existing.has(f.name)).map((f) => ({ name: f.name, label: f.label, value: f.defaultValue || '' }))
   if (added.length) attrs.value = [...attrs.value, ...added]
 }
-if (!isEdit.value) prefillFromModel()
-watch(() => form.type, () => { if (!isEdit.value) prefillFromModel() })
+prefillFromModel()
+onMounted(loadHostOptions)
+watch(() => form.type, (value) => {
+  prefillFromModel()
+  if (value === 'virtual-machine') clearPhysicalLocation()
+  if (value === 'physical-server') {
+    relations.value = relations.value.filter(item => item.type !== 'runs-on')
+    hostTargetId.value = ''
+  }
+})
 
 const idcRoomId = ref('')
 const idcModuleId = ref('')
@@ -123,8 +165,10 @@ function submit() {
   form.tags = tagsText.value.split('|').map((v) => v.trim()).filter(Boolean)
   const attributes = attrs.value.map((a) => ({ name: a.name.trim(), label: a.label.trim(), value: a.value.trim() })).filter((a) => a.name || a.label || a.value)
   errors.value = validateAssetForm(form)
+  if (form.type === 'virtual-machine' && !hostTargetId.value) errors.value.push('虚拟机必须选择宿主物理机或虚拟化集群')
   if (attributes.some((a) => !a.name || !a.value)) errors.value.push('扩展属性的字段名和值不能为空')
   if (errors.value.length) { void nextTick(() => errorBox.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })); return }
+  syncHostRelation()
   const cleanRelations = relations.value.map((r) => ({ type: r.type.trim(), targetId: r.targetId.trim(), targetName: r.targetName.trim() })).filter((r) => r.targetId || r.targetName)
   emit('save', { ...form, tags: [...form.tags], attributes: attributes.length ? attributes : undefined, relations: cleanRelations.length ? cleanRelations : undefined })
 }
@@ -139,17 +183,27 @@ function submit() {
       <div class="editor-grid">
         <label><span>资产编号 *</span><input v-model="form.id" :disabled="isEdit"></label>
         <label><span>资产名称 *</span><input v-model="form.name"></label>
-        <label><span>CI 模型 *</span><select v-model="form.type" :disabled="isEdit">
+        <label><span>资产类型 *</span><select v-model="form.type">
           <option v-for="model in models" :key="model.code" :value="model.code">{{ model.name }}</option>
-        </select></label>
+        </select><small class="field-help">{{ serverTypeSuggestion }}</small></label>
         <label><span>状态</span><select v-model="form.status"><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select></label>
         <label><span>IP 地址</span><input v-model="form.ip"></label>
         <label><span>环境</span><select v-model="form.environment"><option>生产</option><option>测试</option><option>开发</option></select></label>
-        <label><span>项目组 *</span><input v-model="form.projectGroup"></label>
-        <label><span>负责人 *</span><input v-model="form.owner"></label>
-        <label class="wide"><span>位置</span><input v-model="form.location"></label>
+        <label v-if="form.type === 'physical-server'" class="wide"><span>位置</span><input v-model="form.location" placeholder="选择机房后自动写入"></label>
+        <label v-else-if="form.type === 'virtual-machine'" class="wide"><span>继承位置</span><input :value="form.location || '由宿主资产继承'" readonly></label>
         <label class="wide"><span>标签（使用 | 分隔）</span><input v-model="tagsText"></label>
       </div>
+      <ResponsibilityEditor :owner="form.owner" :project-group="form.projectGroup" @update:owner="form.owner = $event" @update:project-group="form.projectGroup = $event" />
+      <div v-if="typeChanged" class="type-change-note">资产类型将由“{{ props.asset?.typeName }}”调整为“{{ models.find(m => m.code === form.type)?.name || form.type }}”，保存后会切换可用关系与位置字段。</div>
+      <section v-if="form.type === 'virtual-machine'" class="attr-editor host-picker">
+        <header><h3>宿主关系</h3></header>
+        <div class="idc-grid host-grid">
+          <label><span>宿主类型</span><select v-model="hostType"><option value="physical">物理机</option><option value="cluster">虚拟化集群</option></select></label>
+          <label class="wide"><span>{{ hostType === 'physical' ? '宿主物理机' : '虚拟化集群' }}</span><select v-model="hostTargetId"><option value="">请选择宿主</option><option v-for="host in compatibleHosts" :key="host.id" :value="host.id">{{ host.name }} · {{ host.ip || host.location || host.typeName }}</option></select></label>
+          <label class="wide"><span>继承位置</span><input :value="form.location || '由宿主资产继承'" readonly></label>
+        </div>
+        <p class="attr-hint">虚拟机不直接选择机房、机柜、U位或交换机端口，这些信息从宿主资产继承。</p>
+      </section>
       <section v-if="form.type === 'physical-server' && props.idcRooms?.length" class="attr-editor idc-picker">
         <header><h3>机房定位（可选）</h3></header>
         <div class="idc-grid">
@@ -176,7 +230,7 @@ function submit() {
       </section>
       <section class="attr-editor rel-editor">
         <header><h3>资产关系（可选）</h3><button type="button" @click="addRelation"><Plus /> 添加关系</button></header>
-        <div v-for="(rel, index) in relations" :key="index" class="rel-row">
+        <div v-for="(rel, index) in relations" v-show="rel.type !== 'runs-on' || form.type !== 'virtual-machine'" :key="index" class="rel-row">
           <select v-model="rel.type"><option value="belongs-to">属于(belongs-to)</option><option value="depends-on">依赖(depends-on)</option><option value="located-in">位于(located-in)</option><option value="runs-on">运行于(runs-on)</option></select>
           <input v-model="rel.targetId" placeholder="目标资产ID">
           <input v-model="rel.targetName" placeholder="目标资产名称">
@@ -207,4 +261,21 @@ function submit() {
 .idc-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .rel-row input, .rel-row select { width: 100%; box-sizing: border-box; }
 .form-errors { position: sticky; bottom: 0; z-index: 2; display: flex; flex-direction: column; gap: 4px; margin: 14px 0; padding: 10px 12px; border: 1px solid #7f1d1d; border-radius: 8px; background: #46151d; color: #fecdd3; }
+</style>
+
+
+
+
+
+
+
+
+
+
+
+<style scoped>
+.field-help { display:block; margin-top:4px; color:#6f8ca1; font-size:10px; }
+.type-change-note { margin-top:12px; padding:9px 11px; border:1px solid #765b2c; border-radius:7px; background:rgba(255,193,103,.08); color:#f0c783; font-size:11px; line-height:1.55; }
+.host-grid { grid-template-columns: .7fr 1.3fr; }
+.host-grid .wide { grid-column: 1 / -1; }
 </style>

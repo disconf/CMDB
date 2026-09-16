@@ -87,3 +87,5 @@ export const updateAssetGovernanceRule=(token:string,id:string,input:AssetGovern
 export const deleteAssetGovernanceRule=(token:string,id:string)=>del<void>(`/api/v1/cmdb/asset-governance/rules/${encodeURIComponent(id)}`,token)
 export const evaluateAssetGovernanceRules=(token:string)=>send<AssetGovernanceRuleReport>('/api/v1/cmdb/asset-governance/rules/evaluate',token,'POST',{})
 export const bulkAssetGovernance=(token:string,input:{assetIds:string[];action:'assign'|'confirm'|'retire';owner?:string;projectGroup?:string;location?:string;note?:string})=>send<AssetGovernanceBulkResult>('/api/v1/cmdb/asset-governance/assets/bulk',token,'POST',input)
+
+export const fetchAssetOptions=(token:string,types:string[]=[])=>get<Asset[]>(`/api/v1/cmdb/asset-options${types.length?`?types=${encodeURIComponent(types.join(','))}`:''}`,token)

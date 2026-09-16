@@ -59,6 +59,17 @@ func TestPostgresPersistsAssetAndHistory(t *testing.T) {
 	if err != nil || states[state.AnomalyID].Status != "acknowledged" {
 		t.Fatalf("load network anomaly state: %#v %v", states, err)
 	}
+	integration := IntegrationConfig{Provider: "integration-rancher", URL: "https://rancher.integration", Username: "admin", CredentialID: "cred-integration", AuthType: "password", Enabled: true}
+	if err = upsertIntegrationConfig(context.Background(), db, integration); err != nil {
+		t.Fatalf("save integration config: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM cmdb_integration_configs WHERE provider=$1", integration.Provider)
+	})
+	integrations, err := loadIntegrationConfigs(context.Background(), db)
+	if err != nil || integrations[integration.Provider].URL != integration.URL {
+		t.Fatalf("load integration config: %#v %v", integrations, err)
+	}
 	var assetCount, historyCount, outboxCount, statusOutboxCount int
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

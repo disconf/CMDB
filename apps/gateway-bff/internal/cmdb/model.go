@@ -136,6 +136,7 @@ type CreateAssetInput struct {
 }
 type UpdateAssetInput struct {
 	Name         string      `json:"name"`
+	Type         string      `json:"type"`
 	Status       string      `json:"status"`
 	IP           string      `json:"ip"`
 	Environment  string      `json:"environment"`
@@ -145,6 +146,25 @@ type UpdateAssetInput struct {
 	Tags         []string    `json:"tags"`
 	Attributes   []Attribute `json:"attributes"`
 	Relations    []Relation  `json:"relations"`
+}
+type IntegrationConfig struct {
+	Provider     string `json:"provider"`
+	URL          string `json:"url"`
+	Username     string `json:"username"`
+	CredentialID string `json:"credentialId"`
+	AuthType     string `json:"authType"`
+	Insecure     bool   `json:"insecure"`
+	Enabled      bool   `json:"enabled"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+type IntegrationConfigInput struct {
+	Provider     string `json:"provider"`
+	URL          string `json:"url"`
+	Username     string `json:"username"`
+	CredentialID string `json:"credentialId"`
+	AuthType     string `json:"authType"`
+	Insecure     bool   `json:"insecure"`
+	Enabled      bool   `json:"enabled"`
 }
 type Change struct {
 	Field  string `json:"field"`

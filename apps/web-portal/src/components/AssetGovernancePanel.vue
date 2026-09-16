@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ClipboardCheck, Clock3, Plus, RefreshCw, S
 import { assignAssetGovernance, bulkAssetGovernance, confirmAssetGovernance, createAssetGovernanceRule, deleteAssetGovernanceRule, evaluateAssetGovernance, evaluateAssetGovernanceRules, fetchAssetGovernanceIssues, fetchAssetGovernanceRules, retireAssetGovernance, updateAssetGovernanceRule } from '@/api/cmdb'
 import { useAuthStore } from '@/stores/useAuthStore'
 import type { AssetGovernanceIssue, AssetGovernanceReport, AssetGovernanceRule, AssetGovernanceRuleInput } from '@/features/cmdb/types'
+import ResponsibilityEditor from './ResponsibilityEditor.vue'
 
 const emit = defineEmits<{ changed: []; select: [assetId: string] }>()
 const auth = useAuthStore()
@@ -175,12 +176,7 @@ onMounted(load)
       <form @submit.prevent="submitAction">
         <header><div><span>{{ actionLabel(action) }}</span><h3>{{ targetLabel }}</h3><p>{{ targetIds.length > 1 ? `将按同一组责任信息处理 ${targetIds.length} 台资产` : '单台资产治理操作' }}</p></div><button type="button" aria-label="关闭" @click="closeAction"><X/></button></header>
         <section class="action-summary"><AlertTriangle v-if="action === 'retire'"/><ClipboardCheck v-else/><p>{{ action === 'assign' ? '补充负责人、项目组和位置后，资产责任信息将同步写入 CMDB。' : action === 'confirm' ? '确认后该资产停止自动生成责任治理工单和告警，但仍保留在资产台账中。' : '退役后资产状态将变为离线并添加“退役”标签，后续治理评估不再纳入。' }}</p></section>
-        <div class="action-form">
-          <label v-if="action === 'assign'"><span>负责人 *</span><input v-model="form.owner" placeholder="姓名或运维团队"></label>
-          <label v-if="action === 'assign'"><span>项目组</span><input v-model="form.projectGroup" placeholder="例如：核心系统组"></label>
-          <label v-if="action === 'assign'" class="wide"><span>机房 / 位置</span><input v-model="form.location" placeholder="例如：上海一号机房 / A03-12"></label>
-          <label class="wide"><span>治理说明</span><textarea v-model="form.note" rows="3" placeholder="记录确认依据、分派说明或退役原因"></textarea></label>
-        </div>
+        <ResponsibilityEditor :owner="form.owner" :project-group="form.projectGroup" :location="form.location" :show-assignment="action === 'assign'" :show-location="action === 'assign'" :note="form.note" :show-note="true" @update:owner="form.owner = $event" @update:project-group="form.projectGroup = $event" @update:location="form.location = $event" @update:note="form.note = $event" />
         <footer><button type="button" @click="closeAction">取消</button><button class="primary" :disabled="busy" type="submit">{{ busy ? '处理中…' : actionLabel(action) }}</button></footer>
       </form>
     </div>

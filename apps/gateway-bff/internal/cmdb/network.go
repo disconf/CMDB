@@ -365,7 +365,7 @@ func (s *Service) DeleteNetworkLink(id string) error {
 
 func assetUpdateInput(asset Asset, relations []Relation) UpdateAssetInput {
 	return UpdateAssetInput{
-		Name: asset.Name, Status: asset.Status, IP: asset.IP, Environment: asset.Environment,
+		Name: asset.Name, Type: asset.Type, Status: asset.Status, IP: asset.IP, Environment: asset.Environment,
 		ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, Location: asset.Location,
 		Tags: append([]string(nil), asset.Tags...), Attributes: append([]Attribute(nil), asset.Attributes...),
 		Relations: relations,

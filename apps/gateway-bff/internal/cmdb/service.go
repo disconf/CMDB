@@ -38,6 +38,7 @@ type Service struct {
 	history       map[string][]HistoryEntry
 	snapshots     []TopologySnapshot
 	anomalyStates map[string]NetworkAnomalyState
+	integrations  map[string]IntegrationConfig
 	db            *sql.DB
 }
 
@@ -61,7 +62,7 @@ func NewService() *Service {
 	}
 	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
-	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry), snapshots: []TopologySnapshot{}, anomalyStates: map[string]NetworkAnomalyState{}}
+	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry), snapshots: []TopologySnapshot{}, anomalyStates: map[string]NetworkAnomalyState{}, integrations: map[string]IntegrationConfig{}}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
 		db, persistedAssets, persistedHistory, persistedSnapshots, err := openPostgres(databaseURL, assets)
 		if err != nil {
@@ -87,6 +88,11 @@ func NewService() *Service {
 		service.assets = persistedAssets
 		service.history = persistedHistory
 		service.snapshots = persistedSnapshots
+		integrations, integrationErr := loadIntegrationConfigs(context.Background(), service.db)
+		if integrationErr != nil {
+			panic(fmt.Sprintf("load integration configs: %v", integrationErr))
+		}
+		service.integrations = integrations
 	}
 	return service
 }
@@ -1216,7 +1222,7 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 func (s *Service) UpsertExternalAsset(input CreateAssetInput, operator string) (Asset, error) {
 	if _, err := s.GetAsset(input.ID); err == nil {
 		return s.UpdateAsset(input.ID, UpdateAssetInput{
-			Name: input.Name, Status: input.Status, IP: input.IP, Environment: input.Environment,
+			Name: input.Name, Type: input.Type, Status: input.Status, IP: input.IP, Environment: input.Environment,
 			ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location,
 			Tags: append([]string(nil), input.Tags...), Attributes: append([]Attribute(nil), input.Attributes...),
 			Relations: append([]Relation(nil), input.Relations...),
@@ -1238,6 +1244,20 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 		}
 		before := s.assets[index]
 		target := &s.assets[index]
+		if strings.TrimSpace(input.Type) != "" && input.Type != target.Type {
+			typeName := ""
+			for _, model := range s.models {
+				if model.Code == input.Type && model.Enabled {
+					typeName = model.Name
+					break
+				}
+			}
+			if typeName == "" {
+				return Asset{}, ErrValidation
+			}
+			target.Type = input.Type
+			target.TypeName = typeName
+		}
 		target.Name = input.Name
 		target.Status = input.Status
 		target.IP = input.IP
@@ -1269,9 +1289,9 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 			tags, _ := json.Marshal(target.Tags)
 			attrsJSON, _ := json.Marshal(target.Attributes)
 			relsJSON, _ := json.Marshal(target.Relations)
-			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET name=$2,status=$3,ip=$4,environment=$5,
-				project_group=$6,owner=$7,location=$8,tags=$9,attributes=$10,relations=$11,updated_at=now() WHERE id=$1`,
-				id, target.Name, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags, attrsJSON, relsJSON)
+			_, err = tx.ExecContext(ctx, `UPDATE cmdb_assets SET name=$2,type=$3,type_name=$4,status=$5,ip=$6,environment=$7,
+				project_group=$8,owner=$9,location=$10,tags=$11,attributes=$12,relations=$13,updated_at=now() WHERE id=$1`,
+				id, target.Name, target.Type, target.TypeName, target.Status, target.IP, target.Environment, target.ProjectGroup, target.Owner, target.Location, tags, attrsJSON, relsJSON)
 			if err == nil {
 				err = insertHistory(ctx, tx, entry)
 			}
@@ -1331,7 +1351,7 @@ func (s *Service) importRow(row CreateAssetInput, operator string) (string, erro
 	}
 	s.mu.RUnlock()
 	if targetID != "" {
-		if _, err := s.UpdateAsset(targetID, UpdateAssetInput{Name: row.Name, Status: row.Status, IP: row.IP, Environment: row.Environment, ProjectGroup: row.ProjectGroup, Owner: row.Owner, Location: row.Location, Tags: row.Tags, Attributes: row.Attributes, Relations: row.Relations}, operator+"-csv-upsert"); err != nil {
+		if _, err := s.UpdateAsset(targetID, UpdateAssetInput{Name: row.Name, Type: row.Type, Status: row.Status, IP: row.IP, Environment: row.Environment, ProjectGroup: row.ProjectGroup, Owner: row.Owner, Location: row.Location, Tags: row.Tags, Attributes: row.Attributes, Relations: row.Relations}, operator+"-csv-upsert"); err != nil {
 			return "", err
 		}
 		return "updated", nil
@@ -1551,7 +1571,7 @@ func validateCreate(input CreateAssetInput) error {
 	return nil
 }
 func diffAsset(a, b Asset) []Change {
-	pairs := [][3]string{{"name", a.Name, b.Name}, {"status", a.Status, b.Status}, {"ip", a.IP, b.IP}, {"projectGroup", a.ProjectGroup, b.ProjectGroup}, {"owner", a.Owner, b.Owner}, {"location", a.Location, b.Location}, {"tags", strings.Join(a.Tags, "|"), strings.Join(b.Tags, "|")}, {"物理链路", networkRelationSummary(a.Relations), networkRelationSummary(b.Relations)}}
+	pairs := [][3]string{{"name", a.Name, b.Name}, {"type", a.TypeName, b.TypeName}, {"status", a.Status, b.Status}, {"ip", a.IP, b.IP}, {"projectGroup", a.ProjectGroup, b.ProjectGroup}, {"owner", a.Owner, b.Owner}, {"location", a.Location, b.Location}, {"tags", strings.Join(a.Tags, "|"), strings.Join(b.Tags, "|")}, {"物理链路", networkRelationSummary(a.Relations), networkRelationSummary(b.Relations)}}
 	var result []Change
 	for _, p := range pairs {
 		if p[1] != p[2] {

@@ -76,6 +76,16 @@ CREATE TABLE IF NOT EXISTS cmdb_topology_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_cmdb_topology_snapshots_kind_time
   ON cmdb_topology_snapshots(kind, environment, created_at DESC);
+CREATE TABLE IF NOT EXISTS cmdb_integration_configs (
+  provider text PRIMARY KEY,
+  url text NOT NULL DEFAULT '',
+  username text NOT NULL DEFAULT '',
+  credential_id text NOT NULL DEFAULT '',
+  auth_type text NOT NULL DEFAULT 'token',
+  insecure boolean NOT NULL DEFAULT false,
+  enabled boolean NOT NULL DEFAULT true,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS cmdb_network_anomaly_states (
   anomaly_id text PRIMARY KEY,
   status text NOT NULL,

@@ -87,7 +87,7 @@ func NewServer() *Server {
 	credentialsService := credentials.NewService()
 	k8sService := k8s.NewService(cmdbService)
 	auditService := audit.NewService()
-	registerRancherRoutes(mux, authService, auditService, cmdbService)
+	registerRancherRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
 	registerAssetGovernanceRoutes(mux, authService, assetGovernanceService)
@@ -365,6 +365,28 @@ func NewServer() *Server {
 		scope, _, _ := assetQueryForRequest(r, authService)
 		assetQuery := cmdb.AssetQuery{Search: query.Get("q"), Type: query.Get("type"), Status: query.Get("status"), ProjectGroup: query.Get("projectGroup"), Page: page, PageSize: pageSize, ScopeAll: scope.ScopeAll, ScopeProjectGroups: scope.ScopeProjectGroups, ScopeTags: scope.ScopeTags, ScopeEmpty: scope.ScopeEmpty}
 		writeJSON(w, http.StatusOK, cmdbService.ListAssets(assetQuery))
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/asset-options", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := assetScopeForUser(user)
+		types := map[string]bool{}
+		for _, value := range strings.Split(r.URL.Query().Get("types"), ",") {
+			if value = strings.TrimSpace(value); value != "" {
+				types[value] = true
+			}
+		}
+		items := cmdbService.InventoryAssetsFor(scope)
+		options := make([]cmdb.Asset, 0, len(items))
+		for _, item := range items {
+			if len(types) > 0 && !types[item.Type] {
+				continue
+			}
+			options = append(options, item)
+		}
+		writeJSON(w, http.StatusOK, options)
 	})
 	mux.HandleFunc("POST /api/v1/cmdb/assets", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {

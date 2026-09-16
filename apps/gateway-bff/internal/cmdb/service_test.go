@@ -361,3 +361,26 @@ func TestAssetQueryAppliesProjectGroupScope(t *testing.T) {
 		t.Fatalf("empty scope must hide all assets: %#v", summary)
 	}
 }
+
+func TestUpdateAssetCanChangeServerType(t *testing.T) {
+	service := NewService()
+	updated, err := service.UpdateAsset("vm-prod-041", UpdateAssetInput{Name: "order-service-vm", Type: "physical-server", Status: "online", IP: "10.21.4.41", Environment: "生产", ProjectGroup: "电商业务组", Owner: "王强", Location: "上海一号机房 / A01-01", Tags: []string{"订单"}}, "admin")
+	if err != nil {
+		t.Fatalf("change type: %v", err)
+	}
+	if updated.Type != "physical-server" || updated.TypeName != "物理服务器" {
+		t.Fatalf("type not changed: %#v", updated)
+	}
+}
+
+func TestIntegrationConfigPersistsInMemory(t *testing.T) {
+	service := NewService()
+	item, err := service.SaveIntegrationConfig(IntegrationConfigInput{Provider: "rancher", URL: "https://rancher.example", Username: "admin", CredentialID: "cred-1", AuthType: "password", Enabled: true}, "admin")
+	if err != nil {
+		t.Fatalf("save integration: %v", err)
+	}
+	loaded, ok := service.IntegrationConfig("rancher")
+	if !ok || loaded.URL != item.URL || loaded.CredentialID != "cred-1" {
+		t.Fatalf("integration not saved: %#v", loaded)
+	}
+}
