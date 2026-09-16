@@ -166,7 +166,7 @@ function submit() {
   const attributes = attrs.value.map((a) => ({ name: a.name.trim(), label: a.label.trim(), value: a.value.trim() })).filter((a) => a.name || a.label || a.value)
   errors.value = validateAssetForm(form)
   if (form.type === 'virtual-machine' && !hostTargetId.value) errors.value.push('虚拟机必须选择宿主物理机或虚拟化集群')
-  if (attributes.some((a) => !a.name || !a.value)) errors.value.push('扩展属性的字段名和值不能为空')
+  if (attributes.some((a) => !a.name)) errors.value.push('扩展属性填写了显示名或值时必须填写字段名')
   if (errors.value.length) { void nextTick(() => errorBox.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })); return }
   syncHostRelation()
   const cleanRelations = relations.value.map((r) => ({ type: r.type.trim(), targetId: r.targetId.trim(), targetName: r.targetName.trim() })).filter((r) => r.targetId || r.targetName)
