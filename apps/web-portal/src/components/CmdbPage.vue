@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,reactive,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
-import {Activity,Boxes,ChevronLeft,ChevronRight,Database,Download,ExternalLink,Filter,LayoutDashboard,Network,Plus,RefreshCw,Search,Server,Settings,ShieldCheck,Tag,Waypoints,X,History,Pencil} from 'lucide-vue-next'
+import {Activity,Boxes,Cable,ChevronLeft,ChevronRight,Database,Download,ExternalLink,Filter,LayoutDashboard,Network,Plus,RefreshCw,Search,Server,Settings,ShieldCheck,Tag,Waypoints,X,History,Pencil} from 'lucide-vue-next'
 import {useCmdbStore} from '@/stores/useCmdbStore'
 import {statusLabel} from '@/features/cmdb/cmdbModel'
 import AssetEditor from './AssetEditor.vue'
@@ -33,6 +33,7 @@ const editorSaving=ref(false)
 const editorError=ref('')
 const showImport=ref(false)
 const showServerBatch=ref(false)
+const showNetworkLinkEditor=ref(false)
 const showModels=ref(false)
 const importResult=ref<ImportResult>()
 const showAnalytics=ref(false)
@@ -74,8 +75,8 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
         <footer class="table-footer"><span>共 {{store.meta.total}} 条资产</span><div><button :disabled="store.meta.page<=1" @click="page(-1)"><ChevronLeft/></button><b>{{store.meta.page}} / {{store.meta.totalPages||1}}</b><button :disabled="store.meta.page>=store.meta.totalPages" @click="page(1)"><ChevronRight/></button></div></footer></template>
       </main>
     </div>
-    <div v-if="store.selected" class="drawer-backdrop" @click.self="store.closeDetail"><aside class="asset-drawer"><header><div><span>资产详情</span><h2>{{store.selected.name}}</h2><small>{{store.selected.id}}</small></div><div class="drawer-actions"><button aria-label="编辑" @click="editorMode='edit';editorError=''"><Pencil/></button><button aria-label="关闭" @click="store.closeDetail"><X/></button></div></header><section class="asset-identity"><Server/><div><strong>{{store.selected.typeName}}</strong><span><b class="status-pill" :data-status="store.selected.status">{{statusLabel(store.selected.status)}}</b> {{store.selected.environment}}</span></div></section><section><h3>基础信息</h3><dl><div><dt>IP 地址</dt><dd>{{store.selected.ip}}</dd></div><div><dt>负责人</dt><dd>{{store.selected.owner}}</dd></div><div><dt>项目组</dt><dd>{{store.selected.projectGroup}}</dd></div><div><dt>位置</dt><dd>{{store.selected.location}}</dd></div><div><dt>数据来源</dt><dd>{{store.selected.source}}</dd></div><div><dt>最后发现</dt><dd>{{store.selected.lastSeenAt}}</dd></div></dl></section><section><h3>标签</h3><div class="asset-tags"><span v-for="tag in store.selected.tags" :key="tag">{{tag}}</span></div></section><section><h3><History/>变更历史</h3><div class="history-list"><div v-if="!store.history.length">暂无人工变更</div><article v-for="entry in store.history" :key="entry.id"><strong>{{entry.action==='created'?'创建资产':'更新资产'}}</strong><span>{{entry.operator}} · {{entry.occurredAt}}</span><small v-for="change in entry.changes" :key="change.field">{{change.field}}：{{change.before}} → {{change.after}}</small></article></div></section></aside></div>
-    <NetworkInterfacesPanel v-if="store.selected && ['physical-server','virtual-machine','k8s-node','cloud-host'].includes(store.selected.type)" :asset-id="store.selected.id"/>
+    <div v-if="store.selected" class="drawer-backdrop" @click.self="store.closeDetail"><aside class="asset-drawer"><header><div><span>资产详情</span><h2>{{store.selected.name}}</h2><small>{{store.selected.id}}</small></div><div class="drawer-actions"><button v-if="store.selected.type==='physical-server'" class="link-action" @click="showNetworkLinkEditor=true"><Cable/>关联交换机端口</button><button aria-label="编辑" @click="editorMode='edit';editorError=''"><Pencil/></button><button aria-label="关闭" @click="showNetworkLinkEditor=false;store.closeDetail()"><X/></button></div></header><section class="asset-identity"><Server/><div><strong>{{store.selected.typeName}}</strong><span><b class="status-pill" :data-status="store.selected.status">{{statusLabel(store.selected.status)}}</b> {{store.selected.environment}}</span></div></section><section><h3>基础信息</h3><dl><div><dt>IP 地址</dt><dd>{{store.selected.ip}}</dd></div><div><dt>负责人</dt><dd>{{store.selected.owner}}</dd></div><div><dt>项目组</dt><dd>{{store.selected.projectGroup}}</dd></div><div><dt>位置</dt><dd>{{store.selected.location}}</dd></div><div><dt>数据来源</dt><dd>{{store.selected.source}}</dd></div><div><dt>最后发现</dt><dd>{{store.selected.lastSeenAt}}</dd></div></dl></section><section><h3>标签</h3><div class="asset-tags"><span v-for="tag in store.selected.tags" :key="tag">{{tag}}</span></div></section><section><h3><History/>变更历史</h3><div class="history-list"><div v-if="!store.history.length">暂无人工变更</div><article v-for="entry in store.history" :key="entry.id"><strong>{{entry.action==='created'?'创建资产':'更新资产'}}</strong><span>{{entry.operator}} · {{entry.occurredAt}}</span><small v-for="change in entry.changes" :key="change.field">{{change.field}}：{{change.before}} → {{change.after}}</small></article></div></section></aside></div>
+    <div v-if="showNetworkLinkEditor && store.selected" class="network-link-modal" @click.self="showNetworkLinkEditor=false"><section class="network-link-dialog"><header><div><Cable/><span><strong>关联交换机端口</strong><small>{{store.selected.name}} · {{store.selected.ip}}</small></span></div><button aria-label="关闭" @click="showNetworkLinkEditor=false"><X/></button></header><NetworkInterfacesPanel :asset-id="store.selected.id"/></section></div>
     <CollectedAttributes v-if="store.selected" :attributes="store.selected.attributes"/>
     <HostMonitoring v-if="store.selected" :asset-id="store.selected.id"/>
     <ServerBatchConfig v-if="showServerBatch" @close="showServerBatch=false" @changed="store.search({...filters})" />
@@ -104,4 +105,20 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
 
 <style scoped>
 .batch-config-button { height:34px; padding:0 12px; border:1px solid #1a93c8; background:#0b6da5; color:#fff; cursor:pointer; border-radius:4px; }
+</style>
+
+
+
+<style scoped>
+.link-action { height:30px; padding:0 8px; border:1px solid #1a93c8; background:#0b6da5; color:#fff; cursor:pointer; display:flex; align-items:center; gap:5px; font-size:10px; }
+.link-action svg { width:13px; }
+.network-link-modal { position:fixed; inset:0; z-index:60; background:rgba(0,8,16,.78); display:grid; place-items:center; }
+.network-link-dialog { width:min(860px,94vw); max-height:88vh; overflow:auto; background:#061a2c; border:1px solid #246c98; border-radius:12px; box-shadow:0 25px 80px rgba(0,0,0,.45); }
+.network-link-dialog > header { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid #174d78; }
+.network-link-dialog > header > div { display:flex; align-items:center; gap:9px; }
+.network-link-dialog > header svg { width:18px; color:#31c9eb; }
+.network-link-dialog > header span { display:grid; gap:3px; }
+.network-link-dialog > header strong { font-size:13px; }
+.network-link-dialog > header small { font-size:9px; color:#7890a8; }
+.network-link-dialog > header button { border:0; background:transparent; color:#8aa6b9; cursor:pointer; }
 </style>
