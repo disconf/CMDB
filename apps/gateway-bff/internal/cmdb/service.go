@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,7 +61,7 @@ func NewService() *Service {
 			asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
 		}
 	}
-	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "virtualization-cluster", Name: "虚拟化集群", Category: "计算", Icon: "Boxes", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "virtualization-cluster", Name: "虚拟化集群", Category: "计算", Icon: "Boxes", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "storage-device", Name: "存储设备", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "security-device", Name: "安全设备", Category: "安全", Icon: "ShieldCheck", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
 	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry), snapshots: []TopologySnapshot{}, anomalyStates: map[string]NetworkAnomalyState{}, integrations: map[string]IntegrationConfig{}}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
@@ -148,8 +149,11 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "bmc_ip", Label: "带外管理IP(BMC)", Type: "text"},
 		{Name: "idc_name", Label: "机房名称", Type: "text"},
 		{Name: "module_name", Label: "模块/区域", Type: "text"},
+		{Name: "rack_id", Label: "机柜ID", Type: "text"},
 		{Name: "rack_no", Label: "机柜号", Type: "text"},
-		{Name: "u_position", Label: "U位", Type: "text"},
+		{Name: "u_position", Label: "起始U位", Type: "text"},
+		{Name: "u_height", Label: "设备高度(U)", Type: "number"},
+		{Name: "voltage", Label: "电压", Type: "text"},
 		{Name: "os_name", Label: "操作系统", Type: "text"},
 		{Name: "kernel", Label: "内核版本", Type: "text"},
 		{Name: "cpu", Label: "CPU", Type: "text"},
@@ -233,8 +237,49 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "hosts", Label: "访问域名", Type: "text"},
 		{Name: "load_balancer", Label: "负载均衡地址", Type: "text"},
 	},
+	"storage-device": {
+		{Name: "serial", Label: "序列号", Type: "text"},
+		{Name: "vendor", Label: "厂商", Type: "text"},
+		{Name: "model", Label: "型号", Type: "text"},
+		{Name: "capacity", Label: "容量", Type: "text"},
+		{Name: "idc_name", Label: "机房名称", Type: "text"},
+		{Name: "module_name", Label: "模块/区域", Type: "text"},
+		{Name: "rack_id", Label: "机柜ID", Type: "text"},
+		{Name: "rack_no", Label: "机柜号", Type: "text"},
+		{Name: "u_position", Label: "起始U位", Type: "text"},
+		{Name: "u_height", Label: "设备高度(U)", Type: "number"},
+		{Name: "voltage", Label: "电压", Type: "text"},
+	},
+	"security-device": {
+		{Name: "serial", Label: "序列号", Type: "text"},
+		{Name: "vendor", Label: "厂商", Type: "text"},
+		{Name: "model", Label: "型号", Type: "text"},
+		{Name: "idc_name", Label: "机房名称", Type: "text"},
+		{Name: "module_name", Label: "模块/区域", Type: "text"},
+		{Name: "rack_id", Label: "机柜ID", Type: "text"},
+		{Name: "rack_no", Label: "机柜号", Type: "text"},
+		{Name: "u_position", Label: "起始U位", Type: "text"},
+		{Name: "u_height", Label: "设备高度(U)", Type: "number"},
+		{Name: "voltage", Label: "电压", Type: "text"},
+	},
+	"load-balancer": {
+		{Name: "idc_name", Label: "机房名称", Type: "text"},
+		{Name: "module_name", Label: "模块/区域", Type: "text"},
+		{Name: "rack_id", Label: "机柜ID", Type: "text"},
+		{Name: "rack_no", Label: "机柜号", Type: "text"},
+		{Name: "u_position", Label: "起始U位", Type: "text"},
+		{Name: "u_height", Label: "设备高度(U)", Type: "number"},
+		{Name: "voltage", Label: "电压", Type: "text"},
+	},
 	"network-device": {
 		{Name: "serial", Label: "序列号", Type: "text"},
+		{Name: "idc_name", Label: "机房名称", Type: "text"},
+		{Name: "module_name", Label: "模块/区域", Type: "text"},
+		{Name: "rack_id", Label: "机柜ID", Type: "text"},
+		{Name: "rack_no", Label: "机柜号", Type: "text"},
+		{Name: "u_position", Label: "起始U位", Type: "text"},
+		{Name: "u_height", Label: "设备高度(U)", Type: "number"},
+		{Name: "voltage", Label: "电压", Type: "text"},
 		{Name: "vendor", Label: "厂商", Type: "text"},
 		{Name: "model", Label: "型号", Type: "text"},
 		{Name: "software_version", Label: "软件版本", Type: "text"},
@@ -302,12 +347,25 @@ func ensureDefaultModels(ctx context.Context, db *sql.DB, defaults, persisted []
 
 func ensureModelFieldPresets(ctx context.Context, db *sql.DB, models []Model) error {
 	for index := range models {
-		if len(models[index].Fields) == 0 {
-			if fields, ok := modelFieldPresets[models[index].Code]; ok {
-				models[index].Fields = fields
-				if err := upsertModel(ctx, db, models[index]); err != nil {
-					return err
-				}
+		preset, ok := modelFieldPresets[models[index].Code]
+		if !ok {
+			continue
+		}
+		existing := make(map[string]bool, len(models[index].Fields))
+		for _, field := range models[index].Fields {
+			existing[field.Name] = true
+		}
+		changed := false
+		for _, field := range preset {
+			if existing[field.Name] {
+				continue
+			}
+			models[index].Fields = append(models[index].Fields, field)
+			changed = true
+		}
+		if changed {
+			if err := upsertModel(ctx, db, models[index]); err != nil {
+				return err
 			}
 		}
 	}
@@ -1123,41 +1181,95 @@ func attrValue(attrs []Attribute, name string) string {
 	return ""
 }
 
-func rackSlot(attrs []Attribute) (string, string) {
-	return attrValue(attrs, "rack_id"), attrValue(attrs, "u_position")
+func rackSlot(attrs []Attribute) (string, int, int) {
+	start, height := parseUValue(attrValue(attrs, "u_position"))
+	if configured, err := strconv.Atoi(strings.TrimSpace(attrValue(attrs, "u_height"))); err == nil && configured > 0 {
+		height = configured
+	}
+	return attrValue(attrs, "rack_id"), start, height
+}
+
+func parseUValue(value string) (int, int) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0
+	}
+	clean := func(part string) string {
+		return strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(part, "U"), "u"))
+	}
+	parts := strings.Split(value, "-")
+	start, err := strconv.Atoi(clean(parts[0]))
+	if err != nil || start <= 0 {
+		return 0, 0
+	}
+	if len(parts) < 2 {
+		return start, 1
+	}
+	end, err := strconv.Atoi(clean(parts[1]))
+	if err != nil || end < start {
+		return start, 1
+	}
+	return start, end - start + 1
+}
+
+func expandedUSlots(start, height int) []string {
+	if start <= 0 {
+		return nil
+	}
+	if height <= 0 {
+		height = 1
+	}
+	slots := make([]string, 0, height)
+	for u := start; u < start+height; u++ {
+		slots = append(slots, strconv.Itoa(u))
+	}
+	return slots
+}
+
+func rangesOverlap(leftStart, leftHeight, rightStart, rightHeight int) bool {
+	if leftHeight <= 0 {
+		leftHeight = 1
+	}
+	if rightHeight <= 0 {
+		rightHeight = 1
+	}
+	return leftStart < rightStart+rightHeight && rightStart < leftStart+leftHeight
 }
 
 func (s *Service) syncSlot(assetID string, attrs []Attribute) error {
 	if s.db == nil {
 		return nil
 	}
-	rackID, u := rackSlot(attrs)
+	rackID, start, height := rackSlot(attrs)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM idc_rack_occupancy WHERE asset_id=$1`, assetID); err != nil {
 		return err
 	}
-	if rackID == "" || u == "" {
+	if rackID == "" || start <= 0 {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO idc_rack_occupancy(rack_id,u_position,asset_id) VALUES($1,$2,$3)`, rackID, u, assetID); err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
-			return ErrSlotTaken
+	for _, u := range expandedUSlots(start, height) {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO idc_rack_occupancy(rack_id,u_position,asset_id) VALUES($1,$2,$3)`, rackID, u, assetID); err != nil {
+			if strings.Contains(err.Error(), "duplicate key") {
+				return ErrSlotTaken
+			}
+			return err
 		}
-		return err
 	}
 	return nil
 }
 
-func (s *Service) slotTaken(rackID, u, exceptID string) bool {
-	if rackID == "" || u == "" {
+func (s *Service) slotTaken(rackID string, start, height int, exceptID string) bool {
+	if rackID == "" || start <= 0 {
 		return false
 	}
 	for _, a := range s.assets {
 		if a.ID == exceptID {
 			continue
 		}
-		if attrValue(a.Attributes, "rack_id") == rackID && attrValue(a.Attributes, "u_position") == u {
+		existingRack, existingStart, existingHeight := rackSlot(a.Attributes)
+		if existingRack == rackID && existingStart > 0 && rangesOverlap(start, height, existingStart, existingHeight) {
 			return true
 		}
 	}
@@ -1188,7 +1300,7 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 		return Asset{}, fmt.Errorf("%w: unknown type", ErrValidation)
 	}
 	attrs := normalizeAttributes(input.Attributes, modelFieldsFor(s.models, input.Type))
-	if rackID, uPos := attrValue(attrs, "rack_id"), attrValue(attrs, "u_position"); rackID != "" && uPos != "" && s.slotTaken(rackID, uPos, input.ID) {
+	if rackID, uStart, uHeight := rackSlot(attrs); rackID != "" && uStart > 0 && s.slotTaken(rackID, uStart, uHeight, input.ID) {
 		return Asset{}, ErrSlotTaken
 	}
 	created := Asset{ID: input.ID, Name: input.Name, Type: input.Type, TypeName: typeName, Status: input.Status, IP: input.IP, Environment: input.Environment, ProjectGroup: input.ProjectGroup, Owner: input.Owner, Location: input.Location, Source: input.Source, LastSeenAt: time.Now().Format("2006-01-02 15:04:05"), Tags: append([]string(nil), input.Tags...), Attributes: attrs, Relations: append([]Relation(nil), input.Relations...)}
@@ -1280,7 +1392,7 @@ func (s *Service) UpdateAsset(id string, input UpdateAssetInput, operator string
 		if input.Relations != nil {
 			target.Relations = append([]Relation(nil), input.Relations...)
 		}
-		if rackID, uPos := attrValue(target.Attributes, "rack_id"), attrValue(target.Attributes, "u_position"); rackID != "" && uPos != "" && s.slotTaken(rackID, uPos, id) {
+		if rackID, uStart, uHeight := rackSlot(target.Attributes); rackID != "" && uStart > 0 && s.slotTaken(rackID, uStart, uHeight, id) {
 			s.assets[index] = before
 			return Asset{}, ErrSlotTaken
 		}

@@ -29,19 +29,14 @@ const quickSections = computed(() => remoteSections.filter(item => item.id !== '
       </div>
     </header>
 
-    <nav class="remote-section-nav" aria-label="远程运维二级菜单">
-      <button v-for="item in remoteSections" :key="item.id" :class="{ active: active === item.id }" @click="router.push(item.path)">
-        <component :is="sectionIcons[item.id]"/>
-        <span><strong>{{ item.shortName }}</strong><small>{{ item.description }}</small></span>
-      </button>
-    </nav>
+
 
     <div v-if="active === 'overview'" class="remote-overview">
       <section class="remote-overview-hero">
         <div>
           <span>REMOTE OPERATIONS CONTROL PLANE</span>
           <h2>统一入口，按任务拆分操作界面</h2>
-          <p>终端、文件、批量执行和安全策略分别管理，避免在一个页面内同时处理连接、审批、录像和授权。</p>
+          <p>终端、文件、批量执行和安全策略通过左侧远程运维二级菜单切换，避免页面内重复导航。</p>
         </div>
         <div class="remote-flow">
           <span><b>1</b>身份校验</span><i></i><span><b>2</b>资产授权</span><i></i><span><b>3</b>策略与审批</span><i></i><span><b>4</b>会话审计</span>

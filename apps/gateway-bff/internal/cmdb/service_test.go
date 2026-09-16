@@ -416,3 +416,24 @@ func TestBatchUpdateAssetsAppliesCommonFieldsAndHost(t *testing.T) {
 		t.Fatalf("host relation not applied: %#v", updated.Relations)
 	}
 }
+
+func TestCreateAssetRejectsOverlappingRackRange(t *testing.T) {
+	service := NewService()
+	base := CreateAssetInput{Type: "physical-server", Status: "online", Environment: "测试", ProjectGroup: "平台组", Owner: "ops", Source: "manual", Attributes: []Attribute{{Name: "rack_id", Label: "机柜ID", Value: "rack-range"}, {Name: "u_position", Label: "起始U位", Value: "10"}, {Name: "u_height", Label: "设备高度(U)", Value: "2"}}}
+	base.ID, base.Name = "rack-range-a", "rack-range-a"
+	if _, err := service.CreateAsset(base, "tester"); err != nil {
+		t.Fatalf("create first asset: %v", err)
+	}
+	overlap := base
+	overlap.ID, overlap.Name = "rack-range-b", "rack-range-b"
+	overlap.Attributes = []Attribute{{Name: "rack_id", Label: "机柜ID", Value: "rack-range"}, {Name: "u_position", Label: "起始U位", Value: "11"}, {Name: "u_height", Label: "设备高度(U)", Value: "1"}}
+	if _, err := service.CreateAsset(overlap, "tester"); !errors.Is(err, ErrSlotTaken) {
+		t.Fatalf("expected overlapping slot error, got %v", err)
+	}
+	adjacent := overlap
+	adjacent.ID, adjacent.Name = "rack-range-c", "rack-range-c"
+	adjacent.Attributes = []Attribute{{Name: "rack_id", Label: "机柜ID", Value: "rack-range"}, {Name: "u_position", Label: "起始U位", Value: "12"}, {Name: "u_height", Label: "设备高度(U)", Value: "1"}}
+	if _, err := service.CreateAsset(adjacent, "tester"); err != nil {
+		t.Fatalf("adjacent slot should be available: %v", err)
+	}
+}

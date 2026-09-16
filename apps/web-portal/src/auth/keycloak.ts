@@ -13,9 +13,26 @@ export const keycloak = new Keycloak({
 })
 
 export const initializeKeycloak = () =>
-  keycloak.init({ onLoad: 'check-sso', pkceMethod: 'S256', checkLoginIframe: false })
+  keycloak.init({
+    onLoad: 'check-sso',
+    pkceMethod: 'S256',
+    checkLoginIframe: false,
+    timeSkew: 30,
+  })
 
-export const refreshAccessToken = async () => {
-  if (keycloak.authenticated) await keycloak.updateToken(30)
+export const refreshAccessToken = async (minValidity = 60) => {
+  if (!keycloak.authenticated) return ''
+  try {
+    await keycloak.updateToken(minValidity)
+  } catch (error) {
+    if (!keycloak.refreshToken) throw error
+    await keycloak.updateToken(-1)
+  }
   return keycloak.token || ''
+}
+
+export const configureTokenLifecycle = (onToken: (token: string) => void, onExpired: () => void) => {
+  keycloak.onTokenExpired = () => {
+    void refreshAccessToken(30).then(onToken).catch(onExpired)
+  }
 }

@@ -11,3 +11,14 @@ func TestServiceWithoutDBReportsNoDB(t *testing.T) {
 		t.Fatal("expected ErrNoDB")
 	}
 }
+
+func TestParseUPositionSupportsSingleAndRanges(t *testing.T) {
+	start, height := parseUPosition("12")
+	if start != 12 || height != 1 {
+		t.Fatalf("unexpected single U: %d/%d", start, height)
+	}
+	start, height = parseUPosition("10-13")
+	if start != 10 || height != 4 {
+		t.Fatalf("unexpected ranged U: %d/%d", start, height)
+	}
+}

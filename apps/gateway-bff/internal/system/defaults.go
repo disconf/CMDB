@@ -23,6 +23,7 @@ func defaultModules() []Module {
 	return []Module{
 		{Code: "dashboard", Name: "全局态势", Enabled: true, Order: 1, Permission: "dashboard:view"},
 		{Code: "cmdb", Name: "CMDB 资产", Enabled: true, Order: 2, Permission: "cmdb:view"},
+		{Code: "idc", Name: "机房管理", Enabled: true, Order: 3, Permission: "cmdb:view"},
 		{Code: "topology", Name: "拓扑中心", Enabled: true, Order: 3, Permission: "topology:view"},
 		{Code: "monitor", Name: "监控告警", Enabled: true, Order: 4, Permission: "monitor:view"},
 		{Code: "jobs", Name: "任务管理", Enabled: true, Order: 5, Permission: "job:view"},

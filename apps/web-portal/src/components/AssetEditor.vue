@@ -63,8 +63,8 @@ function syncHostRelation() {
   relations.value.push({ type: 'runs-on', targetId: hostTargetId.value, targetName: target?.name || hostTargetId.value })
 }
 function clearPhysicalLocation() {
-  clearAttr('idc_name'); clearAttr('module_name'); clearAttr('rack_no'); clearAttr('rack_id'); clearAttr('u_position'); clearAttr('voltage')
-  idcRoomId.value = ''; idcModuleId.value = ''; idcRackId.value = ''; idcU.value = ''
+  clearAttr('idc_name'); clearAttr('module_name'); clearAttr('rack_no'); clearAttr('rack_id'); clearAttr('u_position'); clearAttr('u_height'); clearAttr('voltage')
+  idcRoomId.value = ''; idcModuleId.value = ''; idcRackId.value = ''; idcU.value = ''; idcUHeight.value = 1
 }
 
 function modelFields() {
@@ -91,12 +91,29 @@ const idcRoomId = ref('')
 const idcModuleId = ref('')
 const idcRackId = ref('')
 const idcU = ref('')
+const idcUHeight = ref(1)
+const rackAssetTypes = ['physical-server','network-device','load-balancer','storage-device','security-device']
+const isRackAsset = computed(() => rackAssetTypes.includes(form.type))
 const idcModules = computed(() => props.idcRooms?.find((x) => x.id === idcRoomId.value)?.modules ?? [])
 const selectedModule = computed(() => idcModules.value.find((m) => m.id === idcModuleId.value))
 const idcRacks = computed(() => selectedModule.value?.racks ?? [])
 const selectedRack = computed(() => idcRacks.value.find((r) => r.id === idcRackId.value))
-const ownU = computed(() => attrValue('u_position'))
-const uOptions = computed(() => { const rack = selectedRack.value; const occupied = new Set(rack?.occupiedU ?? []); return Array.from({ length: rack?.uTotal ?? 0 }, (_, i) => String(i + 1)).filter((u) => !occupied.has(u) || u === ownU.value) })
+const ownU = computed(() => Number.parseInt(attrValue('u_position').split('-')[0], 10) || 0)
+const ownHeight = computed(() => Number.parseInt(attrValue('u_height'), 10) || 1)
+const uOptions = computed(() => {
+  const rack = selectedRack.value
+  if (!rack) return []
+  const occupied = new Set(rack.occupiedU ?? [])
+  const ownSlots = new Set(Array.from({ length: ownHeight.value }, (_, index) => String(ownU.value + index)))
+  return Array.from({ length: Math.max(0, rack.uTotal - idcUHeight.value + 1) }, (_, index) => String(index + 1)).filter(start => {
+    const startNumber = Number(start)
+    for (let u = startNumber; u < startNumber + idcUHeight.value; u++) {
+      const slot = String(u)
+      if (occupied.has(slot) && !ownSlots.has(slot)) return false
+    }
+    return true
+  })
+})
 function attrValue(name: string) { return attrs.value.find((a) => a.name === name)?.value || '' }
 function setAttr(name: string, label: string, value: string) {
   const found = attrs.value.find((a) => a.name === name)
@@ -112,7 +129,8 @@ function syncIdcLocation() {
   const module = idcModules.value.find((x) => x.id === idcModuleId.value)
   const rack = idcRacks.value.find((x) => x.id === idcRackId.value)
   if (!room && !module && !rack) return
-  form.location = [room?.name, module?.name, rack ? `${rack.name}${idcU.value ? `-${idcU.value}U` : ''}` : ''].filter(Boolean).join(' / ')
+  const endU = idcU.value ? Number(idcU.value) + idcUHeight.value - 1 : 0
+  form.location = [room?.name, module?.name, rack ? `${rack.name}${idcU.value ? ` U${idcU.value}${endU > Number(idcU.value) ? `-U${endU}` : ''}` : ''}` : ''].filter(Boolean).join(' / ')
 }
 let hydratingIdc = false
 function hydrateIdcSelection() {
@@ -122,6 +140,7 @@ function hydrateIdcSelection() {
   const moduleName = attrValue('module_name')
   const rackID = attrValue('rack_id')
   const uPosition = attrValue('u_position')
+  const uHeight = Number.parseInt(attrValue('u_height'), 10) || 1
   const room = props.idcRooms.find((x) => x.name === roomName)
   if (room) {
     idcRoomId.value = room.id
@@ -129,7 +148,7 @@ function hydrateIdcSelection() {
     if (module) {
       idcModuleId.value = module.id
       const rack = module.racks.find((x) => x.id === rackID)
-      if (rack) { idcRackId.value = rack.id; idcU.value = uPosition }
+      if (rack) { idcRackId.value = rack.id; idcU.value = uPosition.split('-')[0]; idcUHeight.value = uHeight }
     }
   }
   void nextTick(() => { hydratingIdc = false })
@@ -144,20 +163,21 @@ watch(idcRoomId, (v, old) => {
 })
 watch(idcModuleId, (v, old) => {
   if (hydratingIdc) return
-  if (old && v !== old) { idcRackId.value = ''; idcU.value = '' }
+  if (old && v !== old) { idcRackId.value = ''; idcU.value = ''; idcUHeight.value = 1 }
   const module = idcModules.value.find((x) => x.id === v)
   if (module) { setAttr('module_name', '模块/区域', module.name) } else { clearAttr('module_name') }
   syncIdcLocation()
 })
 watch(idcRackId, (v, old) => {
   if (hydratingIdc) return
-  if (old && v !== old) idcU.value = ''
+  if (old && v !== old) { idcU.value = ''; idcUHeight.value = 1 }
   const rack = selectedRack.value
   if (rack) { setAttr('rack_id', '机柜ID', rack.id); setAttr('rack_no', '机柜号', rack.name); if (rack.voltage) setAttr('voltage', '电压', rack.voltage) }
   else { clearAttr('rack_id'); clearAttr('rack_no'); clearAttr('voltage') }
   syncIdcLocation()
 })
-watch(idcU, (v) => { if (hydratingIdc) return; if (v) setAttr('u_position', 'U位', v); else clearAttr('u_position'); syncIdcLocation() })
+watch(idcU, (v) => { if (hydratingIdc) return; if (v) setAttr('u_position', '起始U位', v); else clearAttr('u_position'); syncIdcLocation() })
+watch(idcUHeight, (v) => { if (hydratingIdc) return; if (v > 0) setAttr('u_height', '设备高度(U)', String(v)); else clearAttr('u_height'); syncIdcLocation() })
 function addAttr() { attrs.value.push({ name: '', label: '', value: '' }) }
 function removeAttr(index: number) { attrs.value.splice(index, 1) }
 
@@ -189,7 +209,7 @@ function submit() {
         <label><span>状态</span><select v-model="form.status"><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select></label>
         <label><span>IP 地址</span><input v-model="form.ip"></label>
         <label><span>环境</span><select v-model="form.environment"><option>生产</option><option>测试</option><option>开发</option></select></label>
-        <label v-if="form.type === 'physical-server'" class="wide"><span>位置</span><input v-model="form.location" placeholder="选择机房后自动写入"></label>
+        <label v-if="isRackAsset" class="wide"><span>位置</span><input v-model="form.location" placeholder="选择机房后自动写入"></label>
         <label v-else-if="form.type === 'virtual-machine'" class="wide"><span>继承位置</span><input :value="form.location || '由宿主资产继承'" readonly></label>
         <label class="wide"><span>标签（使用 | 分隔）</span><input v-model="tagsText"></label>
       </div>
@@ -204,13 +224,13 @@ function submit() {
         </div>
         <p class="attr-hint">虚拟机不直接选择机房、机柜、U位或交换机端口，这些信息从宿主资产继承。</p>
       </section>
-      <section v-if="form.type === 'physical-server' && props.idcRooms?.length" class="attr-editor idc-picker">
+      <section v-if="isRackAsset && props.idcRooms?.length" class="attr-editor idc-picker">
         <header><h3>机房定位（可选）</h3></header>
         <div class="idc-grid">
           <label><span>机房</span><select v-model="idcRoomId"><option value="">请选择</option><option v-for="room in props.idcRooms ?? []" :key="room.id" :value="room.id">{{ room.name }}（{{ room.location }}）</option></select></label>
           <label><span>模块</span><select v-model="idcModuleId" :disabled="!idcModules.length"><option value="">请选择</option><option v-for="m in idcModules" :key="m.id" :value="m.id">{{ m.name }}</option></select></label>
           <label><span>机柜</span><select v-model="idcRackId" :disabled="!idcRacks.length"><option value="">请选择</option><option v-for="r in idcRacks" :key="r.id" :value="r.id">{{ r.name }}（{{ r.uTotal }}U / {{ r.voltage }}）</option></select></label>
-          <label><span>U位</span><select v-model="idcU" :disabled="!uOptions.length"><option value="">请选择</option><option v-for="u in uOptions" :key="u" :value="u">{{ u }}U</option></select></label>
+          <label><span>起始U位</span><select v-model="idcU" :disabled="!uOptions.length"><option value="">请选择</option><option v-for="u in uOptions" :key="u" :value="u">{{ u }}U</option></select></label><label><span>设备高度</span><select v-model.number="idcUHeight"><option v-for="h in [1,2,4,6,8,10]" :key="h" :value="h">{{ h }}U</option></select></label>
         </div>
       </section>
       <section class="attr-editor">
@@ -257,7 +277,7 @@ function submit() {
 .attr-remove { background: none; border: none; cursor: pointer; color: var(--danger, #f56c6c); }
 .attr-empty { font-size: 12px; opacity: .5; }
 .rel-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
-.idc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.idc-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .idc-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .rel-row input, .rel-row select { width: 100%; box-sizing: border-box; }
 .form-errors { position: sticky; bottom: 0; z-index: 2; display: flex; flex-direction: column; gap: 4px; margin: 14px 0; padding: 10px 12px; border: 1px solid #7f1d1d; border-radius: 8px; background: #46151d; color: #fecdd3; }

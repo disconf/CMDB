@@ -14,12 +14,22 @@ type Module struct {
 	Racks  []Rack `json:"racks"`
 }
 type Rack struct {
-	ID        string   `json:"id"`
-	ModuleID  string   `json:"moduleId"`
-	Name      string   `json:"name"`
-	UTotal    int      `json:"uTotal"`
-	Voltage   string   `json:"voltage"`
-	OccupiedU []string `json:"occupiedU"`
+	ID         string      `json:"id"`
+	ModuleID   string      `json:"moduleId"`
+	Name       string      `json:"name"`
+	UTotal     int         `json:"uTotal"`
+	Voltage    string      `json:"voltage"`
+	OccupiedU  []string    `json:"occupiedU"`
+	Placements []Placement `json:"placements"`
+}
+
+type Placement struct {
+	AssetID   string `json:"assetId"`
+	AssetName string `json:"assetName"`
+	AssetType string `json:"assetType"`
+	Status    string `json:"status"`
+	UStart    int    `json:"uStart"`
+	UHeight   int    `json:"uHeight"`
 }
 type CreateRoom struct {
 	Name     string `json:"name"`

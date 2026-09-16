@@ -12,7 +12,8 @@ export interface ImportResult { total:number;created:number;updated:number;error
 
 export interface Analytics { status:{total:number;online:number;warning:number;offline:number}; byType:Array<{code:string;name:string;count:number}>; byGroup:Array<{group:string;count:number}>; bySource:Array<{source:string;count:number}>; completeness:Array<{field:string;label:string;missing:number;total:number;rate:number}> }
 
-export interface IdcRack { id:string;moduleId:string;name:string;uTotal:number;voltage:string;occupiedU?:string[] }
+export interface IdcPlacement { assetId:string;assetName:string;assetType:string;status:string;uStart:number;uHeight:number }
+export interface IdcRack { id:string;moduleId:string;name:string;uTotal:number;voltage:string;occupiedU?:string[];placements?:IdcPlacement[] }
 export interface IdcModule { id:string;roomId:string;name:string;racks:IdcRack[] }
 export interface IdcRoom { id:string;name:string;location:string;modules:IdcModule[] }
 

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,15 +98,17 @@ func (s *Service) ListRooms() ([]Room, error) {
 				var k Rack
 				if err := rackRows.Scan(&k.ID, &k.ModuleID, &k.Name, &k.UTotal, &k.Voltage); err == nil {
 					k.OccupiedU = []string{}
+					k.Placements = []Placement{}
 					rooms[i].Modules[j].Racks = append(rooms[i].Modules[j].Racks, k)
 				}
 			}
 			rackRows.Close()
 			for rackIndex := range rooms[i].Modules[j].Racks {
-				occupied, err := s.occupiedU(ctx, rooms[i].Modules[j].Racks[rackIndex].ID)
+				placements, occupied, err := s.rackOccupancy(ctx, rooms[i].Modules[j].Racks[rackIndex].ID)
 				if err != nil {
 					return nil, err
 				}
+				rooms[i].Modules[j].Racks[rackIndex].Placements = placements
 				rooms[i].Modules[j].Racks[rackIndex].OccupiedU = occupied
 			}
 		}
@@ -112,38 +116,91 @@ func (s *Service) ListRooms() ([]Room, error) {
 	return rooms, nil
 }
 
-func (s *Service) occupiedU(ctx context.Context, rackID string) ([]string, error) {
+func (s *Service) rackOccupancy(ctx context.Context, rackID string) ([]Placement, []string, error) {
 	filter, _ := json.Marshal([]map[string]string{{"name": "rack_id", "value": rackID}})
-	rows, err := s.db.QueryContext(ctx, `SELECT attributes FROM cmdb_assets WHERE attributes @> $1::jsonb`, string(filter))
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,status,attributes FROM cmdb_assets WHERE attributes @> $1::jsonb`, string(filter))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	var occupied []string
+	placements := []Placement{}
+	occupied := []string{}
 	for rows.Next() {
+		var item Placement
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, err
+		if err := rows.Scan(&item.AssetID, &item.AssetName, &item.AssetType, &item.Status, &raw); err != nil {
+			return nil, nil, err
 		}
 		var attrs []struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`
 		}
-		if json.Unmarshal(raw, &attrs) == nil {
-			for _, a := range attrs {
-				if a.Name == "u_position" && a.Value != "" {
-					occupied = append(occupied, a.Value)
+		if json.Unmarshal(raw, &attrs) != nil {
+			continue
+		}
+		start, height := 0, 1
+		for _, attr := range attrs {
+			switch attr.Name {
+			case "u_position":
+				start, height = parseUPosition(attr.Value)
+			case "u_height":
+				if parsed, err := strconv.Atoi(strings.TrimSpace(attr.Value)); err == nil && parsed > 0 {
+					height = parsed
 				}
 			}
 		}
+		if start <= 0 {
+			continue
+		}
+		if height <= 0 {
+			height = 1
+		}
+		item.UStart = start
+		item.UHeight = height
+		placements = append(placements, item)
+		for u := start; u < start+height; u++ {
+			occupied = append(occupied, strconv.Itoa(u))
+		}
 	}
-	return occupied, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	sort.Slice(placements, func(i, j int) bool { return placements[i].UStart < placements[j].UStart })
+	sort.Slice(occupied, func(i, j int) bool {
+		left, _ := strconv.Atoi(occupied[i])
+		right, _ := strconv.Atoi(occupied[j])
+		return left < right
+	})
+	return placements, occupied, nil
+}
+
+func parseUPosition(value string) (int, int) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0
+	}
+	clean := func(part string) string {
+		return strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(part, "U"), "u"))
+	}
+	parts := strings.Split(value, "-")
+	start, err := strconv.Atoi(clean(parts[0]))
+	if err != nil || start <= 0 {
+		return 0, 0
+	}
+	if len(parts) < 2 {
+		return start, 1
+	}
+	end, err := strconv.Atoi(clean(parts[1]))
+	if err != nil || end < start {
+		return start, 1
+	}
+	return start, end - start + 1
 }
 
 var ErrOccupied = errors.New("idc: rack has occupied U positions")
 
 func (s *Service) rackOccupied(rackID string) (bool, error) {
-	list, err := s.occupiedU(context.Background(), rackID)
+	_, list, err := s.rackOccupancy(context.Background(), rackID)
 	if err != nil {
 		return false, err
 	}
