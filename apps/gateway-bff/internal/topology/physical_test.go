@@ -27,6 +27,37 @@ func TestPhysicalGraphUsesNetworkLinks(t *testing.T) {
 	}
 }
 
+func TestPhysicalGraphViewHidesUnlinkedAssets(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	for _, input := range []cmdb.CreateAssetInput{
+		{ID: "view-switch", Name: "view-switch", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test"},
+		{ID: "view-host-linked", Name: "view-host-linked", Type: "physical-server", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test"},
+		{ID: "view-host-unlinked", Name: "view-host-unlinked", Type: "physical-server", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test"},
+	} {
+		if _, err := cmdbService.CreateAsset(input, "test"); err != nil {
+			t.Fatalf("create asset %s: %v", input.ID, err)
+		}
+	}
+	if _, err := cmdbService.CreateNetworkLink(cmdb.CreateNetworkLinkInput{SourceAssetID: "view-host-linked", SourceInterface: "eth0", TargetAssetID: "view-switch", TargetPort: "GE0/0/1"}, "test"); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	service := NewServiceWithCMDB(cmdbService)
+	linkedGraph := service.PhysicalGraphView("test", true)
+	if len(linkedGraph.Nodes) != 2 || len(linkedGraph.Edges) != 1 {
+		t.Fatalf("unexpected linked-only graph: %#v", linkedGraph)
+	}
+	for _, node := range linkedGraph.Nodes {
+		if node.ID == "view-host-unlinked" {
+			t.Fatalf("unlinked host must be hidden: %#v", linkedGraph.Nodes)
+		}
+	}
+
+	fullGraph := service.PhysicalGraphView("test", false)
+	if len(fullGraph.Nodes) != 3 || len(fullGraph.Edges) != 1 {
+		t.Fatalf("unexpected full graph: %#v", fullGraph)
+	}
+}
 func TestPhysicalGraphNormalizesLLDPToHostSide(t *testing.T) {
 	cmdbService := cmdb.NewService()
 	ports := `[{"ifIndex":"1","name":"GE0/0/1","operStatus":"up","neighborName":"lldp-host","neighborPort":"eth0"}]`

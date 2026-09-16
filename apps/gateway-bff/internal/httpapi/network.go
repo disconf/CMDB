@@ -223,7 +223,10 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
 		scope := newUserScope(cmdbService, user)
-		writeJSON(w, http.StatusOK, filterPhysicalGraph(topologyService.PhysicalGraph(r.URL.Query().Get("environment")), scope))
+		linkedOnlyParam := r.URL.Query().Get("linkedOnly")
+		linkedOnly := linkedOnlyParam == "" || (linkedOnlyParam != "false" && linkedOnlyParam != "0")
+		graph := topologyService.PhysicalGraphView(r.URL.Query().Get("environment"), linkedOnly)
+		writeJSON(w, http.StatusOK, filterPhysicalGraph(graph, scope))
 	})
 }
 

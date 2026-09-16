@@ -42,7 +42,11 @@ export const fetchNetworkInterfaces=(token:string,assetId:string)=>get<NetworkIn
 export const fetchNetworkLinks=(token:string)=>get<NetworkLink[]>('/api/v1/cmdb/network-links',token)
 export const createNetworkLink=(token:string,input:{sourceAssetId:string;sourceInterface:string;targetAssetId:string;targetPort:string})=>send<NetworkLink>('/api/v1/cmdb/network-links',token,'POST',input)
 export const deleteNetworkLink=(token:string,id:string)=>del<void>(`/api/v1/cmdb/network-links/${encodeURIComponent(id)}`,token)
-export const fetchPhysicalTopology=(token:string,environment='')=>get<PhysicalGraph>(`/api/v1/topology/physical${environment?`?environment=${encodeURIComponent(environment)}`:''}`,token)
+export const fetchPhysicalTopology=(token:string,environment='',linkedOnly=true)=>{
+  const params=new URLSearchParams({linkedOnly:String(linkedOnly)})
+  if(environment) params.set('environment',environment)
+  return get<PhysicalGraph>(`/api/v1/topology/physical?${params.toString()}`,token)
+}
 export const fetchNetworkLinkHistory=(token:string,limit=20)=>get<NetworkLinkHistoryEntry[]>(`/api/v1/cmdb/network-links/history?limit=${limit}`,token)
 export const fetchTopologySnapshots=(token:string,kind='physical',environment='',limit=20)=>get<TopologySnapshot[]>(`/api/v1/topology/snapshots?kind=${encodeURIComponent(kind)}&environment=${encodeURIComponent(environment)}&limit=${limit}`,token)
 export const fetchTopologySnapshot=(token:string,id:string)=>get<TopologySnapshot>(`/api/v1/topology/snapshots/${encodeURIComponent(id)}`,token)

@@ -22,6 +22,7 @@ const query = ref('')
 const mode = ref<Mode>('business')
 const snapshots = ref<Snapshot[]>([])
 const snapshotView = ref(false)
+const showUnlinked = ref(false)
 const headers = computed(() => ({ Authorization: `Bearer ${auth.token}` }))
 
 const positions = computed(() => {
@@ -94,10 +95,12 @@ async function load() {
       graph.value = await buildVLANGraph()
       selected.value = graph.value.nodes[0]
       impact.value = undefined
-    } else if (mode.value === 'physical') {      graph.value = await fetchPhysicalTopology(auth.token)
+    } else if (mode.value === 'physical') {
+      graph.value = await fetchPhysicalTopology(auth.token, '', !showUnlinked.value)
       snapshots.value = await fetchTopologySnapshots(auth.token, 'physical', '', 12)
       selected.value = graph.value.nodes[0]
       impact.value = undefined
+      snapshotView.value = false
     } else {
       const response = await fetch('/api/v1/topology/graph', { headers: headers.value })
       graph.value = await response.json()
@@ -105,6 +108,7 @@ async function load() {
   } finally { loading.value = false }
 }
 async function switchMode(value:Mode) { mode.value = value; selected.value = undefined; impact.value = undefined; query.value = ''; await load() }
+async function toggleUnlinked() { if (mode.value === 'physical') await load() }
 async function select(node:Node) {
   selected.value = node
   if (mode.value !== 'business') { impact.value = undefined; return }
@@ -121,13 +125,14 @@ onMounted(load)
       <div><label><Search/><input v-model="query" placeholder="搜索拓扑节点"></label><button @click="load"><RefreshCw :class="{spin:loading}"/>刷新</button><button><Maximize2/>全屏画布</button></div>
     </header>
     <nav class="topology-mode-tabs"><button :class="{active:mode==='business'}" @click="switchMode('business')"><GitBranch/>业务关系拓扑</button><button :class="{active:mode==='physical'}" @click="switchMode('physical')"><Cable/>物理网络拓扑</button><button :class="{active:mode==='vlan'}" @click="switchMode('vlan')"><Network/>VLAN 视图</button></nav>
-    <div class="topology-stats"><span>节点 <b>{{graph.nodes.length}}</b></span><span>关系 <b>{{graph.edges.length}}</b></span><template v-if="mode==='physical'"><span>服务器 <b>{{physicalNodeCount}}</b></span><span>网络设备 <b>{{physicalSwitchCount}}</b></span></template><template v-else-if="mode==='vlan'"><span>VLAN <b>{{vlanCount}}</b></span><span>成员端口 <b>{{vlanMemberCount}}</b></span></template><span v-else>异常 <b>{{graph.nodes.filter(n=>n.status!=='healthy').length}}</b></span><span>更新时间 <b>{{graph.updatedAt}}</b></span></div>
-    <div v-if="mode==='physical'" class="snapshot-strip"><button class="primary" @click="captureSnapshot"><Camera/>保存当前快照</button><button v-if="snapshotView" @click="returnLive"><RotateCcw/>返回实时拓扑</button><span v-for="snapshot in snapshots.slice(0,6)" :key="snapshot.id" class="snapshot-item"><Clock3/><button @click="viewSnapshot(snapshot.id)"><strong>{{ snapshot.createdAt }}</strong><small>{{ snapshot.nodeCount }} 节点 · {{ snapshot.edgeCount }} 链路 · {{ snapshot.operator }}</small></button></span></div>
+    <div class="topology-stats"><span>{{ mode==='physical' && !showUnlinked ? '已关联节点' : '节点' }} <b>{{graph.nodes.length}}</b></span><span>关系 <b>{{graph.edges.length}}</b></span><template v-if="mode==='physical'"><span>服务器 <b>{{physicalNodeCount}}</b></span><span>网络设备 <b>{{physicalSwitchCount}}</b></span></template><template v-else-if="mode==='vlan'"><span>VLAN <b>{{vlanCount}}</b></span><span>成员端口 <b>{{vlanMemberCount}}</b></span></template><span v-else>异常 <b>{{graph.nodes.filter(n=>n.status!=='healthy').length}}</b></span><span>更新时间 <b>{{graph.updatedAt}}</b></span></div>
+    <div v-if="mode==='physical'" class="snapshot-strip"><button class="primary" @click="captureSnapshot"><Camera/>保存当前快照</button><label class="topology-switch" title="默认只显示存在物理链路关系的设备"><input v-model="showUnlinked" type="checkbox" @change="toggleUnlinked"><span>显示未关联设备</span></label><button v-if="snapshotView" @click="returnLive"><RotateCcw/>返回实时拓扑</button><span v-for="snapshot in snapshots.slice(0,6)" :key="snapshot.id" class="snapshot-item"><Clock3/><button @click="viewSnapshot(snapshot.id)"><strong>{{ snapshot.createdAt }}</strong><small>{{ snapshot.nodeCount }} 节点 · {{ snapshot.edgeCount }} 链路 · {{ snapshot.operator }}</small></button></span></div>
     <div class="topology-workspace">
       <main class="graph-canvas" :class="{physical:mode==='physical'}">
         <div class="layer-labels"><span v-for="(name,i) in mode==='physical' ? ['服务器侧','网络设备侧'] : mode==='vlan' ? ['VLAN','成员端口/资产'] : ['项目','应用','服务','实例','基础设施']" :key="name" :style="{left:(45+(mode==='physical'?i*600:i*220))+'px'}">{{name}}</span></div>
         <svg :viewBox="mode==='physical' ? '0 0 1200 620' : '0 0 1100 440'" preserveAspectRatio="xMinYMin meet"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z"/></marker></defs><g class="edges"><path v-for="edge in graph.edges" :key="edge.id" :d="`M ${positions[edge.source]?.x+65} ${positions[edge.source]?.y} C ${positions[edge.source]?.x+120} ${positions[edge.source]?.y}, ${positions[edge.target]?.x-120} ${positions[edge.target]?.y}, ${positions[edge.target]?.x-65} ${positions[edge.target]?.y}`"/><text v-for="edge in graph.edges" :key="'t'+edge.id" :x="(positions[edge.source]?.x+positions[edge.target]?.x)/2" :y="(positions[edge.source]?.y+positions[edge.target]?.y)/2-7">{{edge.relation}}</text></g></svg>
         <button v-for="node in visibleNodes" :key="node.id" class="graph-node" :class="{selected:selected?.id===node.id}" :data-status="node.status" :style="{left:(positions[node.id]?.x-65)+'px',top:(positions[node.id]?.y-34)+'px'}" @click="select(node)"><Network v-if="(mode==='physical'&&node.assetType==='network-device')||(mode==='vlan'&&node.kind==='VLAN')"/><Server v-else/><span><strong>{{node.name}}</strong><small>{{node.ip||node.kind}}</small><em v-if="mode==='physical'&&node.portCount">{{node.upPortCount}} / {{node.portCount}} 端口</em></span><i></i></button>
+        <div v-if="mode==='physical'&&!loading&&!graph.nodes.length" class="topology-empty"><Cable/><strong>当前没有已关联的物理链路</strong><span>请先在服务器详情中关联交换机端口，或打开上方开关查看未关联设备。</span></div>
         <div class="graph-legend"><span v-for="s in ['healthy','warning','critical']" :key="s"><i :data-status="s"></i>{{healthLabel(s)}}</span></div>
       </main>
       <aside v-if="selected" class="impact-panel">
@@ -158,5 +163,6 @@ onMounted(load)
 
 <style scoped>
 .topology-mode-tabs{display:flex;gap:8px;margin-top:14px}.topology-mode-tabs button{display:flex;align-items:center;gap:7px}.topology-mode-tabs button.active{border-color:#22b9df;background:#0b3952;color:#dff9ff;box-shadow:inset 0 -2px #26d3ee}.graph-canvas.physical>svg{height:620px}.graph-node em{display:block;color:#42c9e8;font-size:9px;font-style:normal;margin-top:3px}.physical-links>div{width:calc(100% - 30px);margin:6px 15px;padding:9px;background:#0c293f;display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:center}.physical-links>div>svg{width:15px;color:#31c6e7}.physical-links span{display:grid;gap:3px}.physical-links strong{font-size:10px;font-weight:500}.physical-links small{color:#668096;font-size:9px}.physical-links>b{font-size:9px;color:#29cde9;font-weight:500}
+.topology-switch{display:flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 9px;border:1px solid #1e435d;background:#04182a;color:#9eb9cb;font-size:11px;cursor:pointer}.topology-switch input{accent-color:#22b9df}.topology-empty{position:absolute;inset:55px 0 0;z-index:1;display:grid;place-content:center;justify-items:center;gap:8px;text-align:center;color:#7892aa;pointer-events:none}.topology-empty>svg{width:38px;height:38px;color:#2dbcdc}.topology-empty strong{color:#dcecff;font-size:14px}.topology-empty span{max-width:430px;font-size:11px;line-height:1.7}
 .snapshot-strip{display:flex;align-items:center;gap:7px;padding:9px;border:1px solid #173a54;border-top:0;background:#071d30;overflow-x:auto}.snapshot-strip>button{white-space:nowrap}.snapshot-strip>button.primary{background:#0b6da5;border-color:#1a93c8}.snapshot-item{display:flex;align-items:center;gap:5px;border:1px solid #1e435d;background:#04182a;padding:3px 6px}.snapshot-item>svg{width:13px;color:#32c7e8}.snapshot-item button{display:grid!important;text-align:left;padding:3px 5px!important;border:0!important;background:none!important}.snapshot-item strong{font-size:9px;font-weight:500}.snapshot-item small{font-size:8px;color:#65859a}.edge-verification{display:block;color:#7ca0b4!important}.edge-verification[data-tone=healthy]{color:#58dda0!important}.edge-verification[data-tone=warning]{color:#ffc167!important}.edge-verification[data-tone=critical]{color:#ff8292!important}
 </style>

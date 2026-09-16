@@ -44,6 +44,10 @@ type PhysicalGraph struct {
 }
 
 func (s *Service) PhysicalGraph(environment string) PhysicalGraph {
+	return s.PhysicalGraphView(environment, false)
+}
+
+func (s *Service) PhysicalGraphView(environment string, linkedOnly bool) PhysicalGraph {
 	if s.cmdb == nil {
 		return PhysicalGraph{Nodes: []PhysicalNode{}, Edges: []PhysicalEdge{}, UpdatedAt: time.Now().Format("2006-01-02 15:04:05")}
 	}
@@ -138,6 +142,20 @@ func (s *Service) PhysicalGraph(environment string) PhysicalGraph {
 			sourceInterface, targetPort = targetPort, sourceInterface
 		}
 		addEdge(PhysicalEdge{ID: link.ID, Source: sourceID, Target: finalTargetID, SourceInterface: sourceInterface, TargetPort: targetPort, Relation: relation, Status: physicalLinkStatus(target.Status), SourceType: link.Source, Verification: link.Verification, Confidence: link.Confidence, Evidence: append([]string(nil), link.Evidence...), LastSeenAt: link.LastSeenAt})
+	}
+	if linkedOnly {
+		connected := make(map[string]bool, len(graph.Edges)*2)
+		for _, edge := range graph.Edges {
+			connected[edge.Source] = true
+			connected[edge.Target] = true
+		}
+		nodes := make([]PhysicalNode, 0, len(connected))
+		for _, node := range graph.Nodes {
+			if connected[node.ID] {
+				nodes = append(nodes, node)
+			}
+		}
+		graph.Nodes = nodes
 	}
 	sort.Slice(graph.Nodes, func(i, j int) bool {
 		if graph.Nodes[i].Kind == graph.Nodes[j].Kind {
