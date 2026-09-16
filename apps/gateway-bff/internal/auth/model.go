@@ -6,7 +6,16 @@ type User struct {
 	DisplayName   string   `json:"displayName"`
 	Roles         []string `json:"roles"`
 	Permissions   []string `json:"permissions"`
+	DataScope     string   `json:"dataScope"`
 	ProjectGroups []string `json:"projectGroups"`
+	ScopeTags     []string `json:"scopeTags"`
+}
+
+type AccessProfile struct {
+	DataScope     string
+	ProjectGroups []string
+	ScopeTags     []string
+	Permissions   []string
 }
 
 type Session struct {

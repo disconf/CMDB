@@ -263,3 +263,20 @@ func firstValue(values ...string) string {
 	}
 	return ""
 }
+
+func (s *Service) IssuesFor(scope cmdb.AssetQuery) []Issue {
+	items := s.Issues()
+	result := make([]Issue, 0, len(items))
+	for _, item := range items {
+		asset, err := s.cmdb.GetAsset(item.AssetID)
+		if err == nil && cmdb.AssetWithinScope(asset, scope) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (s *Service) AssetWithinScope(assetID string, scope cmdb.AssetQuery) bool {
+	asset, err := s.cmdb.GetAsset(assetID)
+	return err == nil && cmdb.AssetWithinScope(asset, scope)
+}

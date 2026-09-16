@@ -82,3 +82,22 @@ func TestAssetGovernanceConfirmSuppressesRemediation(t *testing.T) {
 		t.Fatalf("confirmed issue should not create remediation: %#v", report)
 	}
 }
+
+func TestIssuesForFiltersByAssetScope(t *testing.T) {
+	t.Setenv("CMDB_ENABLE_DEMO_DATA", "false")
+	t.Setenv("DATABASE_URL", "")
+	cmdbService := cmdb.NewService()
+	for _, item := range []cmdb.CreateAssetInput{
+		{ID: "scope-core", Name: "scope-core", Type: "physical-server", Status: "online", IP: "10.1.0.1", Environment: "测试", ProjectGroup: "核心系统组", Owner: "待分配", Source: "test"},
+		{ID: "scope-dev", Name: "scope-dev", Type: "physical-server", Status: "online", IP: "10.1.0.2", Environment: "测试", ProjectGroup: "研发效能组", Owner: "待分配", Source: "test"},
+	} {
+		if _, err := cmdbService.CreateAsset(item, "tester"); err != nil {
+			t.Fatalf("create asset: %v", err)
+		}
+	}
+	service := NewService(cmdbService, tickets.NewService(), monitor.NewService())
+	items := service.IssuesFor(cmdb.AssetQuery{ScopeProjectGroups: []string{"核心系统组"}})
+	if len(items) != 1 || items[0].AssetID != "scope-core" {
+		t.Fatalf("scope filter failed: %#v", items)
+	}
+}

@@ -75,12 +75,16 @@ type Asset struct {
 	Relations    []Relation  `json:"relations"`
 }
 type AssetQuery struct {
-	Search       string
-	Type         string
-	Status       string
-	ProjectGroup string
-	Page         int
-	PageSize     int
+	Search             string
+	Type               string
+	Status             string
+	ProjectGroup       string
+	Page               int
+	PageSize           int
+	ScopeAll           bool
+	ScopeProjectGroups []string
+	ScopeTags          []string
+	ScopeEmpty         bool
 }
 type PageMeta struct {
 	Total      int `json:"total"`

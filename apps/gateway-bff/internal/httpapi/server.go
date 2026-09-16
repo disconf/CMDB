@@ -76,6 +76,13 @@ func NewServer() *Server {
 	assetGovernanceService := assetgovernance.NewService(cmdbService, ticketsService, monitorService)
 	go assetGovernanceService.Run(context.Background(), 5*time.Minute)
 	authService := auth.NewService()
+	authService.SetAccessProfileResolver(func(username string) (auth.AccessProfile, error) {
+		profile, err := systemService.AccessProfile(username)
+		if err != nil {
+			return auth.AccessProfile{}, err
+		}
+		return auth.AccessProfile{DataScope: profile.DataScope, ProjectGroups: profile.ProjectGroups, ScopeTags: profile.ScopeTags, Permissions: profile.Permissions}, nil
+	})
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
 	k8sService := k8s.NewService(cmdbService)
@@ -227,13 +234,15 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.MonitorTargets())
+		scope, _, _ := assetQueryForRequest(r, authService)
+		writeJSON(w, http.StatusOK, cmdbService.MonitorTargetsFor(scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/analytics", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.Analytics())
+		scope, _, _ := assetQueryForRequest(r, authService)
+		writeJSON(w, http.StatusOK, cmdbService.AnalyticsFor(scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/models/{code}/template", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
@@ -314,7 +323,8 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.Summary())
+		scope, _, _ := assetQueryForRequest(r, authService)
+		writeJSON(w, http.StatusOK, cmdbService.SummaryFor(scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/assets", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
@@ -323,7 +333,9 @@ func NewServer() *Server {
 		query := r.URL.Query()
 		page, _ := strconv.Atoi(query.Get("page"))
 		pageSize, _ := strconv.Atoi(query.Get("pageSize"))
-		writeJSON(w, http.StatusOK, cmdbService.ListAssets(cmdb.AssetQuery{Search: query.Get("q"), Type: query.Get("type"), Status: query.Get("status"), ProjectGroup: query.Get("projectGroup"), Page: page, PageSize: pageSize}))
+		scope, _, _ := assetQueryForRequest(r, authService)
+		assetQuery := cmdb.AssetQuery{Search: query.Get("q"), Type: query.Get("type"), Status: query.Get("status"), ProjectGroup: query.Get("projectGroup"), Page: page, PageSize: pageSize, ScopeAll: scope.ScopeAll, ScopeProjectGroups: scope.ScopeProjectGroups, ScopeTags: scope.ScopeTags, ScopeEmpty: scope.ScopeEmpty}
+		writeJSON(w, http.StatusOK, cmdbService.ListAssets(assetQuery))
 	})
 	mux.HandleFunc("POST /api/v1/cmdb/assets", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
@@ -335,6 +347,10 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !canAccessAsset(user, cmdb.Asset{ProjectGroup: input.ProjectGroup, Tags: input.Tags}) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "没有该资产所在项目组的数据权限"})
+			return
+		}
 		created, err := cmdbService.CreateAsset(input, user.Username)
 		if errors.Is(err, cmdb.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "必填字段不完整或模型无效"})
@@ -360,6 +376,9 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
 			return
 		}
+		if _, ok := authorizeAssetAccess(w, r, authService, asset); !ok {
+			return
+		}
 		writeJSON(w, http.StatusOK, asset)
 	})
 	mux.HandleFunc("PATCH /api/v1/cmdb/assets/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -372,6 +391,15 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		existing, existingErr := cmdbService.GetAsset(r.PathValue("id"))
+		if existingErr == nil && !canAccessAsset(user, existing) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "没有该资产所在项目组的数据权限"})
+			return
+		}
+		if !canAccessAsset(user, cmdb.Asset{ProjectGroup: input.ProjectGroup, Tags: input.Tags}) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "不能将资产移动到无权限的项目组或标签范围"})
+			return
+		}
 		updated, err := cmdbService.UpdateAsset(r.PathValue("id"), input, user.Username)
 		if errors.Is(err, cmdb.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "资产名称和负责人不能为空"})
@@ -395,6 +423,12 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
+		asset, assetErr := cmdbService.GetAsset(r.PathValue("id"))
+		if assetErr == nil {
+			if _, ok := authorizeAssetAccess(w, r, authService, asset); !ok {
+				return
+			}
+		}
 		entries, err := cmdbService.History(r.PathValue("id"))
 		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
@@ -412,6 +446,16 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		for index, row := range rows {
+			if !canAccessAsset(user, cmdb.Asset{ProjectGroup: row.ProjectGroup, Tags: row.Tags}) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "导入数据第 " + strconv.Itoa(index+2) + " 行超出当前项目组或标签权限"})
+				return
+			}
+			if existing, getErr := cmdbService.GetAsset(row.ID); getErr == nil && row.ID != "" && !canAccessAsset(user, existing) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "导入数据第 " + strconv.Itoa(index+2) + " 行对应资产超出当前项目组或标签权限"})
+				return
+			}
+		}
 		upsert := r.URL.Query().Get("mode") == "upsert"
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, upsert, user.Username))
 	})
@@ -1615,7 +1659,8 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.RemoteTargetOptions())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, cmdbService.RemoteTargetOptionsFor(assetScopeForUser(user)))
 	})
 	mux.HandleFunc("POST /api/v1/discovery/remote-targets/resolve", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
@@ -1631,7 +1676,8 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid target selectors"})
 			return
 		}
-		assets := cmdbService.ResolveRemoteTargets(input.ProjectGroups, input.Tags, input.AssetIDs, input.IPs)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		assets := cmdbService.ResolveRemoteTargetsFor(assetScopeForUser(user), input.ProjectGroups, input.Tags, input.AssetIDs, input.IPs)
 		targets := make([]string, 0, len(assets))
 		seen := map[string]bool{}
 		for _, asset := range assets {
@@ -2760,24 +2806,60 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, x)
 	})
-	mux.HandleFunc("PUT /api/v1/system/roles/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /api/v1/system/users/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
 			return
 		}
-		var in struct {
-			Permissions []string `json:"permissions"`
-		}
+		var in system.UserUpdateInput
 		if decodeJSON(r, &in) != nil {
 			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
-		x, err := systemService.UpdateRole(r.PathValue("id"), in.Permissions, u.Username)
+		x, err := systemService.UpdateUser(r.PathValue("id"), in, u.Username)
+		if errors.Is(err, system.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "USER_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, system.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "用户数据范围无效"})
+			return
+		}
+		writeJSON(w, 200, x)
+	})
+	mux.HandleFunc("PUT /api/v1/system/roles/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		var in system.RoleUpdateInput
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		x, err := systemService.UpdateRoleProfile(r.PathValue("id"), in, u.Username)
 		if errors.Is(err, system.ErrNotFound) {
 			writeJSON(w, 404, map[string]string{"code": "ROLE_NOT_FOUND"})
 			return
 		}
+		if errors.Is(err, system.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "角色权限或数据范围无效"})
+			return
+		}
 		writeJSON(w, 200, x)
+	})
+	mux.HandleFunc("POST /api/v1/system/sync/keycloak", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		report, err := systemService.SyncKeycloak(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "KEYCLOAK_SYNC_FAILED", "message": err.Error()})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		systemService.RecordAudit(u.Username, "同步 Keycloak 组织", "系统管理", "用户与用户组已同步")
+		writeJSON(w, 200, report)
 	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND", "message": "接口不存在"})
@@ -2941,7 +3023,7 @@ func authorize(w http.ResponseWriter, r *http.Request, service *auth.Service, pe
 		return false
 	}
 	for _, item := range user.Permissions {
-		if item == permission {
+		if item == permission || item == "*" {
 			return true
 		}
 	}

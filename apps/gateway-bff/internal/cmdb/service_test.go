@@ -340,3 +340,24 @@ func TestReclassifyHostUpdatesType(t *testing.T) {
 		t.Fatalf("unexpected asset: %+v err=%v", asset, err)
 	}
 }
+
+func TestAssetQueryAppliesProjectGroupScope(t *testing.T) {
+	service := NewService()
+	query := AssetQuery{ScopeProjectGroups: []string{"核心系统组"}, Page: 1, PageSize: 100}
+	page := service.ListAssets(query)
+	if page.Meta.Total == 0 {
+		t.Fatal("expected scoped assets")
+	}
+	for _, asset := range page.Data {
+		if asset.ProjectGroup != "核心系统组" {
+			t.Fatalf("asset escaped project scope: %#v", asset)
+		}
+	}
+	summary := service.SummaryFor(query)
+	if summary.Total != page.Meta.Total {
+		t.Fatalf("summary and page scope differ: %#v %#v", summary, page.Meta)
+	}
+	if summary := service.SummaryFor(AssetQuery{ScopeEmpty: true}); summary.Total != 0 {
+		t.Fatalf("empty scope must hide all assets: %#v", summary)
+	}
+}

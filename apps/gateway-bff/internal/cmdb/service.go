@@ -453,12 +453,22 @@ func validateModel(in ModelInput) error {
 	return nil
 }
 func (s *Service) Summary() Summary {
+	return s.SummaryFor(AssetQuery{})
+}
+
+func (s *Service) SummaryFor(q AssetQuery) Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := Summary{Total: len(s.assets), Models: len(s.models)}
+	result := Summary{Models: len(s.models)}
 	groups := map[string]struct{}{}
 	for _, a := range s.assets {
-		groups[a.ProjectGroup] = struct{}{}
+		if !assetMatchesScope(a, q) {
+			continue
+		}
+		result.Total++
+		if a.ProjectGroup != "" {
+			groups[a.ProjectGroup] = struct{}{}
+		}
 		switch a.Status {
 		case "online":
 			result.Online++
@@ -499,6 +509,9 @@ func (s *Service) ListAssets(q AssetQuery) AssetPage {
 			continue
 		}
 		if q.ProjectGroup != "" && a.ProjectGroup != q.ProjectGroup {
+			continue
+		}
+		if !assetMatchesScope(a, q) {
 			continue
 		}
 		filtered = append(filtered, cloneAsset(a))
@@ -553,11 +566,15 @@ func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
 }
 
 func (s *Service) MonitorTargets() []MonitorTarget {
+	return s.MonitorTargetsFor(AssetQuery{})
+}
+
+func (s *Service) MonitorTargetsFor(q AssetQuery) []MonitorTarget {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]MonitorTarget, 0)
 	for _, asset := range s.assets {
-		if !isMonitorableAsset(asset.Type) {
+		if !isMonitorableAsset(asset.Type) || !assetMatchesScope(asset, q) {
 			continue
 		}
 		target := monitorTargetForAsset(asset)
@@ -1684,5 +1701,162 @@ func remoteSortedKeys(values map[string]bool) []string {
 		result = append(result, value)
 	}
 	sort.Strings(result)
+	return result
+}
+
+func assetMatchesScope(asset Asset, q AssetQuery) bool {
+	if q.ScopeAll {
+		return true
+	}
+	if q.ScopeEmpty {
+		return false
+	}
+	if len(q.ScopeProjectGroups) == 0 && len(q.ScopeTags) == 0 {
+		return true
+	}
+	for _, group := range q.ScopeProjectGroups {
+		if group != "" && group == asset.ProjectGroup {
+			return true
+		}
+	}
+	for _, scopeTag := range q.ScopeTags {
+		if scopeTag == "" {
+			continue
+		}
+		for _, assetTag := range asset.Tags {
+			if scopeTag == assetTag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Service) AnalyticsFor(q AssetQuery) Analytics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := Analytics{Status: Summary{Models: len(s.models)}}
+	typeCounts := map[string]int{}
+	groupCounts := map[string]int{}
+	sourceCounts := map[string]int{}
+	visible := make([]Asset, 0, len(s.assets))
+	groups := map[string]struct{}{}
+	for _, asset := range s.assets {
+		if !assetMatchesScope(asset, q) {
+			continue
+		}
+		visible = append(visible, asset)
+		out.Status.Total++
+		if asset.ProjectGroup != "" {
+			groups[asset.ProjectGroup] = struct{}{}
+		}
+		typeCounts[asset.Type]++
+		groupCounts[asset.ProjectGroup]++
+		sourceCounts[asset.Source]++
+		switch asset.Status {
+		case "online":
+			out.Status.Online++
+		case "warning":
+			out.Status.Warning++
+		default:
+			out.Status.Offline++
+		}
+	}
+	out.Status.ProjectGroups = len(groups)
+	for _, model := range s.models {
+		out.ByType = append(out.ByType, TypeCount{Code: model.Code, Name: model.Name, Count: typeCounts[model.Code]})
+	}
+	for _, group := range sortedKeys(groupCounts) {
+		out.ByGroup = append(out.ByGroup, GroupCount{Group: group, Count: groupCounts[group]})
+	}
+	for _, source := range sortedKeys(sourceCounts) {
+		out.BySource = append(out.BySource, SourceCount{Source: source, Count: sourceCounts[source]})
+	}
+	total := len(visible)
+	if total > 0 {
+		for _, spec := range [][2]string{{"owner", "负责人"}, {"location", "位置"}, {"ip", "IP地址"}, {"projectGroup", "项目组"}} {
+			missing := 0
+			for _, asset := range visible {
+				value := strings.TrimSpace(assetString(asset, spec[0]))
+				if value == "" || value == "待分配" || value == "自动发现" {
+					missing++
+				}
+			}
+			out.Completeness = append(out.Completeness, Completeness{Field: spec[0], Label: spec[1], Missing: missing, Total: total, Rate: float64(total-missing) / float64(total)})
+		}
+	}
+	return out
+}
+
+func AssetWithinScope(asset Asset, q AssetQuery) bool {
+	return assetMatchesScope(asset, q)
+}
+
+func (s *Service) InventoryAssetsFor(q AssetQuery) []Asset {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Asset, 0, len(s.assets))
+	for _, asset := range s.assets {
+		if assetMatchesScope(asset, q) {
+			result = append(result, cloneAsset(asset))
+		}
+	}
+	return result
+}
+
+func (s *Service) RemoteTargetOptionsFor(q AssetQuery) RemoteTargetOptions {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groups := map[string]bool{}
+	tags := map[string]bool{}
+	for _, asset := range s.assets {
+		if !remoteEligibleAsset(asset) || !assetMatchesScope(asset, q) {
+			continue
+		}
+		if asset.ProjectGroup != "" {
+			groups[asset.ProjectGroup] = true
+		}
+		for _, tag := range asset.Tags {
+			tags[tag] = true
+		}
+	}
+	return RemoteTargetOptions{ProjectGroups: remoteSortedKeys(groups), Tags: remoteSortedKeys(tags)}
+}
+
+func (s *Service) ResolveRemoteTargetsFor(q AssetQuery, projectGroups, tags, assetIDs, ips []string) []Asset {
+	groupSet := stringSet(projectGroups)
+	tagSet := stringSet(tags)
+	idSet := stringSet(assetIDs)
+	ipSet := stringSet(ips)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := []Asset{}
+	for _, asset := range s.assets {
+		if !remoteEligibleAsset(asset) || !assetMatchesScope(asset, q) {
+			continue
+		}
+		if len(groupSet) > 0 && !groupSet[asset.ProjectGroup] {
+			continue
+		}
+		if len(tagSet) > 0 {
+			matched := false
+			for _, tag := range asset.Tags {
+				if tagSet[tag] {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		if len(idSet) > 0 && !idSet[asset.ID] && !idSet[asset.IP] {
+			continue
+		}
+		if len(ipSet) > 0 && !ipSet[asset.IP] {
+			continue
+		}
+		result = append(result, cloneAsset(asset))
+	}
 	return result
 }

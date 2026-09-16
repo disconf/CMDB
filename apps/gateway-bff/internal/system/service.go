@@ -1,28 +1,46 @@
 package system
 
 import (
+	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrValidation = errors.New("validation")
 
 type User struct {
-	ID          string   `json:"id"`
-	Username    string   `json:"username"`
-	DisplayName string   `json:"displayName"`
-	Department  string   `json:"department"`
-	Roles       []string `json:"roles"`
-	Status      string   `json:"status"`
-	LastLogin   string   `json:"lastLogin"`
+	ID             string   `json:"id"`
+	Username       string   `json:"username"`
+	DisplayName    string   `json:"displayName"`
+	Department     string   `json:"department"`
+	Email          string   `json:"email,omitempty"`
+	Roles          []string `json:"roles"`
+	Status         string   `json:"status"`
+	LastLogin      string   `json:"lastLogin"`
+	DataScope      string   `json:"dataScope"`
+	ProjectGroups  []string `json:"projectGroups"`
+	ScopeTags      []string `json:"scopeTags"`
+	KeycloakGroups []string `json:"keycloakGroups,omitempty"`
+	KeycloakID     string   `json:"keycloakId,omitempty"`
+	SyncedAt       string   `json:"syncedAt,omitempty"`
 }
 type Role struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Users       int      `json:"users"`
-	Permissions []string `json:"permissions"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Users         int      `json:"users"`
+	Permissions   []string `json:"permissions"`
+	DataScope     string   `json:"dataScope"`
+	ProjectGroups []string `json:"projectGroups"`
+	ScopeTags     []string `json:"scopeTags"`
 }
 type Module struct {
 	Code       string `json:"code"`
@@ -56,26 +74,48 @@ type Summary struct {
 	AuditsToday int `json:"auditsToday"`
 }
 type Service struct {
-	mu       sync.RWMutex
-	users    []User
-	roles    []Role
-	modules  []Module
-	audits   []Audit
-	settings []Setting
+	mu         sync.RWMutex
+	users      []User
+	roles      []Role
+	modules    []Module
+	audits     []Audit
+	settings   []Setting
+	db         *sql.DB
+	lastReload time.Time
 }
 
 func NewService() *Service {
-	return &Service{users: []User{{"u-admin", "admin", "运维管理员", "平台运维部", []string{"platform-admin"}, "active", "15:12"}, {"u-viewer", "viewer", "只读用户", "研发中心", []string{"viewer"}, "active", "昨天 18:20"}, {"u-ops-01", "zhangwei", "张伟", "平台运维部", []string{"operator"}, "active", "14:58"}, {"u-dba-01", "wutao", "吴涛", "数据库组", []string{"dba", "approver"}, "active", "14:32"}, {"u-dev-01", "wangqiang", "王强", "电商研发部", []string{"developer"}, "locked", "13:06"}}, roles: []Role{{"platform-admin", "平台管理员", "拥有所有平台管理权限", 1, []string{"*"}}, {"operator", "运维操作员", "资产、监控、任务与工具箱操作", 8, []string{"cmdb:view", "monitor:manage", "job:manage", "toolbox:use"}}, {"viewer", "只读用户", "查看大屏、资产、拓扑和监控", 12, []string{"dashboard:view", "cmdb:view", "topology:view", "monitor:view"}}, {"approver", "审批人", "工单与发布审批", 4, []string{"ticket:manage", "release:view"}}}, modules: []Module{{"dashboard", "全局态势", true, 1, "dashboard:view"}, {"cmdb", "CMDB 资产", true, 2, "cmdb:view"}, {"topology", "拓扑中心", true, 3, "topology:view"}, {"monitor", "监控告警", true, 4, "monitor:view"}, {"jobs", "任务管理", true, 5, "job:view"}, {"aiops", "AI 运维", true, 10, "aiops:view"}}, audits: []Audit{{"audit-001", "15:12:06", "admin", "用户登录", "管理后台", "10.20.1.8", "success", "认证成功"}, {"audit-002", "14:58:22", "zhangwei", "执行诊断", "prod-api-01", "10.20.1.21", "success", "主机健康检查"}}, settings: []Setting{{"session.timeout", "会话超时", "30", "安全", "无操作自动退出分钟数"}, {"audit.retention", "审计保留期", "180", "审计", "审计日志保留天数"}, {"discovery.interval", "发现周期", "15", "采集", "自动发现间隔分钟数"}, {"alert.silence.max", "最大静默时间", "24", "告警", "告警最大静默小时数"}}}
+	service := &Service{users: defaultUsers(), roles: defaultRoles(), modules: defaultModules(), audits: defaultAudits(), settings: defaultSettings()}
+	if url := strings.TrimSpace(os.Getenv("DATABASE_URL")); url != "" {
+		db, err := openPostgres(url)
+		if err != nil {
+			panic(fmt.Sprintf("initialize system repository: %v", err))
+		}
+		service.db = db
+		if err = service.seedDefaults(context.Background()); err != nil {
+			panic(fmt.Sprintf("seed system repository: %v", err))
+		}
+		if err = service.reload(context.Background()); err != nil {
+			panic(fmt.Sprintf("load system repository: %v", err))
+		}
+	}
+	return service
 }
 func (s *Service) Users() []User {
+	if s.db != nil {
+		_ = s.reload(context.Background())
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]User(nil), s.users...)
+	return cloneUsers(s.users)
 }
 func (s *Service) Roles() []Role {
+	if s.db != nil {
+		_ = s.reload(context.Background())
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Role(nil), s.roles...)
+	return cloneRoles(s.roles)
 }
 func (s *Service) Modules() []Module { return append([]Module(nil), s.modules...) }
 func (s *Service) Audits() []Audit {
@@ -97,30 +137,18 @@ func (s *Service) audit(actor, action, resource, detail string) {
 	s.audits = append([]Audit{{"audit-" + time.Now().Format("150405"), time.Now().Format("15:04:05"), actor, action, resource, "127.0.0.1", "success", detail}}, s.audits...)
 }
 func (s *Service) ToggleUser(id, actor string) (User, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.users {
-		if s.users[i].ID == id {
-			if s.users[i].Status == "active" {
-				s.users[i].Status = "disabled"
-			} else {
-				s.users[i].Status = "active"
-			}
-			s.audit(actor, "切换用户状态", s.users[i].Username, s.users[i].Status)
-			return s.users[i], nil
+	for _, user := range s.Users() {
+		if user.ID != id {
+			continue
 		}
+		next := "active"
+		if user.Status == "active" {
+			next = "disabled"
+		}
+		return s.UpdateUser(id, UserUpdateInput{DisplayName: user.DisplayName, Department: user.Department, Email: user.Email, Roles: user.Roles, Status: next, DataScope: user.DataScope, ProjectGroups: user.ProjectGroups, ScopeTags: user.ScopeTags}, actor)
 	}
 	return User{}, ErrNotFound
 }
 func (s *Service) UpdateRole(id string, permissions []string, actor string) (Role, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.roles {
-		if s.roles[i].ID == id {
-			s.roles[i].Permissions = permissions
-			s.audit(actor, "更新角色权限", s.roles[i].Name, "权限项已更新")
-			return s.roles[i], nil
-		}
-	}
-	return Role{}, ErrNotFound
+	return s.UpdateRoleProfile(id, RoleUpdateInput{Permissions: permissions}, actor)
 }

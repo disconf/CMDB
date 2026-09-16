@@ -28,22 +28,23 @@ type account struct {
 }
 
 type Service struct {
-	mu         sync.RWMutex
-	accounts   map[string]account
-	sessions   map[string]User
-	modules    []Module
-	issuerURL  string
-	httpClient *http.Client
-	redis      *redis.Client
-	cacheTTL   time.Duration
+	mu             sync.RWMutex
+	accounts       map[string]account
+	sessions       map[string]User
+	modules        []Module
+	issuerURL      string
+	httpClient     *http.Client
+	redis          *redis.Client
+	cacheTTL       time.Duration
+	accessResolver func(username string) (AccessProfile, error)
 }
 
 func NewService() *Service {
 	allPermissions := []string{"dashboard:view", "cmdb:view", "cmdb:manage", "discovery:view", "discovery:manage", "topology:view", "monitor:view", "monitor:manage", "job:view", "job:manage", "ticket:view", "ticket:manage", "release:view", "release:manage", "toolbox:use", "aiops:view", "aiops:execute", "system:manage"}
 	service := &Service{
 		accounts: map[string]account{
-			"admin":  {"admin123", User{"u-admin", "admin", "运维管理员", []string{"platform-admin"}, allPermissions, []string{"华东业务组", "核心系统组"}}},
-			"viewer": {"viewer123", User{"u-viewer", "viewer", "只读用户", []string{"viewer"}, []string{"dashboard:view", "cmdb:view", "topology:view", "monitor:view"}, []string{"华东业务组"}}},
+			"admin":  {"admin123", User{"u-admin", "admin", "运维管理员", []string{"platform-admin"}, allPermissions, "all", []string{"华东业务组", "核心系统组"}, nil}},
+			"viewer": {"viewer123", User{"u-viewer", "viewer", "只读用户", []string{"viewer"}, []string{"dashboard:view", "cmdb:view", "topology:view", "monitor:view"}, "groups", []string{"华东业务组"}, nil}},
 		},
 		sessions: make(map[string]User),
 		modules:  []Module{{"dashboard", "全局态势", "/", "LayoutDashboard", "dashboard:view"}, {"cmdb", "CMDB 资产", "/cmdb", "Database", "cmdb:view"}, {"discovery", "Agent 与发现", "/discovery", "Radar", "discovery:view"}, {"remote", "远程运维", "/remote", "Terminal", "discovery:view"}, {"topology", "拓扑中心", "/topology", "Network", "topology:view"}, {"monitor", "监控告警", "/monitor", "BellRing", "monitor:view"}, {"jobs", "任务管理", "/jobs", "ClipboardCheck", "job:view"}, {"tickets", "工单中心", "/tickets", "TicketCheck", "ticket:view"}, {"releases", "发布管理", "/releases", "Rocket", "release:view"}, {"toolbox", "排查工具", "/toolbox", "Wrench", "toolbox:use"}, {"aiops", "AI 运维", "/aiops", "Bot", "aiops:view"}, {"system", "系统管理", "/system", "Settings", "system:manage"}},
@@ -85,13 +86,15 @@ func (s *Service) Login(username, password string) (Session, error) {
 func (s *Service) CurrentUser(token string) (User, error) {
 	if s.issuerURL != "" {
 		if user, ok := s.cachedUser(token); ok {
-			return user, nil
+			return s.applyAccessProfile(user), nil
 		}
 		user, err := s.keycloakUser(token)
-		if err == nil {
-			s.cacheUser(token, user)
+		if err != nil {
+			return User{}, err
 		}
-		return user, err
+		user = s.applyAccessProfile(user)
+		s.cacheUser(token, user)
+		return user, nil
 	}
 	s.mu.RLock()
 	user, ok := s.sessions[token]
@@ -99,7 +102,7 @@ func (s *Service) CurrentUser(token string) (User, error) {
 	if !ok {
 		return User{}, ErrUnauthorized
 	}
-	return cloneUser(user), nil
+	return s.applyAccessProfile(cloneUser(user)), nil
 }
 
 func (s *Service) Modules(token string) ([]Module, error) {
@@ -113,7 +116,8 @@ func (s *Service) Modules(token string) ([]Module, error) {
 	}
 	modules := make([]Module, 0, len(s.modules))
 	for _, module := range s.modules {
-		if _, ok := allowed[module.Permission]; ok {
+		_, wildcard := allowed["*"]
+		if _, ok := allowed[module.Permission]; ok || wildcard {
 			modules = append(modules, module)
 		}
 	}
@@ -165,6 +169,7 @@ func (s *Service) keycloakUser(token string) (User, error) {
 			Roles []string `json:"roles"`
 		} `json:"realm_access"`
 		ProjectGroups []string `json:"project_groups"`
+		ScopeTags     []string `json:"scope_tags"`
 	}
 	if json.Unmarshal(payload, &claims) != nil || claims.Issuer != s.issuerURL {
 		return User{}, ErrUnauthorized
@@ -181,7 +186,7 @@ func (s *Service) keycloakUser(token string) (User, error) {
 	if displayName == "" {
 		displayName = claims.Username
 	}
-	return User{ID: claims.Subject, Username: claims.Username, DisplayName: displayName, Roles: roles, Permissions: permissions, ProjectGroups: claims.ProjectGroups}, nil
+	return User{ID: claims.Subject, Username: claims.Username, DisplayName: displayName, Roles: roles, Permissions: permissions, ProjectGroups: claims.ProjectGroups, ScopeTags: claims.ScopeTags}, nil
 }
 
 func newToken() (string, error) {
@@ -195,5 +200,61 @@ func cloneUser(user User) User {
 	user.Roles = append([]string(nil), user.Roles...)
 	user.Permissions = append([]string(nil), user.Permissions...)
 	user.ProjectGroups = append([]string(nil), user.ProjectGroups...)
+	user.ScopeTags = append([]string(nil), user.ScopeTags...)
 	return user
+}
+
+func (s *Service) SetAccessProfileResolver(resolver func(username string) (AccessProfile, error)) {
+	s.mu.Lock()
+	s.accessResolver = resolver
+	s.mu.Unlock()
+}
+
+func (s *Service) applyAccessProfile(user User) User {
+	s.mu.RLock()
+	resolver := s.accessResolver
+	s.mu.RUnlock()
+	if resolver != nil {
+		if profile, err := resolver(user.Username); err == nil {
+			if strings.TrimSpace(profile.DataScope) != "" {
+				user.DataScope = strings.TrimSpace(profile.DataScope)
+			}
+			user.ProjectGroups = mergeStrings(user.ProjectGroups, profile.ProjectGroups)
+			user.ScopeTags = mergeStrings(user.ScopeTags, profile.ScopeTags)
+			user.Permissions = mergeStrings(user.Permissions, profile.Permissions)
+		}
+	}
+	if user.DataScope == "" {
+		if containsString(user.Roles, "platform-admin") {
+			user.DataScope = "all"
+		} else if len(user.ProjectGroups) > 0 || len(user.ScopeTags) > 0 {
+			user.DataScope = "groups"
+		} else {
+			user.DataScope = "none"
+		}
+	}
+	return user
+}
+
+func mergeStrings(base, extra []string) []string {
+	seen := make(map[string]bool, len(base)+len(extra))
+	result := make([]string, 0, len(base)+len(extra))
+	for _, value := range append(append([]string(nil), base...), extra...) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

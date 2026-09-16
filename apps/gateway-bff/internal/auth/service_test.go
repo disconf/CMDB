@@ -82,3 +82,24 @@ func TestSameAccountCanCreateMultipleSessions(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessProfileResolverMergesDataScope(t *testing.T) {
+	service := NewService()
+	service.SetAccessProfileResolver(func(username string) (AccessProfile, error) {
+		if username != "viewer" {
+			return AccessProfile{}, ErrUnauthorized
+		}
+		return AccessProfile{DataScope: "groups", ProjectGroups: []string{"核心系统组"}, ScopeTags: []string{"生产"}, Permissions: []string{"cmdb:manage"}}, nil
+	})
+	session, err := service.Login("viewer", "viewer123")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	user, err := service.CurrentUser(session.Token)
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+	if user.DataScope != "groups" || !containsString(user.ProjectGroups, "核心系统组") || !containsString(user.ScopeTags, "生产") || !containsString(user.Permissions, "cmdb:manage") {
+		t.Fatalf("access profile was not merged: %#v", user)
+	}
+}

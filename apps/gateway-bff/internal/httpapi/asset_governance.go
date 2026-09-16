@@ -14,7 +14,8 @@ func registerAssetGovernanceRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, service.Issues())
+		scope, _, _ := assetQueryForRequest(r, authService)
+		writeJSON(w, http.StatusOK, service.IssuesFor(scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/asset-governance/rules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
@@ -99,6 +100,13 @@ func registerAssetGovernanceRoutes(mux *http.ServeMux, authService *auth.Service
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := assetScopeForUser(user)
+		for _, assetID := range input.AssetIDs {
+			if !service.AssetWithinScope(assetID, scope) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "批量操作包含无权限资产"})
+				return
+			}
+		}
 		result, err := service.BulkGovernance(input, user.Username)
 		if errors.Is(err, assetgovernance.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "批量操作参数无效，单次最多处理 500 台资产"})
@@ -137,6 +145,10 @@ func registerAssetGovernanceRoutes(mux *http.ServeMux, authService *auth.Service
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !service.AssetWithinScope(r.PathValue("id"), assetScopeForUser(user)) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "没有该资产所在项目组的数据权限"})
+			return
+		}
 		asset, err := service.Assign(r.PathValue("id"), input.Owner, input.ProjectGroup, input.Location, user.Username, input.Note)
 		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
@@ -161,6 +173,10 @@ func registerAssetGovernanceRoutes(mux *http.ServeMux, authService *auth.Service
 		}
 		_ = decodeJSON(r, &input)
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !service.AssetWithinScope(r.PathValue("id"), assetScopeForUser(user)) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "没有该资产所在项目组的数据权限"})
+			return
+		}
 		review, err := service.Confirm(r.PathValue("id"), user.Username, input.Note)
 		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
@@ -181,6 +197,10 @@ func registerAssetGovernanceRoutes(mux *http.ServeMux, authService *auth.Service
 		}
 		_ = decodeJSON(r, &input)
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !service.AssetWithinScope(r.PathValue("id"), assetScopeForUser(user)) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "没有该资产所在项目组的数据权限"})
+			return
+		}
 		review, err := service.Retire(r.PathValue("id"), user.Username, input.Note)
 		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
