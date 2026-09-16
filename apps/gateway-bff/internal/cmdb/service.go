@@ -60,7 +60,7 @@ func NewService() *Service {
 			asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
 		}
 	}
-	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "virtualization-cluster", Name: "虚拟化集群", Category: "计算", Icon: "Boxes", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
 	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry), snapshots: []TopologySnapshot{}, anomalyStates: map[string]NetworkAnomalyState{}, integrations: map[string]IntegrationConfig{}}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
@@ -156,6 +156,14 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "memory", Label: "内存", Type: "text"},
 		{Name: "disk", Label: "磁盘", Type: "text"},
 		{Name: "mac_addresses", Label: "MAC地址", Type: "text"},
+	},
+	"virtualization-cluster": {
+		{Name: "cluster_name", Label: "集群名称", Type: "text"},
+		{Name: "platform", Label: "虚拟化平台", Type: "select", Options: []string{"VMware", "KVM", "Xen", "Hyper-V", "其他"}},
+		{Name: "endpoint", Label: "管理地址", Type: "text"},
+		{Name: "version", Label: "平台版本", Type: "text"},
+		{Name: "node_count", Label: "节点数量", Type: "number"},
+		{Name: "idc_name", Label: "机房名称", Type: "text"},
 	},
 	"k8s-cluster": {
 		{Name: "cluster_name", Label: "集群名称", Type: "text"},

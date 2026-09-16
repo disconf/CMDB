@@ -39,14 +39,14 @@ const serverTypeSuggestion = computed(() => {
   if (!raw || raw === 'none') return '未检测到虚拟化，建议物理机'
   return `检测到 ${raw}，建议虚拟机`
 })
-const compatibleHosts = computed(() => hostOptions.value.filter(item => hostType.value === 'cluster' ? item.type === 'k8s-cluster' : item.type === 'physical-server'))
+const compatibleHosts = computed(() => hostOptions.value.filter(item => hostType.value === 'cluster' ? item.type === 'virtualization-cluster' : item.type === 'physical-server'))
 function fieldMeta(name: string) { return modelFields().find((f) => f.name === name) }
 function isSelectField(name: string) { const f = fieldMeta(name); return !!f && f.type === 'select' && !!f.options?.length }
 function selectOptions(name: string) { return fieldMeta(name)?.options ?? [] }
 function addRelation() { relations.value.push({ type: 'belongs-to', targetId: '', targetName: '' }) }
 function removeRelation(index: number) { relations.value.splice(index, 1) }
 async function loadHostOptions() {
-  try { hostOptions.value = await fetchAssetOptions(auth.token, ['physical-server', 'k8s-cluster']) } catch { hostOptions.value = [] }
+  try { hostOptions.value = await fetchAssetOptions(auth.token, ['physical-server', 'virtualization-cluster']) } catch { hostOptions.value = [] }
   hydrateHostSelection()
 }
 function hydrateHostSelection() {
