@@ -17,11 +17,19 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.NetworkDevices())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterNetworkDevices(cmdbService.NetworkDevices(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/network-devices/{id}/ports", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
+		}
+		asset, assetErr := cmdbService.GetAsset(r.PathValue("id"))
+		if assetErr == nil {
+			if _, ok := authorizeAssetAccess(w, r, authService, asset); !ok {
+				return
+			}
 		}
 		ports, err := cmdbService.NetworkPorts(r.PathValue("id"))
 		if errors.Is(err, cmdb.ErrNotFound) {
@@ -38,6 +46,12 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
+		asset, assetErr := cmdbService.GetAsset(r.PathValue("id"))
+		if assetErr == nil {
+			if _, ok := authorizeAssetAccess(w, r, authService, asset); !ok {
+				return
+			}
+		}
 		interfaces, err := cmdbService.NetworkInterfaces(r.PathValue("id"))
 		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND", "message": "资产不存在"})
@@ -53,7 +67,9 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.NetworkLinks())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterNetworkLinks(cmdbService.NetworkLinks(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/network-links/history", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
@@ -66,13 +82,17 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.VLANInventory())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterVLANInventory(cmdbService.VLANInventory(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/network-anomalies", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.NetworkAnomalies())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterNetworkAnomalies(cmdbService.NetworkAnomalies(), scope))
 	})
 	mux.HandleFunc("POST /api/v1/cmdb/network-links", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
@@ -201,7 +221,9 @@ func registerPhysicalNetworkRoutes(mux *http.ServeMux, authService *auth.Service
 		if !authorize(w, r, authService, "topology:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, topologyService.PhysicalGraph(r.URL.Query().Get("environment")))
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterPhysicalGraph(topologyService.PhysicalGraph(r.URL.Query().Get("environment")), scope))
 	})
 }
 

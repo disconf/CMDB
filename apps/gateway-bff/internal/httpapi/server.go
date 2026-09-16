@@ -189,7 +189,34 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, asset)
 	})
-	mux.HandleFunc("GET /api/v1/dashboard/overview", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, service.Overview()) })
+	mux.HandleFunc("GET /api/v1/dashboard/overview", func(w http.ResponseWriter, r *http.Request) {
+		overview := service.Overview()
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if !scope.global {
+			summary := cmdbService.SummaryFor(assetScopeForUser(user))
+			alerts := filterMonitorAlerts(monitorService.Alerts(), scope)
+			overview.Metrics.AssetTotal = summary.Total
+			overview.Metrics.OnlineAgents = summary.Online
+			overview.Metrics.TodayJobs = 0
+			overview.Metrics.ActiveAlerts = 0
+			overview.Alerts = []dashboard.Alert{}
+			for _, item := range alerts {
+				if item.Status == "resolved" {
+					continue
+				}
+				overview.Metrics.ActiveAlerts++
+				if len(overview.Alerts) < 10 {
+					overview.Alerts = append(overview.Alerts, dashboard.Alert{ID: item.ID, Level: item.Severity, Title: item.Title, Target: item.Target, OccurredAt: item.StartedAt})
+				}
+			}
+			overview.Topology = dashboard.Topology{Layers: []dashboard.TopologyLayer{}}
+			overview.Jobs = []dashboard.Job{}
+			overview.Timeline = []dashboard.TimelineEvent{}
+			overview.Deployments = []dashboard.Deployment{}
+		}
+		writeJSON(w, http.StatusOK, overview)
+	})
 	mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Username string `json:"username"`
@@ -317,7 +344,9 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, cmdbService.KubernetesInventory())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterKubernetesInventory(cmdbService.KubernetesInventory(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
@@ -1065,19 +1094,51 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "topology:view") {
 			return
 		}
-		writeJSON(w, http.StatusOK, topologyService.Graph(r.URL.Query().Get("environment")))
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterTopologyGraph(topologyService.Graph(r.URL.Query().Get("environment")), scope))
 	})
 	mux.HandleFunc("GET /api/v1/monitor/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "monitor:view") {
 			return
 		}
-		writeJSON(w, 200, monitorService.Summary())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		summary := monitorService.Summary()
+		if !scope.global {
+			alerts := filterMonitorAlerts(monitorService.Alerts(), scope)
+			summary.Active, summary.Critical, summary.Acknowledged = 0, 0, 0
+			for _, alert := range alerts {
+				if alert.Status != "resolved" {
+					summary.Active++
+				}
+				if alert.Severity == "critical" && alert.Status != "resolved" {
+					summary.Critical++
+				}
+				if alert.Status == "acknowledged" {
+					summary.Acknowledged++
+				}
+			}
+			summary.Targets = len(scope.ids)
+		}
+		writeJSON(w, 200, summary)
 	})
 	mux.HandleFunc("GET /api/v1/monitor/coverage", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "monitor:view") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
 		assets := cmdbService.MonitoringAssets()
+		if !scope.global {
+			filtered := []cmdb.Asset{}
+			for _, asset := range assets {
+				if scope.allowsAsset(asset) {
+					filtered = append(filtered, asset)
+				}
+			}
+			assets = filtered
+		}
 		expected := make([]monitor.ExpectedHost, 0, len(assets))
 		for _, asset := range assets {
 			expected = append(expected, monitor.ExpectedHost{AssetID: asset.ID, Name: asset.Name, IP: asset.IP, Environment: asset.Environment, ProjectGroup: asset.ProjectGroup, AssetStatus: asset.Status})
@@ -1088,15 +1149,21 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "monitor:view") {
 			return
 		}
-		writeJSON(w, 200, monitorService.Metrics())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, 200, filterMonitorMetrics(monitorService.Metrics(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/monitor/hosts/{assetId}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "monitor:view") {
 			return
 		}
 		assetID := r.PathValue("assetId")
-		if _, err := cmdbService.GetAsset(assetID); errors.Is(err, cmdb.ErrNotFound) {
+		asset, err := cmdbService.GetAsset(assetID)
+		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND"})
+			return
+		}
+		if _, ok := authorizeAssetAccess(w, r, authService, asset); !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, monitorService.Host(assetID))
@@ -1112,6 +1179,9 @@ func NewServer() *Server {
 		asset, err := cmdbService.GetAsset(r.PathValue("assetId"))
 		if errors.Is(err, cmdb.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ASSET_NOT_FOUND"})
+			return
+		}
+		if _, ok := authorizeAssetAccess(w, r, authService, asset); !ok {
 			return
 		}
 		if asset.Source != "linux-agent" || asset.Status != "online" || strings.TrimSpace(asset.IP) == "" {
@@ -1133,7 +1203,9 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "monitor:view") {
 			return
 		}
-		writeJSON(w, 200, monitorService.Alerts())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, 200, filterMonitorAlerts(monitorService.Alerts(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/monitor/rules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "monitor:view") {
@@ -1612,7 +1684,13 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "NODE_NOT_FOUND"})
 			return
 		}
-		writeJSON(w, http.StatusOK, result)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if !scope.global && scope.ids[result.Root.ID] == false && scope.ips[result.Root.IP] == false {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
+			return
+		}
+		writeJSON(w, http.StatusOK, filterImpact(result, scope))
 	})
 	mux.HandleFunc("GET /api/v1/discovery/agents", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
@@ -2038,7 +2116,26 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "job:view") {
 			return
 		}
-		writeJSON(w, 200, jobsService.Summary())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		summary := jobsService.Summary()
+		if !scope.global {
+			jobs := filterJobs(jobsService.Jobs(), scope)
+			schedules := filterSchedules(jobsService.Schedules(), scope)
+			summary.Running, summary.SuccessToday, summary.FailedToday = 0, 0, 0
+			for _, job := range jobs {
+				switch job.Status {
+				case "running":
+					summary.Running++
+				case "success":
+					summary.SuccessToday++
+				case "failed":
+					summary.FailedToday++
+				}
+			}
+			summary.Schedules = len(schedules)
+		}
+		writeJSON(w, 200, summary)
 	})
 	mux.HandleFunc("GET /api/v1/jobs/executor", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
@@ -2161,13 +2258,23 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "job:view") {
 			return
 		}
-		writeJSON(w, 200, jobsService.Jobs())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, 200, filterJobs(jobsService.Jobs(), scope))
 	})
 	mux.HandleFunc("GET /api/v1/jobs/executions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
 			return
 		}
 		j, err := jobsService.Get(r.PathValue("id"))
+		if err == nil {
+			user, _ := authService.CurrentUser(bearerToken(r))
+			scope := newUserScope(cmdbService, user)
+			if !scope.global && !allIdentifiersAllowed(j.Targets, scope) {
+				writeJSON(w, 403, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
+				return
+			}
+		}
 		if errors.Is(err, jobs.ErrNotFound) {
 			writeJSON(w, 404, map[string]string{"code": "JOB_NOT_FOUND"})
 			return
@@ -2178,7 +2285,9 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "job:view") {
 			return
 		}
-		writeJSON(w, 200, jobsService.Schedules())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, 200, filterSchedules(jobsService.Schedules(), scope))
 	})
 	mux.HandleFunc("POST /api/v1/jobs/schedules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:manage") {
@@ -2190,6 +2299,11 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if !scope.global && !allIdentifiersAllowed(input.Targets, scope) {
+			writeJSON(w, 403, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
+			return
+		}
 		item, err := jobsService.CreateSchedule(input, user.Username)
 		if errors.Is(err, jobs.ErrValidation) {
 			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
@@ -2287,6 +2401,11 @@ func NewServer() *Server {
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, u)
+		if !scope.global && !allIdentifiersAllowed(in.Targets, scope) {
+			writeJSON(w, 403, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
+			return
+		}
 		in.Operator = u.Username
 		j, err := jobsService.Create(in)
 		if errors.Is(err, jobs.ErrValidation) {
@@ -2360,10 +2479,31 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "ticket:view") {
 			return
 		}
-		result, err := ticketsService.Summary()
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if scope.global {
+			result, err := ticketsService.Summary()
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_SUMMARY_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, result)
+			return
+		}
+		items, err := ticketsService.List()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_SUMMARY_FAILED"})
 			return
+		}
+		result := tickets.Summary{}
+		for _, item := range filterTickets(items, cmdbService, scope) {
+			result.Total++
+			if item.Status == tickets.StatusPending {
+				result.Pending++
+			}
+			if item.Status == tickets.StatusApproved || item.Status == tickets.StatusCompleted {
+				result.Processing++
+			}
 		}
 		writeJSON(w, http.StatusOK, result)
 	})
@@ -2376,7 +2516,9 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_LIST_FAILED"})
 			return
 		}
-		writeJSON(w, http.StatusOK, items)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		writeJSON(w, http.StatusOK, filterTickets(items, cmdbService, scope))
 	})
 	mux.HandleFunc("GET /api/v1/tickets/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "ticket:view") {
@@ -2389,6 +2531,12 @@ func NewServer() *Server {
 		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TICKET_READ_FAILED"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if len(filterTickets([]tickets.Ticket{item}, cmdbService, scope)) == 0 {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
 			return
 		}
 		writeJSON(w, http.StatusOK, item)
@@ -2488,6 +2636,11 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "release:view") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !hasGlobalAssetScope(user) {
+			writeJSON(w, http.StatusOK, releases.Summary{})
+			return
+		}
 		result, err := releasesService.Summary()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_SUMMARY_FAILED"})
@@ -2504,6 +2657,12 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_LIST_FAILED"})
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if !scope.global {
+			ticketItems, _ := ticketsService.List()
+			items = filterReleases(items, filterTickets(ticketItems, cmdbService, scope), scope)
+		}
 		writeJSON(w, http.StatusOK, items)
 	})
 	mux.HandleFunc("GET /api/v1/releases/artifacts", func(w http.ResponseWriter, r *http.Request) {
@@ -2514,6 +2673,10 @@ func NewServer() *Server {
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RELEASE_ARTIFACTS_FAILED"})
 			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !hasGlobalAssetScope(user) {
+			items = []releases.Artifact{}
 		}
 		writeJSON(w, http.StatusOK, items)
 	})
