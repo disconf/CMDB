@@ -388,6 +388,36 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, options)
 	})
+	mux.HandleFunc("POST /api/v1/cmdb/assets/batch-update", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input cmdb.BatchUpdateAssetInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST", "message": "请求格式不正确"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := assetScopeForUser(user)
+		for _, assetID := range input.AssetIDs {
+			asset, err := cmdbService.GetAsset(assetID)
+			if err != nil || !cmdb.AssetWithinScope(asset, scope) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"code": "DATA_SCOPE_FORBIDDEN", "message": "批量配置包含无权限资产"})
+				return
+			}
+		}
+		result, err := cmdbService.BatchUpdateAssets(input, user.Username)
+		if errors.Is(err, cmdb.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "请选择 1 到 200 台服务器，并检查宿主机类型"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "BATCH_UPDATE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "cmdb.asset.batch_update", "assets", "updated="+strconv.Itoa(result.Succeeded))
+		writeJSON(w, http.StatusOK, result)
+	})
 	mux.HandleFunc("POST /api/v1/cmdb/assets", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
 			return

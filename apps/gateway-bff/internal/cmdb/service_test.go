@@ -384,3 +384,35 @@ func TestIntegrationConfigPersistsInMemory(t *testing.T) {
 		t.Fatalf("integration not saved: %#v", loaded)
 	}
 }
+
+func TestBatchUpdateAssetsAppliesCommonFieldsAndHost(t *testing.T) {
+	service := NewService()
+	host, err := service.CreateAsset(CreateAssetInput{ID: "batch-host", Name: "batch-host", Type: "physical-server", Status: "online", IP: "10.77.0.1", Environment: "测试", ProjectGroup: "研发效能组", Owner: "ops", Location: "测试机房 / A01"}, "tester")
+	if err != nil {
+		t.Fatalf("create host: %v", err)
+	}
+	vm, err := service.CreateAsset(CreateAssetInput{ID: "batch-vm", Name: "batch-vm", Type: "virtual-machine", Status: "online", IP: "10.77.0.2", Environment: "测试", ProjectGroup: "研发效能组", Owner: "待分配", Location: ""}, "tester")
+	if err != nil {
+		t.Fatalf("create vm: %v", err)
+	}
+	result, err := service.BatchUpdateAssets(BatchUpdateAssetInput{AssetIDs: []string{host.ID, vm.ID}, Status: "warning", Environment: "预生产", Owner: "平台组", HostID: host.ID, Tags: []string{"批量配置"}, TagsMode: "append"}, "tester")
+	if err != nil || result.Succeeded != 2 {
+		t.Fatalf("batch update: %#v %v", result, err)
+	}
+	updated, err := service.GetAsset(vm.ID)
+	if err != nil {
+		t.Fatalf("read vm: %v", err)
+	}
+	if updated.Status != "warning" || updated.Environment != "预生产" || updated.Owner != "平台组" || updated.Location != host.Location {
+		t.Fatalf("vm batch fields not applied: %#v", updated)
+	}
+	hostRelation := false
+	for _, relation := range updated.Relations {
+		if relation.Type == "runs-on" && relation.TargetID == host.ID {
+			hostRelation = true
+		}
+	}
+	if !hostRelation {
+		t.Fatalf("host relation not applied: %#v", updated.Relations)
+	}
+}

@@ -5,6 +5,7 @@ import {Activity,Boxes,ChevronLeft,ChevronRight,Database,Download,ExternalLink,F
 import {useCmdbStore} from '@/stores/useCmdbStore'
 import {statusLabel} from '@/features/cmdb/cmdbModel'
 import AssetEditor from './AssetEditor.vue'
+import ServerBatchConfig from './ServerBatchConfig.vue'
 import AssetImport from './AssetImport.vue'
 import AssetGovernancePanel from './AssetGovernancePanel.vue'
 import ModelManager from './ModelManager.vue'
@@ -31,6 +32,7 @@ const regularModels=computed(()=>store.models.filter(model=>!['physical-server',
 const editorSaving=ref(false)
 const editorError=ref('')
 const showImport=ref(false)
+const showServerBatch=ref(false)
 const showModels=ref(false)
 const importResult=ref<ImportResult>()
 const showAnalytics=ref(false)
@@ -66,7 +68,7 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
     <div v-if="['assets','middleware','database','k8s'].includes(section)" class="cmdb-workspace">
       <aside class="model-tree"><header><strong>CI 模型</strong><span>{{store.models.length}}</span></header><button :class="{active:view==='assets'&&!filters.type}" @click="chooseType('')"><Boxes/><span>全部资产</span><b>{{store.summary?.total}}</b></button><button :class="{active:view==='assets'&&filters.type==='server'}" @click="chooseServers"><Server/><span>服务器</span></button><button :class="{active:view==='k8s'}" @click="chooseK8s"><Boxes/><span>K8s 集群</span></button><button v-for="model in regularModels" :key="model.code" :class="{active:view==='assets'&&filters.type===model.code}" @click="chooseType(model.code)"><Server/><span>{{model.name}}</span><b>{{model.count}}</b></button></aside>
       <main class="asset-register"><K8sAssetBrowser v-if="view==='k8s'" @select="store.select"/><template v-else>
-        <div class="asset-toolbar"><div class="search-box"><Search/><input v-model="filters.search" placeholder="搜索资产名称、编号或 IP" @keyup.enter="apply"><button @click="apply">搜索</button></div><select v-model="filters.status" @change="apply"><option value="">全部状态</option><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select><select v-model="filters.projectGroup" @change="apply"><option value="">全部项目组</option><option>核心系统组</option><option>电商业务组</option><option>容器平台组</option><option>基础设施组</option><option>数据平台组</option><option>研发效能组</option></select><button class="icon-button" aria-label="刷新" @click="store.search({...filters})"><RefreshCw/></button><button class="icon-button" aria-label="筛选"><Filter/></button></div>
+        <div class="asset-toolbar"><div class="search-box"><Search/><input v-model="filters.search" placeholder="搜索资产名称、编号或 IP" @keyup.enter="apply"><button @click="apply">搜索</button></div><select v-model="filters.status" @change="apply"><option value="">全部状态</option><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select><select v-model="filters.projectGroup" @change="apply"><option value="">全部项目组</option><option>核心系统组</option><option>电商业务组</option><option>容器平台组</option><option>基础设施组</option><option>数据平台组</option><option>研发效能组</option></select><button class="icon-button" aria-label="刷新" @click="store.search({...filters})"><RefreshCw/></button><button class="icon-button" aria-label="筛选"><Filter/></button><button v-if="filters.type==='server'" class="batch-config-button" @click="showServerBatch=true">批量配置</button></div>
         <div v-if="store.error" class="cmdb-error">{{store.error}}</div>
         <div class="asset-table"><div class="asset-row asset-head"><span>资产名称</span><span>类型</span><span>状态</span><span>IP 地址</span><span>环境</span><span>项目组</span><span>负责人</span><span>数据来源</span></div><button v-for="asset in store.assets" :key="asset.id" class="asset-row" @click="store.select(asset.id)"><span><Server/><i><strong>{{asset.name}}</strong><small>{{asset.id}}</small></i></span><span>{{asset.typeName}}</span><span><b class="status-pill" :data-status="asset.status">{{statusLabel(asset.status)}}</b></span><span class="mono">{{asset.ip}}</span><span>{{asset.environment}}</span><span>{{asset.projectGroup}}</span><span>{{asset.owner}}</span><span>{{asset.source}}</span></button><div v-if="store.isLoading" class="table-loading">正在读取资产数据…</div></div>
         <footer class="table-footer"><span>共 {{store.meta.total}} 条资产</span><div><button :disabled="store.meta.page<=1" @click="page(-1)"><ChevronLeft/></button><b>{{store.meta.page}} / {{store.meta.totalPages||1}}</b><button :disabled="store.meta.page>=store.meta.totalPages" @click="page(1)"><ChevronRight/></button></div></footer></template>
@@ -76,6 +78,7 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
     <NetworkInterfacesPanel v-if="store.selected && ['physical-server','virtual-machine','k8s-node','cloud-host'].includes(store.selected.type)" :asset-id="store.selected.id"/>
     <CollectedAttributes v-if="store.selected" :attributes="store.selected.attributes"/>
     <HostMonitoring v-if="store.selected" :asset-id="store.selected.id"/>
+    <ServerBatchConfig v-if="showServerBatch" @close="showServerBatch=false" @changed="store.search({...filters})" />
     <AssetEditor v-if="editorMode" :asset="editorMode==='edit'?store.selected:undefined" :models="store.models" :idc-rooms="store.idcRooms" @close="editorMode='';editorError=''" @save="save" :saving="editorSaving" :server-error="editorError"/>
     <AssetImport v-if="showImport" :result="importResult" :models="store.models" @close="showImport=false" @import="importRows"/>
     <div v-if="showAnalytics" class="modal-backdrop"><section class="analytics-panel"><header><div><span>REPORTS</span><h2>CMDB 数据报表</h2></div><button @click="showAnalytics=false">✕</button></header><div class="analytics-body"><article><h3>资产状态</h3><dl><dt>总资产</dt><dd>{{store.analytics?.status.total}}</dd><dt>在线</dt><dd>{{store.analytics?.status.online}}</dd><dt>异常</dt><dd>{{store.analytics?.status.warning}}</dd><dt>离线</dt><dd>{{store.analytics?.status.offline}}</dd></dl></article><article><h3>按类型</h3><ul><li v-for="t in store.analytics?.byType" :key="t.code">{{t.name}}（{{t.count}}）</li></ul></article><article><h3>按项目组</h3><ul><li v-for="g in store.analytics?.byGroup" :key="g.group">{{g.group}}（{{g.count}}）</li></ul></article><article><h3>按来源</h3><ul><li v-for="s in store.analytics?.bySource" :key="s.source">{{s.source}}（{{s.count}}）</li></ul></article><article class="wide"><h3>字段完整度</h3><ul><li v-for="f in store.analytics?.completeness" :key="f.field">{{f.label}}：缺失 {{f.missing}} / {{f.total}}（{{Math.round((f.rate)*100)}}%）</li></ul></article></div></section></div>
@@ -96,4 +99,9 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
 .analytics-body li { padding:4px 0; border-bottom:1px dashed var(--line,#24314d); font-size:13px; }
 .analytics-panel { width: min(920px, 94vw); }
 .analytics-panel header { display:flex; align-items:center; justify-content:space-between; }
+</style>
+
+
+<style scoped>
+.batch-config-button { height:34px; padding:0 12px; border:1px solid #1a93c8; background:#0b6da5; color:#fff; cursor:pointer; border-radius:4px; }
 </style>

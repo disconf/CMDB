@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview,AssetGovernanceRule,AssetGovernanceRuleInput,AssetGovernanceRuleReport,AssetGovernanceBulkResult } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview,AssetGovernanceRule,AssetGovernanceRuleInput,AssetGovernanceRuleReport,AssetGovernanceBulkResult,BatchUpdateAssetInput,BatchUpdateAssetResult } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -89,3 +89,5 @@ export const evaluateAssetGovernanceRules=(token:string)=>send<AssetGovernanceRu
 export const bulkAssetGovernance=(token:string,input:{assetIds:string[];action:'assign'|'confirm'|'retire';owner?:string;projectGroup?:string;location?:string;note?:string})=>send<AssetGovernanceBulkResult>('/api/v1/cmdb/asset-governance/assets/bulk',token,'POST',input)
 
 export const fetchAssetOptions=(token:string,types:string[]=[])=>get<Asset[]>(`/api/v1/cmdb/asset-options${types.length?`?types=${encodeURIComponent(types.join(','))}`:''}`,token)
+
+export const batchUpdateAssets=(token:string,input:BatchUpdateAssetInput)=>send<BatchUpdateAssetResult>('/api/v1/cmdb/assets/batch-update',token,'POST',input)

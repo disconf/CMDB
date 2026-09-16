@@ -51,3 +51,6 @@ export interface AssetGovernanceRule { id:string;name:string;enabled:boolean;pri
 export interface AssetGovernanceRuleInput { name:string;enabled:boolean;priority:number;matchAssetType:string;matchSource:string;matchIpCidr:string;matchProjectGroup:string;matchTag:string;owner:string;targetProjectGroup:string;location:string;note:string }
 export interface AssetGovernanceRuleReport { evaluated:number;matched:number;assigned:number;skipped:number;errors?:string[] }
 export interface AssetGovernanceBulkResult { total:number;succeeded:number;failed:number;items:Array<{assetId:string;assetName:string;success:boolean;error?:string}> }
+
+export interface BatchUpdateAssetInput { assetIds:string[];status:string;environment:string;projectGroup:string;owner:string;location:string;hostId:string;tags:string[];tagsMode:'replace'|'append' }
+export interface BatchUpdateAssetResult { total:number;succeeded:number;failed:number;items:Array<{assetId:string;assetName:string;success:boolean;error?:string}> }

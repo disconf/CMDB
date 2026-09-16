@@ -147,6 +147,29 @@ type UpdateAssetInput struct {
 	Attributes   []Attribute `json:"attributes"`
 	Relations    []Relation  `json:"relations"`
 }
+type BatchUpdateAssetInput struct {
+	AssetIDs     []string `json:"assetIds"`
+	Status       string   `json:"status"`
+	Environment  string   `json:"environment"`
+	ProjectGroup string   `json:"projectGroup"`
+	Owner        string   `json:"owner"`
+	Location     string   `json:"location"`
+	HostID       string   `json:"hostId"`
+	Tags         []string `json:"tags"`
+	TagsMode     string   `json:"tagsMode"`
+}
+type BatchUpdateAssetItem struct {
+	AssetID   string `json:"assetId"`
+	AssetName string `json:"assetName"`
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+}
+type BatchUpdateAssetResult struct {
+	Total     int                    `json:"total"`
+	Succeeded int                    `json:"succeeded"`
+	Failed    int                    `json:"failed"`
+	Items     []BatchUpdateAssetItem `json:"items"`
+}
 type IntegrationConfig struct {
 	Provider     string `json:"provider"`
 	URL          string `json:"url"`
