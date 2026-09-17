@@ -29,3 +29,5 @@
   .scope>span:not(.status),.top-actions>.clock,.top-actions>span:not(.avatar){display:none}
   .dashboard,.cmdb-page,.remote-workbench{padding-left:10px;padding-right:10px}
 }
+.auth-loading{min-height:100vh;display:grid;place-items:center;align-content:center;gap:12px;color:#68c6e8;background:#03101f}
+.auth-loading svg{width:34px;height:34px}

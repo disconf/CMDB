@@ -29,19 +29,20 @@ const navigationIcons={LayoutDashboard,Database,Building2,Network,Radar,BellRing
 const remoteSectionIcons={overview:LayoutDashboard,sessions:Terminal,files:FileUp,execution:Play,approvals:ShieldAlert,security:ShieldCheck}
 const remoteExpanded=ref(route.path.startsWith('/remote'))
 const remoteSection=computed(()=>resolveRemoteSection(route.path))
-watch(()=>auth.isAuthenticated,authenticated=>{if(!authenticated&&route.path!=='/login')void router.replace('/login')})
+watch([()=>auth.isReady,()=>auth.isAuthenticated],([ready,authenticated])=>{if(ready&&authenticated)refresh();else if(ready&&!authenticated&&route.path!=='/login')void router.replace('/login')})
 function openModule(item:{code:string;path:string}){if(item.code==='remote'){if(route.path.startsWith(item.path)){remoteExpanded.value=!remoteExpanded.value;return}remoteExpanded.value=true;void router.push('/remote/overview');return}void router.push(item.path)}
 const currentTime = computed(()=>store.overview ? formatUpdateTime(store.overview.updatedAt) : '--')
 let timer: ReturnType<typeof setInterval> | undefined; let controller: AbortController | undefined
 function refresh(){ controller?.abort(); controller=new AbortController(); void store.load(controller.signal) }
 async function fullscreen(){ if(!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen() }
-onMounted(()=>{ refresh(); timer=setInterval(refresh,30000) }); onBeforeUnmount(()=>{controller?.abort(); if(timer) clearInterval(timer)})
+onMounted(()=>{ if(auth.isReady&&auth.isAuthenticated) refresh(); timer=setInterval(()=>{if(auth.isReady&&auth.isAuthenticated)refresh()},30000) }); onBeforeUnmount(()=>{controller?.abort(); if(timer) clearInterval(timer)})
 async function signOut(){await auth.signOut();await router.replace('/login')}
 </script>
 
 <template>
   <LoginPage v-if="route.path==='/login'" />
-  <div v-else class="app-shell">
+  <main v-else-if="!auth.isReady" class="auth-loading"><Activity class="spin"/><span>正在验证登录状态…</span></main>
+  <div v-else-if="auth.isAuthenticated" class="app-shell">
     <aside class="sidebar"><div class="brand"><span class="brand-mark"><Gauge /></span><strong>智能运维中心</strong></div><nav aria-label="主导航"><template v-for="item in auth.modules" :key="item.code"><button :class="{active:item.code==='remote'?route.path.startsWith(item.path):route.path===item.path}" @click="openModule(item)"><component :is="navigationIcons[item.icon as keyof typeof navigationIcons]" /><span>{{item.name}}</span><ChevronDown v-if="item.code==='remote'" class="nav-chevron" :class="{expanded:remoteExpanded}"/></button><div v-if="item.code==='remote' && remoteExpanded" class="sidebar-subnav"><button v-for="child in remoteSections" :key="child.id" :class="{active:remoteSection===child.id}" @click="router.push(child.path)"><component :is="remoteSectionIcons[child.id]"/><span>{{child.shortName}}</span></button></div></template></nav><div class="system-status"><i></i><div><strong>系统运行正常</strong><span>12 个核心服务在线</span></div></div></aside>
     <main>
       <header class="topbar"><div class="scope"><span class="status"><i></i>运行正常</span><span>数据中心</span><button>华东 · 上海 <ChevronDown /></button></div><div class="top-actions"><span class="clock">{{currentTime}}</span><button aria-label="搜索"><Search /></button><button aria-label="全屏" @click="fullscreen"><Maximize2 /></button><button class="avatar">{{auth.user?.displayName.slice(0,1)}}</button><span>{{auth.user?.displayName}}</span><button class="logout-action" aria-label="退出登录" @click="signOut"><LogOut /></button></div></header>

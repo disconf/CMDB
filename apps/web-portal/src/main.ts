@@ -23,4 +23,5 @@ import './styles/system.css'
 
 const pinia=createPinia()
 const router=createAppRouter(pinia)
-createApp(App).use(pinia).use(router).mount('#app')
+const app=createApp(App).use(pinia).use(router)
+void router.isReady().finally(()=>app.mount('#app'))
