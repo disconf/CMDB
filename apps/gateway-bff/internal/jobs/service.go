@@ -104,29 +104,36 @@ type Job struct {
 	ArtifactKeys    []string          `json:"artifactKeys,omitempty"`
 }
 type Schedule struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	TemplateID     string   `json:"templateId"`
-	TemplateName   string   `json:"templateName"`
-	Targets        []string `json:"targets"`
-	Cron           string   `json:"cron"`
-	TimeoutSeconds int      `json:"timeoutSeconds"`
-	Enabled        bool     `json:"enabled"`
-	NextRun        string   `json:"nextRun"`
-	LastRun        string   `json:"lastRun"`
-	LastStatus     string   `json:"lastStatus"`
-	LastJobID      string   `json:"lastJobId"`
-	CreatedBy      string   `json:"createdBy"`
-	CredentialID   string   `json:"credentialId"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	TemplateID     string            `json:"templateId,omitempty"`
+	TemplateName   string            `json:"templateName,omitempty"`
+	PlaybookID     string            `json:"playbookId,omitempty"`
+	PlaybookName   string            `json:"playbookName,omitempty"`
+	Variables      map[string]string `json:"variables,omitempty"`
+	Parameters     map[string]string `json:"parameters,omitempty"`
+	Targets        []string          `json:"targets"`
+	Cron           string            `json:"cron"`
+	TimeoutSeconds int               `json:"timeoutSeconds"`
+	Enabled        bool              `json:"enabled"`
+	NextRun        string            `json:"nextRun"`
+	LastRun        string            `json:"lastRun"`
+	LastStatus     string            `json:"lastStatus"`
+	LastJobID      string            `json:"lastJobId"`
+	CreatedBy      string            `json:"createdBy"`
+	CredentialID   string            `json:"credentialId"`
 }
 type ScheduleInput struct {
-	Name           string   `json:"name"`
-	TemplateID     string   `json:"templateId"`
-	Targets        []string `json:"targets"`
-	Cron           string   `json:"cron"`
-	TimeoutSeconds int      `json:"timeoutSeconds"`
-	CredentialID   string   `json:"credentialId"`
-	Enabled        *bool    `json:"enabled"`
+	Name           string            `json:"name"`
+	TemplateID     string            `json:"templateId"`
+	PlaybookID     string            `json:"playbookId"`
+	Variables      map[string]string `json:"variables"`
+	Parameters     map[string]string `json:"parameters"`
+	Targets        []string          `json:"targets"`
+	Cron           string            `json:"cron"`
+	TimeoutSeconds int               `json:"timeoutSeconds"`
+	CredentialID   string            `json:"credentialId"`
+	Enabled        *bool             `json:"enabled"`
 }
 type CreateInput struct {
 	TemplateID     string            `json:"templateId"`

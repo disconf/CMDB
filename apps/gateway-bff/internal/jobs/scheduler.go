@@ -49,12 +49,26 @@ func (s *Service) templateByID(id string) (Template, error) {
 	return Template{}, ErrNotFound
 }
 
+func (s *Service) scheduleTarget(input ScheduleInput) (Template, Playbook, error) {
+	if strings.TrimSpace(input.PlaybookID) != "" {
+		playbook, err := s.playbookByID(strings.TrimSpace(input.PlaybookID))
+		if err != nil {
+			return Template{}, Playbook{}, err
+		}
+		return Template{ID: "", Name: playbook.Name, Enabled: playbook.Enabled}, playbook, nil
+	}
+	template, err := s.templateByID(strings.TrimSpace(input.TemplateID))
+	if err != nil {
+		return Template{}, Playbook{}, err
+	}
+	return template, Playbook{}, nil
+}
 func normalizeScheduleInput(input ScheduleInput, template Template) (ScheduleInput, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
 	input.CredentialID = strings.TrimSpace(input.CredentialID)
 	input.Cron = strings.TrimSpace(input.Cron)
-	if input.Name == "" || input.TemplateID == "" || input.Cron == "" || len(input.Targets) == 0 || !template.Enabled {
+	if input.Name == "" || (input.TemplateID == "" && input.PlaybookID == "") || input.Cron == "" || len(input.Targets) == 0 || !template.Enabled {
 		return input, ErrValidation
 	}
 	if input.TimeoutSeconds <= 0 {
@@ -87,7 +101,7 @@ func normalizeScheduleInput(input ScheduleInput, template Template) (ScheduleInp
 }
 
 func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedule, error) {
-	template, err := s.templateByID(input.TemplateID)
+	template, playbook, err := s.scheduleTarget(input)
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
@@ -99,7 +113,7 @@ func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedul
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
-	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, Targets: append([]string(nil), input.Targets...), Cron: input.Cron, TimeoutSeconds: input.TimeoutSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTime(next), CreatedBy: createdBy}
+	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, PlaybookID: playbook.ID, PlaybookName: playbook.Name, Variables: cloneStringMap(input.Variables), Parameters: cloneStringMap(input.Parameters), Targets: append([]string(nil), input.Targets...), Cron: input.Cron, TimeoutSeconds: input.TimeoutSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTime(next), CreatedBy: createdBy}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schedules = append([]Schedule{schedule}, s.schedules...)
@@ -109,7 +123,7 @@ func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedul
 	return cloneSchedule(schedule), nil
 }
 func (s *Service) UpdateSchedule(id string, input ScheduleInput) (Schedule, error) {
-	template, err := s.templateByID(input.TemplateID)
+	template, playbook, err := s.scheduleTarget(input)
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
@@ -128,6 +142,10 @@ func (s *Service) UpdateSchedule(id string, input ScheduleInput) (Schedule, erro
 			s.schedules[i].Name = input.Name
 			s.schedules[i].TemplateID = template.ID
 			s.schedules[i].TemplateName = template.Name
+			s.schedules[i].PlaybookID = playbook.ID
+			s.schedules[i].PlaybookName = playbook.Name
+			s.schedules[i].Variables = cloneStringMap(input.Variables)
+			s.schedules[i].Parameters = cloneStringMap(input.Parameters)
 			s.schedules[i].Targets = append([]string(nil), input.Targets...)
 			s.schedules[i].Cron = input.Cron
 			s.schedules[i].TimeoutSeconds = input.TimeoutSeconds
@@ -205,7 +223,7 @@ func (s *Service) RunSchedule(id, operator string, advance bool) (Job, error) {
 	if operator == "" {
 		operator = "scheduler"
 	}
-	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds, CredentialID: schedule.CredentialID})
+	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, PlaybookID: schedule.PlaybookID, Variables: cloneStringMap(schedule.Variables), Parameters: cloneStringMap(schedule.Parameters), Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds, CredentialID: schedule.CredentialID})
 	if err == nil && job.Status == "pending" {
 		job, err = s.Run(job.ID)
 	}
@@ -276,6 +294,8 @@ func (s *Service) runDueSchedules(_ context.Context) {
 
 func cloneSchedule(schedule Schedule) Schedule {
 	schedule.Targets = append([]string(nil), schedule.Targets...)
+	schedule.Variables = cloneStringMap(schedule.Variables)
+	schedule.Parameters = cloneStringMap(schedule.Parameters)
 	return schedule
 }
 
