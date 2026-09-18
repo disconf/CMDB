@@ -53,7 +53,7 @@ export const useAuthStore=defineStore('auth',()=>{
     try{
       if(await initializeKeycloak()){
         const next=await refreshAccessToken(90)
-        if(next){await loadProfile(next);bindLifecycle()}
+        if(next){await loadProfile(next);if(window.location.hash)window.history.replaceState(null,'',window.location.pathname+window.location.search);bindLifecycle()}
       }
     }catch{clear()}finally{isReady.value=true}
   }
