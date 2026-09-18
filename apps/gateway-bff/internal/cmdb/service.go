@@ -282,6 +282,7 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "voltage", Label: "电压", Type: "text"},
 		{Name: "vendor", Label: "厂商", Type: "text"},
 		{Name: "model", Label: "型号", Type: "text"},
+		{Name: "network_role", Label: "网络角色", Type: "select", Options: []string{"接入交换机", "汇聚交换机", "核心交换机", "防火墙", "路由器"}},
 		{Name: "software_version", Label: "软件版本", Type: "text"},
 		{Name: "firmware", Label: "固件版本", Type: "text"},
 		{Name: "management_ip", Label: "管理IP", Type: "text"},

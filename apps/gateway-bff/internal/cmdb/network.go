@@ -164,6 +164,19 @@ func (s *Service) NetworkInterfaces(assetID string) ([]NetworkInterface, error) 
 		return nil, err
 	}
 	interfaces := parseNetworkInterfaces(asset)
+	if len(interfaces) == 0 && (asset.Type == "network-device" || asset.Type == "load-balancer") {
+		for _, port := range parseNetworkPorts(asset) {
+			name := firstNonEmpty(port.Name, port.IfIndex)
+			if name == "" {
+				continue
+			}
+			interfaces = append(interfaces, NetworkInterface{
+				ID: port.ID, AssetID: asset.ID, AssetName: asset.Name, Name: name,
+				MACAddress: port.MACAddress, AdminStatus: port.AdminStatus, OperStatus: port.OperStatus,
+				SpeedMbps: port.SpeedMbps, Type: "switch-port",
+			})
+		}
+	}
 	allAssets := s.InventoryAssets()
 	byIP := make(map[string]Asset, len(allAssets))
 	for _, candidate := range allAssets {
@@ -293,8 +306,8 @@ func (s *Service) CreateNetworkLink(input CreateNetworkLinkInput, operator strin
 	if target.Type != "network-device" && target.Type != "load-balancer" {
 		return NetworkLink{}, fmt.Errorf("%w: target must be a network device", ErrValidation)
 	}
-	if !isHostAssetType(source.Type) {
-		return NetworkLink{}, fmt.Errorf("%w: source must be a server", ErrValidation)
+	if !isHostAssetType(source.Type) && source.Type != "network-device" && source.Type != "load-balancer" {
+		return NetworkLink{}, fmt.Errorf("%w: source must be a server or network device", ErrValidation)
 	}
 	if interfaces, err := s.NetworkInterfaces(source.ID); err == nil && len(interfaces) > 0 && !hasNetworkInterface(interfaces, input.SourceInterface) {
 		return NetworkLink{}, fmt.Errorf("%w: source interface not found", ErrValidation)

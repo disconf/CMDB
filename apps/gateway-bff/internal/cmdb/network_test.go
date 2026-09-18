@@ -65,3 +65,28 @@ func TestNetworkLinkVerificationUsesARPTable(t *testing.T) {
 		t.Fatalf("expected ARP-verified link: %#v", links)
 	}
 }
+
+func TestNetworkLinkAllowsSwitchInterconnect(t *testing.T) {
+	service := NewService()
+	accessPorts, _ := json.Marshal([]NetworkPort{{IfIndex: "24", Name: "GE1/0/24", AdminStatus: "up", OperStatus: "up", SpeedMbps: "10000"}})
+	corePorts, _ := json.Marshal([]NetworkPort{{IfIndex: "1", Name: "GE1/0/1", AdminStatus: "up", OperStatus: "up", SpeedMbps: "10000"}})
+	for _, input := range []CreateAssetInput{
+		{ID: "interconnect-access", Name: "interconnect-access", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []Attribute{{Name: "network_ports", Label: "网络端口清单", Value: string(accessPorts)}}},
+		{ID: "interconnect-core", Name: "interconnect-core", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []Attribute{{Name: "network_ports", Label: "网络端口清单", Value: string(corePorts)}}},
+	} {
+		if _, err := service.CreateAsset(input, "test"); err != nil {
+			t.Fatalf("create switch %s: %v", input.ID, err)
+		}
+	}
+	interfaces, err := service.NetworkInterfaces("interconnect-access")
+	if err != nil || len(interfaces) != 1 || interfaces[0].Type != "switch-port" {
+		t.Fatalf("expected switch ports as bindable interfaces: %#v %v", interfaces, err)
+	}
+	link, err := service.CreateNetworkLink(CreateNetworkLinkInput{SourceAssetID: "interconnect-access", SourceInterface: "GE1/0/24", TargetAssetID: "interconnect-core", TargetPort: "GE1/0/1"}, "test")
+	if err != nil {
+		t.Fatalf("create switch interconnect: %v", err)
+	}
+	if link.SourceAssetID != "interconnect-access" || link.TargetAssetID != "interconnect-core" || link.SourceInterface != "GE1/0/24" || link.TargetPort != "GE1/0/1" {
+		t.Fatalf("unexpected switch interconnect: %#v", link)
+	}
+}

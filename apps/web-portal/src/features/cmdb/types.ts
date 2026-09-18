@@ -22,8 +22,8 @@ export interface NetworkPort { id:string;assetId:string;assetName:string;ifIndex
 export interface NetworkLink { id:string;sourceAssetId:string;sourceAssetName:string;sourceInterface:string;targetAssetId:string;targetAssetName:string;targetPort:string;status:string;source:string;verification:string;confidence:number;evidence?:string[];lastVerifiedAt?:string;lastSeenAt?:string }
 export interface NetworkInterface { id:string;assetId:string;assetName:string;name:string;macAddress?:string;ipv4?:string;mtu?:string;speedMbps?:string;adminStatus:string;operStatus:string;type?:string;lastSeenAt?:string;neighbors?:NetworkARPEntry[];link?:NetworkLink }
 export interface NetworkDeviceInventory { asset:Asset;ports:NetworkPort[];totalPorts:number;upPorts:number }
-export interface PhysicalNode { id:string;name:string;kind:string;assetType:string;status:string;ip?:string;location?:string;owner?:string;portCount:number;upPortCount:number }
-export interface PhysicalEdge { id:string;source:string;target:string;sourceInterface?:string;targetPort?:string;relation:string;status:string;sourceType:string;verification:string;confidence:number;evidence?:string[];lastSeenAt?:string }
+export interface PhysicalNode { id:string;name:string;kind:string;assetType:string;status:string;ip?:string;location?:string;owner?:string;role?:string;portCount:number;upPortCount:number }
+export interface PhysicalEdge { id:string;source:string;target:string;sourceInterface?:string;targetPort?:string;relation:string;linkKind?:string;status:string;sourceType:string;verification:string;confidence:number;evidence?:string[];lastSeenAt?:string }
 export interface PhysicalGraph { nodes:PhysicalNode[];edges:PhysicalEdge[];updatedAt:string }
 
 export interface TopologySnapshot { id:string;kind:string;environment:string;nodeCount:number;edgeCount:number;payload?:unknown;operator:string;createdAt:string }

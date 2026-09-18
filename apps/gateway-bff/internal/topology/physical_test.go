@@ -92,3 +92,28 @@ func TestCapturePhysicalSnapshot(t *testing.T) {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 }
+
+func TestPhysicalGraphClassifiesSwitchRolesAndInterconnect(t *testing.T) {
+	cmdbService := cmdb.NewService()
+	accessPorts := `[{"ifIndex":"1","name":"GE1/0/24","operStatus":"up","neighborName":"aggregation-switch-01","neighborPort":"GE1/0/1"}]`
+	for _, input := range []cmdb.CreateAssetInput{
+		{ID: "access-switch", Name: "access-switch-01", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []cmdb.Attribute{{Name: "network_role", Label: "网络角色", Value: "接入交换机"}, {Name: "network_ports", Label: "网络端口清单", Value: accessPorts}}},
+		{ID: "agg-switch", Name: "aggregation-switch-01", Type: "network-device", Status: "online", Environment: "test", ProjectGroup: "test", Owner: "test", Attributes: []cmdb.Attribute{{Name: "network_role", Label: "网络角色", Value: "汇聚交换机"}}},
+	} {
+		if _, err := cmdbService.CreateAsset(input, "test"); err != nil {
+			t.Fatalf("create switch %s: %v", input.ID, err)
+		}
+	}
+
+	graph := NewServiceWithCMDB(cmdbService).PhysicalGraph("test")
+	roles := map[string]string{}
+	for _, node := range graph.Nodes {
+		roles[node.ID] = node.Role
+	}
+	if roles["access-switch"] != "接入交换机" || roles["agg-switch"] != "汇聚交换机" {
+		t.Fatalf("unexpected switch roles: %#v", roles)
+	}
+	if len(graph.Edges) != 1 || graph.Edges[0].LinkKind != "switch-interconnect" || graph.Edges[0].SourceInterface != "GE1/0/24" || graph.Edges[0].TargetPort != "GE1/0/1" {
+		t.Fatalf("unexpected interconnect edge: %#v", graph.Edges)
+	}
+}

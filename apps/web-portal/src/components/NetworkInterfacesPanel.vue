@@ -19,6 +19,7 @@ const targetDeviceID = ref('')
 const targetPort = ref('')
 const manualPort = ref('')
 
+const isSwitchSource = computed(() => interfaces.value.some(item => item.type === 'switch-port'))
 const selectedDevice = computed(() => devices.value.find(item => item.asset.id === targetDeviceID.value))
 const targetPorts = computed(() => selectedDevice.value?.ports || [])
 const activeInterface = computed(() => selectedInterface.value || manualInterface.value)
@@ -51,7 +52,7 @@ async function load() {
   try {
     const [items, inventory] = await Promise.all([fetchNetworkInterfaces(auth.token, props.assetId), fetchNetworkDevices(auth.token)])
     interfaces.value = items
-    devices.value = inventory
+    devices.value = inventory.filter(item => item.asset.id !== props.assetId)
     if (items.length === 1) selectedInterface.value = items[0].name
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '网卡信息加载失败'
@@ -99,7 +100,7 @@ watch(() => props.assetId, load, { immediate: true })
 
 <template>
   <section class="network-interface-panel">
-    <header><div><Cable/><span><strong>网卡与物理链路</strong><small>网卡 → 交换机端口，支持手工绑定与 LLDP 自动发现</small></span></div><LoaderCircle v-if="loading" class="spin"/></header>
+    <header><div><Cable/><span><strong>{{isSwitchSource?'交换机端口与互联链路':'网卡与物理链路'}}</strong><small>{{isSwitchSource?'本端交换机端口 → 对端交换机端口，支持接入、汇聚和核心交换机互联':'网卡 → 交换机端口，支持手工绑定与 LLDP 自动发现'}}</small></span></div><LoaderCircle v-if="loading" class="spin"/></header>
     <div v-if="error" class="interface-message error">{{ error }}</div>
     <div v-if="message" class="interface-message success"><Check/>{{ message }}</div>
     <div v-if="interfaces.length" class="interface-list">
@@ -110,11 +111,11 @@ watch(() => props.assetId, load, { immediate: true })
         <div v-else class="empty-binding"><Network/>尚未绑定交换机端口</div>
       </article>
     </div>
-    <div v-else-if="!loading" class="interface-empty">未采集到网卡清单。可执行 SSH 采集，或在下方手工填写网卡名称后绑定。</div>
+    <div v-else-if="!loading" class="interface-empty">{{isSwitchSource?'未采集到交换机端口清单，可在下方手工填写本端端口名称后绑定。':'未采集到网卡清单。可执行 SSH 采集，或在下方手工填写网卡名称后绑定。'}}</div>
     <div class="binding-form">
-      <h4><Link2/>新建物理链路绑定</h4>
-      <label><span>服务器网卡</span><select v-if="interfaces.length" v-model="selectedInterface"><option value="">请选择网卡</option><option v-for="item in interfaces" :key="item.id" :value="item.name">{{ item.name }} · {{ item.macAddress || 'MAC 未知' }}</option></select><input v-else v-model="manualInterface" placeholder="例如 eth0 / ens192"></label>
-      <label><span>交换机 / 网络设备</span><select v-model="targetDeviceID" @change="targetPort='';manualPort=''"><option value="">请选择设备</option><option v-for="device in devices" :key="device.asset.id" :value="device.asset.id">{{ device.asset.name }} · {{ device.asset.ip }}</option></select></label>
+      <h4><Link2/>{{isSwitchSource?'新建交换机互联链路':'新建物理链路绑定'}}</h4>
+      <label><span>{{isSwitchSource?'本端交换机端口':'服务器网卡'}}</span><select v-if="interfaces.length" v-model="selectedInterface"><option value="">请选择网卡</option><option v-for="item in interfaces" :key="item.id" :value="item.name">{{ item.name }} · {{ item.macAddress || 'MAC 未知' }}</option></select><input v-else v-model="manualInterface" placeholder="例如 eth0 / ens192"></label>
+      <label><span>{{isSwitchSource?'对端交换机':'交换机 / 网络设备'}}</span><select v-model="targetDeviceID" @change="targetPort='';manualPort=''"><option value="">请选择设备</option><option v-for="device in devices" :key="device.asset.id" :value="device.asset.id">{{ device.asset.name }} · {{ device.asset.ip }}</option></select></label>
       <label><span>交换机端口</span><select v-if="targetPorts.length" v-model="targetPort"><option value="">请选择端口</option><option v-for="port in targetPorts" :key="port.id" :value="port.name">{{ port.name }} · {{ port.operStatus }} · {{ port.alias || port.description || '无描述' }}</option></select><input v-else v-model="manualPort" placeholder="例如 GE0/0/1"></label>
       <button class="bind-action" :disabled="!canBind || saving" @click="bind"><LoaderCircle v-if="saving" class="spin"/><Link2 v-else/>保存绑定</button>
     </div>

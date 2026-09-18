@@ -18,6 +18,7 @@ type PhysicalNode struct {
 	IP          string `json:"ip,omitempty"`
 	Location    string `json:"location,omitempty"`
 	Owner       string `json:"owner,omitempty"`
+	Role        string `json:"role,omitempty"`
 	PortCount   int    `json:"portCount"`
 	UpPortCount int    `json:"upPortCount"`
 }
@@ -29,6 +30,7 @@ type PhysicalEdge struct {
 	SourceInterface string   `json:"sourceInterface,omitempty"`
 	TargetPort      string   `json:"targetPort,omitempty"`
 	Relation        string   `json:"relation"`
+	LinkKind        string   `json:"linkKind,omitempty"`
 	Status          string   `json:"status"`
 	SourceType      string   `json:"sourceType"`
 	Verification    string   `json:"verification"`
@@ -70,7 +72,7 @@ func (s *Service) PhysicalGraphView(environment string, linkedOnly bool) Physica
 		if environment != "" && asset.Environment != environment {
 			return
 		}
-		node := PhysicalNode{ID: asset.ID, Name: asset.Name, Kind: physicalKind(asset.Type), AssetType: asset.Type, Status: asset.Status, IP: asset.IP, Location: asset.Location, Owner: asset.Owner}
+		node := PhysicalNode{ID: asset.ID, Name: asset.Name, Kind: physicalKind(asset.Type), AssetType: asset.Type, Status: asset.Status, IP: asset.IP, Location: asset.Location, Owner: asset.Owner, Role: physicalRole(asset)}
 		if inventory, ok := portStats[asset.ID]; ok {
 			node.PortCount = inventory.TotalPorts
 			node.UpPortCount = inventory.UpPorts
@@ -141,7 +143,7 @@ func (s *Service) PhysicalGraphView(environment string, linkedOnly bool) Physica
 			sourceID, finalTargetID = finalTargetID, sourceID
 			sourceInterface, targetPort = targetPort, sourceInterface
 		}
-		addEdge(PhysicalEdge{ID: link.ID, Source: sourceID, Target: finalTargetID, SourceInterface: sourceInterface, TargetPort: targetPort, Relation: relation, Status: physicalLinkStatus(target.Status), SourceType: link.Source, Verification: link.Verification, Confidence: link.Confidence, Evidence: append([]string(nil), link.Evidence...), LastSeenAt: link.LastSeenAt})
+		addEdge(PhysicalEdge{ID: link.ID, Source: sourceID, Target: finalTargetID, SourceInterface: sourceInterface, TargetPort: targetPort, Relation: relation, LinkKind: physicalLinkKind(byID[sourceID].Type, byID[finalTargetID].Type), Status: physicalLinkStatus(target.Status), SourceType: link.Source, Verification: link.Verification, Confidence: link.Confidence, Evidence: append([]string(nil), link.Evidence...), LastSeenAt: link.LastSeenAt})
 	}
 	if linkedOnly {
 		connected := make(map[string]bool, len(graph.Edges)*2)
@@ -192,6 +194,64 @@ func physicalKind(assetType string) string {
 	}
 }
 
+func physicalRole(asset cmdb.Asset) string {
+	values := []string{asset.Name}
+	for _, name := range []string{"network_role", "device_role", "switch_role", "role", "device_type"} {
+		if value := physicalAttributeValue(asset.Attributes, name); value != "" {
+			values = append(values, value)
+		}
+	}
+	combined := strings.ToLower(strings.Join(values, " "))
+	switch asset.Type {
+	case "physical-server":
+		return "服务器"
+	case "virtual-machine":
+		return "虚拟机"
+	case "k8s-node":
+		return "K8s 节点"
+	case "load-balancer":
+		return "负载均衡"
+	case "network-device":
+		switch {
+		case strings.Contains(combined, "核心") || strings.Contains(combined, "core"):
+			return "核心交换机"
+		case strings.Contains(combined, "汇聚") || strings.Contains(combined, "aggregation") || strings.Contains(combined, "agg"):
+			return "汇聚交换机"
+		case strings.Contains(combined, "接入") || strings.Contains(combined, "access") || strings.Contains(combined, "acc"):
+			return "接入交换机"
+		case strings.Contains(combined, "防火墙") || strings.Contains(combined, "firewall"):
+			return "防火墙"
+		case strings.Contains(combined, "路由") || strings.Contains(combined, "router"):
+			return "路由器"
+		default:
+			return "交换机"
+		}
+	default:
+		return ""
+	}
+}
+
+func physicalAttributeValue(attributes []cmdb.Attribute, name string) string {
+	for _, attribute := range attributes {
+		if attribute.Name == name {
+			return strings.TrimSpace(attribute.Value)
+		}
+	}
+	return ""
+}
+func physicalLinkKind(sourceType, targetType string) string {
+	sourceNetwork := sourceType == "network-device" || sourceType == "load-balancer"
+	targetNetwork := targetType == "network-device" || targetType == "load-balancer"
+	sourceHost := sourceType == "physical-server" || sourceType == "virtual-machine" || sourceType == "k8s-node"
+	targetHost := targetType == "physical-server" || targetType == "virtual-machine" || targetType == "k8s-node"
+	if sourceNetwork && targetNetwork {
+		return "switch-interconnect"
+	}
+	if (sourceHost && targetNetwork) || (sourceNetwork && targetHost) {
+		return "host-access"
+	}
+	return "physical"
+}
 func physicalLinkStatus(status string) string {
 	if status == "" {
 		return "healthy"
