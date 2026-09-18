@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -12,7 +13,24 @@ var playbookVariablePattern = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_.-
 
 func playbookID() string { return fmt.Sprintf("pb-%d", time.Now().UnixNano()) }
 
+func (s *Service) refreshPlaybooks() {
+	if s.db == nil {
+		return
+	}
+	items, err := loadPlaybooks(context.Background(), s.db)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.playbooks = make([]Playbook, len(items))
+	for i := range items {
+		s.playbooks[i] = clonePlaybook(items[i])
+	}
+	s.mu.Unlock()
+}
+
 func (s *Service) Playbooks() []Playbook {
+	s.refreshPlaybooks()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Playbook, 0, len(s.playbooks))
@@ -23,6 +41,16 @@ func (s *Service) Playbooks() []Playbook {
 }
 
 func (s *Service) playbookByID(id string) (Playbook, error) {
+	s.mu.RLock()
+	for _, item := range s.playbooks {
+		if item.ID == id {
+			result := clonePlaybook(item)
+			s.mu.RUnlock()
+			return result, nil
+		}
+	}
+	s.mu.RUnlock()
+	s.refreshPlaybooks()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, item := range s.playbooks {
@@ -76,7 +104,10 @@ func (s *Service) CreatePlaybook(input PlaybookInput, createdBy string) (Playboo
 	defer s.mu.Unlock()
 	s.playbooks = append([]Playbook{item}, s.playbooks...)
 	if s.db != nil {
-		_ = upsertPlaybook(context.Background(), s.db, item)
+		if err := upsertPlaybook(context.Background(), s.db, item); err != nil {
+			slog.Error("persist playbook", "id", item.ID, "error", err)
+			return Playbook{}, err
+		}
 	}
 	return clonePlaybook(item), nil
 }

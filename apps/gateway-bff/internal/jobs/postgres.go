@@ -164,7 +164,7 @@ func upsertSchedule(ctx context.Context, db *sql.DB, schedule Schedule) error {
 	if value, err := parseScheduleTime(schedule.LastRun); err == nil && !value.IsZero() {
 		lastRun = value
 	}
-	_, err := db.ExecContext(ctx, `INSERT INTO job_schedules(id,name,template_id,targets,cron,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,credential_id,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,template_id=excluded.template_id,targets=excluded.targets,cron=excluded.cron,timeout_seconds=excluded.timeout_seconds,enabled=excluded.enabled,next_run=excluded.next_run,last_run=excluded.last_run,last_status=excluded.last_status,last_job_id=excluded.last_job_id,credential_id=excluded.credential_id,updated_at=now()`, schedule.ID, schedule.Name, schedule.TemplateID, schedule.PlaybookID, schedule.PlaybookName, variables, parameters, targets, schedule.Cron, schedule.TimeoutSeconds, schedule.Enabled, schedule.CreatedBy, nextRun, lastRun, schedule.LastStatus, schedule.LastJobID, schedule.CredentialID)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_schedules(id,name,template_id,playbook_id,playbook_name,variables,parameters,targets,cron,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,credential_id,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,template_id=excluded.template_id,playbook_id=excluded.playbook_id,playbook_name=excluded.playbook_name,variables=excluded.variables,parameters=excluded.parameters,targets=excluded.targets,cron=excluded.cron,timeout_seconds=excluded.timeout_seconds,enabled=excluded.enabled,next_run=excluded.next_run,last_run=excluded.last_run,last_status=excluded.last_status,last_job_id=excluded.last_job_id,credential_id=excluded.credential_id,updated_at=now()`, schedule.ID, schedule.Name, schedule.TemplateID, schedule.PlaybookID, schedule.PlaybookName, variables, parameters, targets, schedule.Cron, schedule.TimeoutSeconds, schedule.Enabled, schedule.CreatedBy, nextRun, lastRun, schedule.LastStatus, schedule.LastJobID, schedule.CredentialID)
 	return err
 }
 
@@ -196,7 +196,7 @@ func loadPlaybooks(ctx context.Context, db *sql.DB) ([]Playbook, error) {
 func upsertPlaybook(ctx context.Context, db *sql.DB, item Playbook) error {
 	constants, _ := json.Marshal(item.Constants)
 	variables, _ := json.Marshal(item.Variables)
-	_, err := db.ExecContext(ctx, `INSERT INTO job_playbooks(id,name,description,content,constants,variables,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,constants=excluded.constants,variables=excluded.variables,enabled=excluded.enabled,updated_at=now()`, item.ID, item.Name, item.Description, item.Content, constants, variables, item.Enabled, item.Version, item.CreatedBy)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_playbooks(id,name,description,content,constants,variables,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,constants=excluded.constants,variables=excluded.variables,enabled=excluded.enabled,updated_at=now()`, item.ID, item.Name, item.Description, item.Content, constants, variables, item.Enabled, item.CreatedBy)
 	return err
 }
 

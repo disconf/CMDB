@@ -227,7 +227,20 @@ func NewService() *Service {
 	return s
 }
 
+func (s *Service) refreshTemplates() {
+	if s.db == nil {
+		return
+	}
+	items, err := loadTemplates(context.Background(), s.db)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.templates = append([]Template(nil), items...)
+	s.mu.Unlock()
+}
 func (s *Service) Templates() []Template {
+	s.refreshTemplates()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]Template(nil), s.templates...)
@@ -349,7 +362,20 @@ func validateTemplate(in TemplateInput) error {
 	}
 	return nil
 }
+func (s *Service) refreshSchedules() {
+	if s.db == nil {
+		return
+	}
+	items, err := loadSchedules(context.Background(), s.db)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.schedules = cloneSchedules(items)
+	s.mu.Unlock()
+}
 func (s *Service) Schedules() []Schedule {
+	s.refreshSchedules()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return cloneSchedules(s.schedules)
@@ -420,13 +446,30 @@ func (s *Service) Create(in CreateInput) (Job, error) {
 	if in.PlaybookID != "" {
 		return s.createPlaybookExecution(in)
 	}
-	var tpl *Template
+	var tpl Template
+	found := false
+	s.mu.RLock()
 	for i := range s.templates {
 		if s.templates[i].ID == in.TemplateID {
-			tpl = &s.templates[i]
+			tpl = s.templates[i]
+			found = true
+			break
 		}
 	}
-	if tpl == nil || !tpl.Enabled || len(in.Targets) == 0 {
+	s.mu.RUnlock()
+	if !found {
+		s.refreshTemplates()
+		s.mu.RLock()
+		for i := range s.templates {
+			if s.templates[i].ID == in.TemplateID {
+				tpl = s.templates[i]
+				found = true
+				break
+			}
+		}
+		s.mu.RUnlock()
+	}
+	if !found || !tpl.Enabled || len(in.Targets) == 0 {
 		return Job{}, ErrValidation
 	}
 	if in.TimeoutSeconds <= 0 {

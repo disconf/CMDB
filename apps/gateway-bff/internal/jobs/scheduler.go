@@ -40,6 +40,15 @@ func scheduleID() string { return fmt.Sprintf("sch-%d", time.Now().UnixNano()) }
 
 func (s *Service) templateByID(id string) (Template, error) {
 	s.mu.RLock()
+	for _, item := range s.templates {
+		if item.ID == id {
+			s.mu.RUnlock()
+			return item, nil
+		}
+	}
+	s.mu.RUnlock()
+	s.refreshTemplates()
+	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, item := range s.templates {
 		if item.ID == id {
@@ -118,7 +127,9 @@ func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedul
 	defer s.mu.Unlock()
 	s.schedules = append([]Schedule{schedule}, s.schedules...)
 	if s.db != nil {
-		_ = upsertSchedule(context.Background(), s.db, schedule)
+		if err := upsertSchedule(context.Background(), s.db, schedule); err != nil {
+			return Schedule{}, err
+		}
 	}
 	return cloneSchedule(schedule), nil
 }
@@ -157,7 +168,9 @@ func (s *Service) UpdateSchedule(id string, input ScheduleInput) (Schedule, erro
 				s.schedules[i].NextRun = ""
 			}
 			if s.db != nil {
-				_ = upsertSchedule(context.Background(), s.db, s.schedules[i])
+				if err := upsertSchedule(context.Background(), s.db, s.schedules[i]); err != nil {
+					return Schedule{}, err
+				}
 			}
 			return cloneSchedule(s.schedules[i]), nil
 		}
@@ -182,7 +195,9 @@ func (s *Service) ToggleSchedule(id string) (Schedule, error) {
 				s.schedules[i].NextRun = ""
 			}
 			if s.db != nil {
-				_ = upsertSchedule(context.Background(), s.db, s.schedules[i])
+				if err := upsertSchedule(context.Background(), s.db, s.schedules[i]); err != nil {
+					return Schedule{}, err
+				}
 			}
 			return cloneSchedule(s.schedules[i]), nil
 		}
