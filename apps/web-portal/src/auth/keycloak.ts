@@ -12,13 +12,20 @@ export const keycloak = new Keycloak({
   clientId: config.clientId,
 })
 
-export const initializeKeycloak = () =>
-  keycloak.init({
-    onLoad: 'check-sso',
-    pkceMethod: 'S256',
-    checkLoginIframe: false,
-    timeSkew: 30,
-  })
+export const initializeKeycloak = async () => {
+  try {
+    return await keycloak.init({
+      onLoad: 'check-sso',
+      pkceMethod: 'S256',
+      checkLoginIframe: false,
+      timeSkew: 30,
+    })
+  } finally {
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+  }
+}
 
 export const refreshAccessToken = async (minValidity = 60) => {
   if (!keycloak.authenticated) return ''

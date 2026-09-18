@@ -44,7 +44,11 @@ export const useAuthStore=defineStore('auth',()=>{
     refreshTimer=window.setInterval(()=>void refreshSession(),30000)
   }
 
-  async function signIn(){ await keycloak.login({redirectUri:window.location.origin+'/'}) }
+  async function signIn(){
+    if(window.location.hash) window.history.replaceState(null,'',window.location.pathname+window.location.search)
+    const loginUrl=await keycloak.createLoginUrl({redirectUri:window.location.origin+'/'})
+    window.location.assign(loginUrl)
+  }
   async function initialize(){
     try{
       if(await initializeKeycloak()){
