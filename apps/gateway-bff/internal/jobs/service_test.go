@@ -89,3 +89,44 @@ func TestCreatePreservesCredentialID(t *testing.T) {
 		t.Fatalf("expected normalized credential id, got %q", job.CredentialID)
 	}
 }
+
+func TestReviewSupportsRejectAndReturn(t *testing.T) {
+	s := NewService()
+	tpl, err := s.CreateTemplate(TemplateInput{Name: "补丁2", Category: "安全", Command: "patch --approved", Risk: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := s.Create(CreateInput{TemplateID: tpl.ID, Targets: []string{"srv-1"}, Operator: "creator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err = s.Review(rejected.ID, "reviewer", ApprovalInput{Decision: "reject", Comment: "维护窗口未确认"})
+	if err != nil || rejected.Status != "rejected" || rejected.ApprovedBy != "reviewer" {
+		t.Fatalf("reject: %#v %v", rejected, err)
+	}
+	returned, err := s.Create(CreateInput{TemplateID: tpl.ID, Targets: []string{"srv-2"}, Operator: "creator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	returned, err = s.Review(returned.ID, "reviewer", ApprovalInput{Decision: "return", Comment: "请补充回滚方案"})
+	if err != nil || returned.Status != "returned" {
+		t.Fatalf("return: %#v %v", returned, err)
+	}
+}
+
+func TestRetryTargetsRejectsUnknownTarget(t *testing.T) {
+	s := NewService()
+	job, err := s.Create(CreateInput{TemplateID: "tpl-health", Targets: []string{"host-1", "host-2"}, Operator: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _ = s.Run(job.ID)
+	job, _ = s.Cancel(job.ID)
+	if _, err = s.RetryTargets(job.ID, []string{"missing"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	job, err = s.RetryTargets(job.ID, []string{"host-1"})
+	if err != nil || job.Status != "running" {
+		t.Fatalf("partial retry: %#v %v", job, err)
+	}
+}

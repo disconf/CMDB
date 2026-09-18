@@ -12,6 +12,7 @@ export type Summary={templates:number;running:number;successToday:number;failedT
 export type ExecutorInfo={mode:string;ready:boolean;endpoint:string}
 export type JobTargetOptions={projectGroups:string[];tags:string[]}
 export type JobTargetResolve={targets:string[];assets:AssetPage['data']}
+export type ApprovalDecision='approve'|'reject'|'return'
 
 async function request<T>(path:string,token:string,init?:RequestInit):Promise<T>{const response=await fetch(path,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init?.headers||{})}});const data=await response.json().catch(()=>({message:'请求失败'}));if(!response.ok)throw new Error((data as {message?:string}).message||`请求失败 (${response.status})`);return data as T}
 export const fetchJobData=(token:string)=>Promise.all([request<Summary>('/api/v1/jobs/summary',token),request<Template[]>('/api/v1/jobs/templates',token),request<Job[]>('/api/v1/jobs/executions',token),request<Schedule[]>('/api/v1/jobs/schedules',token),request<Playbook[]>('/api/v1/jobs/playbooks',token),request<ExecutorInfo>('/api/v1/jobs/executor',token)])
@@ -25,6 +26,8 @@ export const toggleTemplate=(token:string,id:string)=>request<Template>(`/api/v1
 export const createExecution=(token:string,input:{templateId:string;targets:string[];parameters?:Record<string,string>;timeoutSeconds:number;credentialId:string})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
 export const createPlaybookExecution=(token:string,input:{playbookId:string;targets:string[];variables:Record<string,string>;parameters?:Record<string,string>;timeoutSeconds:number;credentialId:string})=>request<Job>('/api/v1/jobs/executions',token,{method:'POST',body:JSON.stringify(input)})
 export const jobAction=(token:string,id:string,action:'run'|'retry'|'cancel'|'approve')=>request<Job>(`/api/v1/jobs/executions/${id}/${action}`,token,{method:'POST'})
+export const reviewJob=(token:string,id:string,decision:ApprovalDecision,comment:string)=>request<Job>(`/api/v1/jobs/executions/${id}/review`,token,{method:'POST',body:JSON.stringify({decision,comment})})
+export const retryJob=(token:string,id:string,targets?:string[])=>request<Job>(`/api/v1/jobs/executions/${id}/retry`,token,{method:'POST',body:JSON.stringify({targets:targets||[]})})
 export const createPlaybook=(token:string,input:PlaybookInput)=>request<Playbook>('/api/v1/jobs/playbooks',token,{method:'POST',body:JSON.stringify(input)})
 export const updatePlaybook=(token:string,id:string,input:PlaybookInput)=>request<Playbook>(`/api/v1/jobs/playbooks/${id}`,token,{method:'PUT',body:JSON.stringify(input)})
 export const togglePlaybook=(token:string,id:string)=>request<Playbook>(`/api/v1/jobs/playbooks/${id}/toggle`,token,{method:'POST'})

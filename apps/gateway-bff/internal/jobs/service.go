@@ -145,6 +145,10 @@ type CreateInput struct {
 	TimeoutSeconds int               `json:"timeoutSeconds"`
 	CredentialID   string            `json:"credentialId"`
 }
+type ApprovalInput struct {
+	Decision string `json:"decision"`
+	Comment  string `json:"comment"`
+}
 type Summary struct {
 	Templates    int `json:"templates"`
 	Running      int `json:"running"`
@@ -469,9 +473,26 @@ func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
 	s.persistLocked(j)
 	return cloneJob(j), nil
 }
-func (s *Service) Run(id string) (Job, error)   { return s.start(id, false) }
-func (s *Service) Retry(id string) (Job, error) { return s.start(id, true) }
+func (s *Service) Run(id string) (Job, error)   { return s.startTargets(id, false, nil) }
+func (s *Service) Retry(id string) (Job, error) { return s.startTargets(id, true, nil) }
+func (s *Service) RetryTargets(id string, targets []string) (Job, error) {
+	return s.startTargets(id, true, targets)
+}
 func (s *Service) Approve(id, approver string) (Job, error) {
+	return s.Review(id, approver, ApprovalInput{Decision: "approve"})
+}
+func (s *Service) Review(id, reviewer string, input ApprovalInput) (Job, error) {
+	decision := strings.ToLower(strings.TrimSpace(input.Decision))
+	comment := strings.TrimSpace(input.Comment)
+	if decision == "" {
+		decision = "approve"
+	}
+	if reviewer == "" || (decision != "approve" && decision != "reject" && decision != "return") {
+		return Job{}, ErrValidation
+	}
+	if len(comment) > 1000 {
+		return Job{}, ErrValidation
+	}
 	if _, err := s.Get(id); err != nil {
 		return Job{}, err
 	}
@@ -479,20 +500,45 @@ func (s *Service) Approve(id, approver string) (Job, error) {
 	defer s.mu.Unlock()
 	for i := range s.jobs {
 		j := &s.jobs[i]
-		if j.ID == id {
-			if j.Status != "awaiting_approval" || approver == "" || approver == j.Operator {
-				return Job{}, ErrInvalidState
-			}
-			j.Status = "pending"
-			j.ApprovedBy = approver
-			j.Logs = append(j.Logs, Log{time.Now().Format("15:04:05"), "success", "高风险任务已由 " + approver + " 审批通过"})
-			s.persistLocked(*j)
-			return cloneJob(*j), nil
+		if j.ID != id {
+			continue
 		}
+		if j.Status != "awaiting_approval" || reviewer == j.Operator {
+			return Job{}, ErrInvalidState
+		}
+		now := time.Now().Format("15:04:05")
+		switch decision {
+		case "approve":
+			j.Status = "pending"
+			j.ApprovedBy = reviewer
+			message := "高风险任务已由 " + reviewer + " 审批通过"
+			if comment != "" {
+				message += "，审批意见：" + comment
+			}
+			j.Logs = append(j.Logs, Log{Time: now, Level: "success", Message: message})
+		case "reject":
+			j.Status = "rejected"
+			j.ApprovedBy = reviewer
+			message := "高风险任务已由 " + reviewer + " 拒绝"
+			if comment != "" {
+				message += "，审批意见：" + comment
+			}
+			j.Logs = append(j.Logs, Log{Time: now, Level: "warning", Message: message})
+		case "return":
+			j.Status = "returned"
+			j.ApprovedBy = reviewer
+			message := "高风险任务已由 " + reviewer + " 退回修改"
+			if comment != "" {
+				message += "，审批意见：" + comment
+			}
+			j.Logs = append(j.Logs, Log{Time: now, Level: "info", Message: message})
+		}
+		s.persistLocked(*j)
+		return cloneJob(*j), nil
 	}
 	return Job{}, ErrNotFound
 }
-func (s *Service) start(id string, retry bool) (Job, error) {
+func (s *Service) startTargets(id string, retry bool, requestedTargets []string) (Job, error) {
 	if _, err := s.Get(id); err != nil {
 		return Job{}, err
 	}
@@ -513,6 +559,30 @@ func (s *Service) start(id string, retry bool) (Job, error) {
 		s.mu.Unlock()
 		return Job{}, ErrInvalidState
 	}
+	targets := append([]string(nil), j.Targets...)
+	if retry && len(requestedTargets) > 0 {
+		allowed := map[string]string{}
+		for _, target := range j.Targets {
+			allowed[target] = target
+		}
+		targets = targets[:0]
+		seen := map[string]bool{}
+		for _, target := range requestedTargets {
+			value, ok := allowed[strings.TrimSpace(target)]
+			if !ok {
+				s.mu.Unlock()
+				return Job{}, ErrValidation
+			}
+			if !seen[value] {
+				seen[value] = true
+				targets = append(targets, value)
+			}
+		}
+		if len(targets) == 0 {
+			s.mu.Unlock()
+			return Job{}, ErrValidation
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(j.TimeoutSeconds)*time.Second)
 	s.cancels[id] = cancel
 	j.Status = "running"
@@ -523,7 +593,7 @@ func (s *Service) start(id string, retry bool) (Job, error) {
 	attempt := j.Attempt
 	request := s.executionRequestForJobLocked(*j)
 	request.JobID = j.ID
-	request.Targets = append([]string(nil), j.Targets...)
+	request.Targets = targets
 	request.Operator = j.Operator
 	request.Attempt = attempt
 	request.TimeoutSeconds = j.TimeoutSeconds
@@ -602,14 +672,49 @@ func (s *Service) finish(id string, attempt int, status string, progress int, st
 				level = "warning"
 			}
 			s.jobs[i].Logs = append(s.jobs[i].Logs, Log{time.Now().Format("15:04:05"), level, message})
-			s.jobs[i].TargetResults = append([]TargetResult(nil), targetResults...)
-			s.jobs[i].ArtifactKeys = append([]string(nil), artifactKeys...)
+			s.jobs[i].TargetResults = mergeTargetResults(s.jobs[i].TargetResults, targetResults)
+			s.jobs[i].ArtifactKeys = mergeArtifactKeys(s.jobs[i].ArtifactKeys, artifactKeys)
 			delete(s.cancels, id)
 			s.persistLocked(s.jobs[i])
 			return
 		}
 	}
 }
+
+func mergeTargetResults(existing, incoming []TargetResult) []TargetResult {
+	if len(incoming) == 0 {
+		return append([]TargetResult(nil), existing...)
+	}
+	merged := append([]TargetResult(nil), existing...)
+	positions := map[string]int{}
+	for i, item := range merged {
+		positions[item.Target] = i
+	}
+	for _, item := range incoming {
+		if index, ok := positions[item.Target]; ok {
+			merged[index] = item
+			continue
+		}
+		positions[item.Target] = len(merged)
+		merged = append(merged, item)
+	}
+	return merged
+}
+func mergeArtifactKeys(existing, incoming []string) []string {
+	result := append([]string(nil), existing...)
+	seen := map[string]bool{}
+	for _, item := range result {
+		seen[item] = true
+	}
+	for _, item := range incoming {
+		if item != "" && !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 func (s *Service) persistLocked(j Job) {
 	if s.db != nil {
 		_ = upsertJob(context.Background(), s.db, j)

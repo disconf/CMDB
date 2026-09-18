@@ -2580,15 +2580,30 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "job:manage") {
 			return
 		}
-		j, err := jobsService.Retry(r.PathValue("id"))
+		var input struct {
+			Targets []string `json:"targets"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			if decodeJSON(r, &input) != nil {
+				writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+				return
+			}
+		}
+		j, err := jobsService.RetryTargets(r.PathValue("id"), input.Targets)
 		if errors.Is(err, jobs.ErrNotFound) {
 			writeJSON(w, 404, map[string]string{"code": "JOB_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, jobs.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "重试目标不属于原任务"})
 			return
 		}
 		if errors.Is(err, jobs.ErrInvalidState) {
 			writeJSON(w, 409, map[string]string{"code": "INVALID_JOB_STATE"})
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.execution.retry", j.ID, strings.Join(input.Targets, ","))
 		writeJSON(w, 200, j)
 	})
 	mux.HandleFunc("POST /api/v1/jobs/executions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -2620,6 +2635,32 @@ func NewServer() *Server {
 			writeJSON(w, 409, map[string]string{"code": "INVALID_APPROVAL", "message": "申请人不能审批自己的高风险任务"})
 			return
 		}
+		writeJSON(w, 200, j)
+	})
+	mux.HandleFunc("POST /api/v1/jobs/executions/{id}/review", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		var input jobs.ApprovalInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		j, err := jobsService.Review(r.PathValue("id"), u.Username, input)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "JOB_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, jobs.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "INVALID_APPROVAL", "message": "审批决策或意见不合法"})
+			return
+		}
+		if errors.Is(err, jobs.ErrInvalidState) {
+			writeJSON(w, 409, map[string]string{"code": "INVALID_APPROVAL", "message": "申请人不能审批自己的高风险任务"})
+			return
+		}
+		auditService.Record(u.Username, "job.execution.review."+strings.TrimSpace(input.Decision), j.ID, strings.TrimSpace(input.Comment))
 		writeJSON(w, 200, j)
 	})
 	mux.HandleFunc("GET /api/v1/tickets/summary", func(w http.ResponseWriter, r *http.Request) {
