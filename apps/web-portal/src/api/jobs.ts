@@ -6,8 +6,8 @@ export type PlaybookInput=Omit<Playbook,'id'|'createdBy'|'version'|'updatedAt'>
 export type JobLog={time:string;level:string;message:string}
 export type JobTargetResult={target:string;assetId?:string;assetName?:string;status:string;rc:number;changed:boolean;stdout?:string;stderr?:string;error?:string;durationMs:number}
 export type Job={id:string;templateId:string;templateVersion:number;name:string;targets:string[];status:string;progress:number;operator:string;startedAt:string;duration:string;logs:JobLog[];timeoutSeconds:number;attempt:number;approvedBy:string;playbookId:string;playbookVersion:number;variables:Record<string,string>;parameters?:Record<string,string>;targetResults?:JobTargetResult[];artifactKeys?:string[];credentialId:string}
-export type Schedule={id:string;name:string;templateId?:string;templateName?:string;playbookId?:string;playbookName?:string;variables?:Record<string,string>;parameters?:Record<string,string>;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;nextRun:string;lastRun:string;lastStatus:string;lastJobId:string;createdBy:string;credentialId:string}
-export type ScheduleInput={name:string;templateId:string;playbookId:string;variables:Record<string,string>;parameters:Record<string,string>;targets:string[];cron:string;timeoutSeconds:number;enabled:boolean;credentialId:string}
+export type Schedule={id:string;name:string;templateId?:string;templateName?:string;playbookId?:string;playbookName?:string;variables?:Record<string,string>;parameters?:Record<string,string>;targets:string[];cron:string;timezone:string;concurrencyPolicy:'allow'|'forbid'|'replace';missedPolicy:'skip'|'run';timeoutSeconds:number;enabled:boolean;nextRun:string;lastRun:string;lastStatus:string;lastJobId:string;createdBy:string;credentialId:string}
+export type ScheduleInput={name:string;templateId:string;playbookId:string;variables:Record<string,string>;parameters:Record<string,string>;targets:string[];cron:string;timezone:string;concurrencyPolicy:'allow'|'forbid'|'replace';missedPolicy:'skip'|'run';timeoutSeconds:number;enabled:boolean;credentialId:string}
 export type Summary={templates:number;running:number;successToday:number;failedToday:number;schedules:number;playbooks:number}
 export type ExecutorInfo={mode:string;ready:boolean;endpoint:string}
 export type JobTargetOptions={projectGroups:string[];tags:string[]}
@@ -36,6 +36,7 @@ export const createSchedule=(token:string,input:ScheduleInput)=>request<Schedule
 export const updateSchedule=(token:string,id:string,input:ScheduleInput)=>request<Schedule>(`/api/v1/jobs/schedules/${id}`,token,{method:'PUT',body:JSON.stringify(input)})
 export const toggleSchedule=(token:string,id:string)=>request<Schedule>(`/api/v1/jobs/schedules/${id}/toggle`,token,{method:'POST'})
 export const runSchedule=(token:string,id:string)=>request<Job>(`/api/v1/jobs/schedules/${id}/run`,token,{method:'POST'})
+export const previewSchedule=(token:string,input:{cron:string;timezone:string;count?:number})=>request<{nextRuns:string[]}>('/api/v1/jobs/schedules/preview',token,{method:'POST',body:JSON.stringify(input)})
 export const deleteSchedule=(token:string,id:string)=>request<void>(`/api/v1/jobs/schedules/${id}`,token,{method:'DELETE'})
 export const fetchJobTargetOptions=(token:string)=>request<JobTargetOptions>('/api/v1/jobs/target-options',token)
 export const resolveJobTargets=(token:string,input:{projectGroups:string[];tags:string[];assetIds:string[];ips:string[]})=>request<JobTargetResolve>('/api/v1/jobs/targets/resolve',token,{method:'POST',body:JSON.stringify(input)})

@@ -25,11 +25,14 @@ CREATE TABLE IF NOT EXISTS job_schedules(
  last_status text NOT NULL DEFAULT '',
  last_job_id text NOT NULL DEFAULT '',
  credential_id text NOT NULL DEFAULT '',
+ timezone text NOT NULL DEFAULT 'Asia/Shanghai',
+ concurrency_policy text NOT NULL DEFAULT 'forbid',
+ missed_policy text NOT NULL DEFAULT 'skip',
  created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_job_schedules_next_run ON job_schedules(enabled,next_run);
-ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT '';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS playbook_id text NOT NULL DEFAULT '';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS playbook_name text NOT NULL DEFAULT '';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS variables jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS parameters jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT '';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS playbook_id text NOT NULL DEFAULT '';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS playbook_name text NOT NULL DEFAULT '';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS variables jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS parameters jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'Asia/Shanghai';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS concurrency_policy text NOT NULL DEFAULT 'forbid';ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS missed_policy text NOT NULL DEFAULT 'skip';
 `
 
 const playbooksSchema = `
@@ -126,7 +129,7 @@ func loadTemplates(ctx context.Context, db *sql.DB) ([]Template, error) {
 }
 
 func loadSchedules(ctx context.Context, db *sql.DB) ([]Schedule, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id,name,template_id,playbook_id,playbook_name,variables,parameters,targets,cron,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,credential_id FROM job_schedules ORDER BY updated_at DESC`)
+	rows, err := db.QueryContext(ctx, `SELECT id,name,template_id,playbook_id,playbook_name,variables,parameters,targets,cron,timezone,concurrency_policy,missed_policy,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,credential_id FROM job_schedules ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +139,7 @@ func loadSchedules(ctx context.Context, db *sql.DB) ([]Schedule, error) {
 		var item Schedule
 		var targets, variables, parameters []byte
 		var nextRun, lastRun sql.NullTime
-		if err := rows.Scan(&item.ID, &item.Name, &item.TemplateID, &item.PlaybookID, &item.PlaybookName, &variables, &parameters, &targets, &item.Cron, &item.TimeoutSeconds, &item.Enabled, &item.CreatedBy, &nextRun, &lastRun, &item.LastStatus, &item.LastJobID, &item.CredentialID); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.TemplateID, &item.PlaybookID, &item.PlaybookName, &variables, &parameters, &targets, &item.Cron, &item.Timezone, &item.ConcurrencyPolicy, &item.MissedPolicy, &item.TimeoutSeconds, &item.Enabled, &item.CreatedBy, &nextRun, &lastRun, &item.LastStatus, &item.LastJobID, &item.CredentialID); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(targets, &item.Targets)
@@ -164,7 +167,7 @@ func upsertSchedule(ctx context.Context, db *sql.DB, schedule Schedule) error {
 	if value, err := parseScheduleTime(schedule.LastRun); err == nil && !value.IsZero() {
 		lastRun = value
 	}
-	_, err := db.ExecContext(ctx, `INSERT INTO job_schedules(id,name,template_id,playbook_id,playbook_name,variables,parameters,targets,cron,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,credential_id,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,template_id=excluded.template_id,playbook_id=excluded.playbook_id,playbook_name=excluded.playbook_name,variables=excluded.variables,parameters=excluded.parameters,targets=excluded.targets,cron=excluded.cron,timeout_seconds=excluded.timeout_seconds,enabled=excluded.enabled,next_run=excluded.next_run,last_run=excluded.last_run,last_status=excluded.last_status,last_job_id=excluded.last_job_id,credential_id=excluded.credential_id,updated_at=now()`, schedule.ID, schedule.Name, schedule.TemplateID, schedule.PlaybookID, schedule.PlaybookName, variables, parameters, targets, schedule.Cron, schedule.TimeoutSeconds, schedule.Enabled, schedule.CreatedBy, nextRun, lastRun, schedule.LastStatus, schedule.LastJobID, schedule.CredentialID)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_schedules(id,name,template_id,playbook_id,playbook_name,variables,parameters,targets,cron,timezone,concurrency_policy,missed_policy,timeout_seconds,enabled,created_by,next_run,last_run,last_status,last_job_id,credential_id,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,template_id=excluded.template_id,playbook_id=excluded.playbook_id,playbook_name=excluded.playbook_name,variables=excluded.variables,parameters=excluded.parameters,targets=excluded.targets,cron=excluded.cron,timezone=excluded.timezone,concurrency_policy=excluded.concurrency_policy,missed_policy=excluded.missed_policy,timeout_seconds=excluded.timeout_seconds,enabled=excluded.enabled,next_run=excluded.next_run,last_run=excluded.last_run,last_status=excluded.last_status,last_job_id=excluded.last_job_id,credential_id=excluded.credential_id,updated_at=now()`, schedule.ID, schedule.Name, schedule.TemplateID, schedule.PlaybookID, schedule.PlaybookName, variables, parameters, targets, schedule.Cron, schedule.Timezone, schedule.ConcurrencyPolicy, schedule.MissedPolicy, schedule.TimeoutSeconds, schedule.Enabled, schedule.CreatedBy, nextRun, lastRun, schedule.LastStatus, schedule.LastJobID, schedule.CredentialID)
 	return err
 }
 

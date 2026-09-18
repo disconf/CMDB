@@ -90,3 +90,46 @@ func TestRunScheduleCreatesExecution(t *testing.T) {
 		t.Fatalf("schedule execution was not recorded: %+v", schedules)
 	}
 }
+
+func TestNextScheduleRunsUsesScheduleTimezone(t *testing.T) {
+	from := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	runs, err := nextScheduleRuns("0 2 * * *", "Asia/Shanghai", 2, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[0] != "2026-09-12 02:00:00" || runs[1] != "2026-09-13 02:00:00" {
+		t.Fatalf("unexpected next runs: %#v", runs)
+	}
+}
+
+func TestScheduleStoresTimezoneAndPolicies(t *testing.T) {
+	service := NewService()
+	enabled := true
+	item, err := service.CreateSchedule(ScheduleInput{Name: "timezone schedule", TemplateID: "tpl-health", Targets: []string{"host-1"}, Cron: "0 2 * * *", Timezone: "UTC", ConcurrencyPolicy: "allow", MissedPolicy: "run", TimeoutSeconds: 300, Enabled: &enabled}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Timezone != "UTC" || item.ConcurrencyPolicy != "allow" || item.MissedPolicy != "run" {
+		t.Fatalf("schedule policies not stored: %+v", item)
+	}
+}
+
+func TestScheduleConcurrencyForbidSkipsActiveRun(t *testing.T) {
+	service := NewService()
+	enabled := true
+	item, err := service.CreateSchedule(ScheduleInput{Name: "guard schedule", TemplateID: "tpl-health", Targets: []string{"host-1"}, Cron: "0 2 * * *", ConcurrencyPolicy: "forbid", TimeoutSeconds: 300, Enabled: &enabled}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.RunSchedule(item.ID, "tester", false)
+	if err != nil || first.Status != "running" {
+		t.Fatalf("first run: %+v %v", first, err)
+	}
+	if _, err = service.RunSchedule(item.ID, "tester", false); err != ErrScheduleConflict {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	schedules := service.Schedules()
+	if len(schedules) != 1 || schedules[0].LastStatus != "skipped" {
+		t.Fatalf("expected skipped status: %+v", schedules)
+	}
+}

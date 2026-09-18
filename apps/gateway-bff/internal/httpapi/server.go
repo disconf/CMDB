@@ -2436,6 +2436,30 @@ func NewServer() *Server {
 		scope := newUserScope(cmdbService, user)
 		writeJSON(w, 200, filterSchedules(jobsService.Schedules(), scope))
 	})
+	mux.HandleFunc("POST /api/v1/jobs/schedules/preview", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		var input struct {
+			Cron     string `json:"cron"`
+			Timezone string `json:"timezone"`
+			Count    int    `json:"count"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		nextRuns, err := jobsService.PreviewSchedule(input.Cron, input.Timezone, input.Count)
+		if errors.Is(err, jobs.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "SCHEDULE_PREVIEW_FAILED"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"nextRuns": nextRuns})
+	})
 	mux.HandleFunc("POST /api/v1/jobs/schedules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:manage") {
 			return
@@ -2514,6 +2538,14 @@ func NewServer() *Server {
 		}
 		if errors.Is(err, jobs.ErrValidation) {
 			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if errors.Is(err, jobs.ErrScheduleConflict) {
+			writeJSON(w, 409, map[string]string{"code": "SCHEDULE_CONFLICT", "message": "上一次任务仍在执行，已按并发策略阻止本次调度"})
+			return
+		}
+		if errors.Is(err, jobs.ErrInvalidState) {
+			writeJSON(w, 409, map[string]string{"code": "SCHEDULE_NOT_DUE", "message": "计划未到执行时间或已被其他调度器处理"})
 			return
 		}
 		if err != nil {

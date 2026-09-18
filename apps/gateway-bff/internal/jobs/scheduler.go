@@ -38,6 +38,64 @@ func scheduleLocation() *time.Location {
 
 func scheduleID() string { return fmt.Sprintf("sch-%d", time.Now().UnixNano()) }
 
+func locationForTimezone(name string) (*time.Location, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Asia/Shanghai"
+	}
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, ErrValidation
+	}
+	return location, nil
+}
+
+func scheduleLocationFor(schedule Schedule) *time.Location {
+	location, err := locationForTimezone(schedule.Timezone)
+	if err != nil {
+		return scheduleLocation()
+	}
+	return location
+}
+
+func formatScheduleTimeIn(location *time.Location, value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	if location == nil {
+		location = scheduleLocation()
+	}
+	return value.In(location).Format(scheduleTimeLayout)
+}
+
+func nextScheduleRuns(expression, timezone string, count int, from time.Time) ([]string, error) {
+	location, err := locationForTimezone(timezone)
+	if err != nil {
+		return nil, err
+	}
+	if count <= 0 {
+		count = 5
+	}
+	if count > 20 {
+		count = 20
+	}
+	cursor := from.In(location)
+	result := make([]string, 0, count)
+	for len(result) < count {
+		next, nextErr := nextCronTime(expression, cursor)
+		if nextErr != nil {
+			return nil, ErrValidation
+		}
+		result = append(result, formatScheduleTimeIn(location, next))
+		cursor = next
+	}
+	return result, nil
+}
+
+func (s *Service) PreviewSchedule(expression, timezone string, count int) ([]string, error) {
+	return nextScheduleRuns(strings.TrimSpace(expression), strings.TrimSpace(timezone), count, time.Now())
+}
+
 func (s *Service) templateByID(id string) (Template, error) {
 	s.mu.RLock()
 	for _, item := range s.templates {
@@ -75,8 +133,30 @@ func (s *Service) scheduleTarget(input ScheduleInput) (Template, Playbook, error
 func normalizeScheduleInput(input ScheduleInput, template Template) (ScheduleInput, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
+	input.PlaybookID = strings.TrimSpace(input.PlaybookID)
 	input.CredentialID = strings.TrimSpace(input.CredentialID)
 	input.Cron = strings.TrimSpace(input.Cron)
+	input.Timezone = strings.TrimSpace(input.Timezone)
+	input.ConcurrencyPolicy = strings.ToLower(strings.TrimSpace(input.ConcurrencyPolicy))
+	input.MissedPolicy = strings.ToLower(strings.TrimSpace(input.MissedPolicy))
+	if input.Timezone == "" {
+		input.Timezone = "Asia/Shanghai"
+	}
+	if _, err := locationForTimezone(input.Timezone); err != nil {
+		return input, ErrValidation
+	}
+	if input.ConcurrencyPolicy == "" {
+		input.ConcurrencyPolicy = "forbid"
+	}
+	if input.ConcurrencyPolicy != "allow" && input.ConcurrencyPolicy != "forbid" && input.ConcurrencyPolicy != "replace" {
+		return input, ErrValidation
+	}
+	if input.MissedPolicy == "" {
+		input.MissedPolicy = "skip"
+	}
+	if input.MissedPolicy != "skip" && input.MissedPolicy != "run" {
+		return input, ErrValidation
+	}
 	if input.Name == "" || (input.TemplateID == "" && input.PlaybookID == "") || input.Cron == "" || len(input.Targets) == 0 || !template.Enabled {
 		return input, ErrValidation
 	}
@@ -118,11 +198,12 @@ func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedul
 	if err != nil {
 		return Schedule{}, err
 	}
-	next, err := nextCronTime(input.Cron, time.Now().In(s.location))
+	location, _ := locationForTimezone(input.Timezone)
+	next, err := nextCronTime(input.Cron, time.Now().In(location))
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
-	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, PlaybookID: playbook.ID, PlaybookName: playbook.Name, Variables: cloneStringMap(input.Variables), Parameters: cloneStringMap(input.Parameters), Targets: append([]string(nil), input.Targets...), Cron: input.Cron, TimeoutSeconds: input.TimeoutSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTime(next), CreatedBy: createdBy}
+	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, PlaybookID: playbook.ID, PlaybookName: playbook.Name, Variables: cloneStringMap(input.Variables), Parameters: cloneStringMap(input.Parameters), Targets: append([]string(nil), input.Targets...), Cron: input.Cron, Timezone: input.Timezone, ConcurrencyPolicy: input.ConcurrencyPolicy, MissedPolicy: input.MissedPolicy, TimeoutSeconds: input.TimeoutSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTimeIn(location, next), CreatedBy: createdBy}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schedules = append([]Schedule{schedule}, s.schedules...)
@@ -142,65 +223,71 @@ func (s *Service) UpdateSchedule(id string, input ScheduleInput) (Schedule, erro
 	if err != nil {
 		return Schedule{}, err
 	}
-	next, err := nextCronTime(input.Cron, time.Now().In(s.location))
+	location, _ := locationForTimezone(input.Timezone)
+	next, err := nextCronTime(input.Cron, time.Now().In(location))
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.schedules {
-		if s.schedules[i].ID == id {
-			s.schedules[i].Name = input.Name
-			s.schedules[i].TemplateID = template.ID
-			s.schedules[i].TemplateName = template.Name
-			s.schedules[i].PlaybookID = playbook.ID
-			s.schedules[i].PlaybookName = playbook.Name
-			s.schedules[i].Variables = cloneStringMap(input.Variables)
-			s.schedules[i].Parameters = cloneStringMap(input.Parameters)
-			s.schedules[i].Targets = append([]string(nil), input.Targets...)
-			s.schedules[i].Cron = input.Cron
-			s.schedules[i].TimeoutSeconds = input.TimeoutSeconds
-			s.schedules[i].CredentialID = input.CredentialID
-			s.schedules[i].Enabled = *input.Enabled
-			if s.schedules[i].Enabled {
-				s.schedules[i].NextRun = formatScheduleTime(next)
-			} else {
-				s.schedules[i].NextRun = ""
-			}
-			if s.db != nil {
-				if err := upsertSchedule(context.Background(), s.db, s.schedules[i]); err != nil {
-					return Schedule{}, err
-				}
-			}
-			return cloneSchedule(s.schedules[i]), nil
+		if s.schedules[i].ID != id {
+			continue
 		}
+		s.schedules[i].Name = input.Name
+		s.schedules[i].TemplateID = template.ID
+		s.schedules[i].TemplateName = template.Name
+		s.schedules[i].PlaybookID = playbook.ID
+		s.schedules[i].PlaybookName = playbook.Name
+		s.schedules[i].Variables = cloneStringMap(input.Variables)
+		s.schedules[i].Parameters = cloneStringMap(input.Parameters)
+		s.schedules[i].Targets = append([]string(nil), input.Targets...)
+		s.schedules[i].Cron = input.Cron
+		s.schedules[i].Timezone = input.Timezone
+		s.schedules[i].ConcurrencyPolicy = input.ConcurrencyPolicy
+		s.schedules[i].MissedPolicy = input.MissedPolicy
+		s.schedules[i].TimeoutSeconds = input.TimeoutSeconds
+		s.schedules[i].CredentialID = input.CredentialID
+		s.schedules[i].Enabled = *input.Enabled
+		if s.schedules[i].Enabled {
+			s.schedules[i].NextRun = formatScheduleTimeIn(location, next)
+		} else {
+			s.schedules[i].NextRun = ""
+		}
+		if s.db != nil {
+			if err := upsertSchedule(context.Background(), s.db, s.schedules[i]); err != nil {
+				return Schedule{}, err
+			}
+		}
+		return cloneSchedule(s.schedules[i]), nil
 	}
 	return Schedule{}, ErrNotFound
 }
-
 func (s *Service) ToggleSchedule(id string) (Schedule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.schedules {
-		if s.schedules[i].ID == id {
-			s.schedules[i].Enabled = !s.schedules[i].Enabled
-			if s.schedules[i].Enabled {
-				next, err := nextCronTime(s.schedules[i].Cron, time.Now().In(s.location))
-				if err != nil {
-					s.schedules[i].Enabled = false
-					return Schedule{}, ErrValidation
-				}
-				s.schedules[i].NextRun = formatScheduleTime(next)
-			} else {
-				s.schedules[i].NextRun = ""
-			}
-			if s.db != nil {
-				if err := upsertSchedule(context.Background(), s.db, s.schedules[i]); err != nil {
-					return Schedule{}, err
-				}
-			}
-			return cloneSchedule(s.schedules[i]), nil
+		if s.schedules[i].ID != id {
+			continue
 		}
+		s.schedules[i].Enabled = !s.schedules[i].Enabled
+		if s.schedules[i].Enabled {
+			location := scheduleLocationFor(s.schedules[i])
+			next, err := nextCronTime(s.schedules[i].Cron, time.Now().In(location))
+			if err != nil {
+				s.schedules[i].Enabled = false
+				return Schedule{}, ErrValidation
+			}
+			s.schedules[i].NextRun = formatScheduleTimeIn(location, next)
+		} else {
+			s.schedules[i].NextRun = ""
+		}
+		if s.db != nil {
+			if err := upsertSchedule(context.Background(), s.db, s.schedules[i]); err != nil {
+				return Schedule{}, err
+			}
+		}
+		return cloneSchedule(s.schedules[i]), nil
 	}
 	return Schedule{}, ErrNotFound
 }
@@ -209,34 +296,136 @@ func (s *Service) DeleteSchedule(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.schedules {
-		if s.schedules[i].ID == id {
-			s.schedules = append(s.schedules[:i], s.schedules[i+1:]...)
-			if s.db != nil {
-				return deleteScheduleRow(context.Background(), s.db, id)
-			}
-			return nil
+		if s.schedules[i].ID != id {
+			continue
 		}
+		s.schedules = append(s.schedules[:i], s.schedules[i+1:]...)
+		if s.db != nil {
+			return deleteScheduleRow(context.Background(), s.db, id)
+		}
+		return nil
+	}
+	return ErrNotFound
+}
+
+func (s *Service) scheduleByID(id string) (Schedule, error) {
+	s.refreshSchedules()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.schedules {
+		if item.ID == id {
+			return cloneSchedule(item), nil
+		}
+	}
+	return Schedule{}, ErrNotFound
+}
+
+func (s *Service) lockSchedule(id string) (func(), error) {
+	if s.db == nil {
+		return func() {}, nil
+	}
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	lockName := "job-schedule:" + id
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext($1)::bigint)`, lockName); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1)::bigint)`, lockName)
+		_ = conn.Close()
+	}, nil
+}
+
+func scheduleJobActive(status string) bool {
+	return status == "pending" || status == "running" || status == "awaiting_approval"
+}
+func (s *Service) setScheduleNextRun(id, nextRun string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.schedules {
+		if s.schedules[i].ID != id {
+			continue
+		}
+		s.schedules[i].NextRun = nextRun
+		if s.db != nil {
+			return upsertSchedule(context.Background(), s.db, s.schedules[i])
+		}
+		return nil
+	}
+	return ErrNotFound
+}
+
+func (s *Service) recordScheduleResult(id, status string, advance bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.schedules {
+		if s.schedules[i].ID != id {
+			continue
+		}
+		location := scheduleLocationFor(s.schedules[i])
+		now := time.Now().In(location)
+		if status != "missed_skipped" {
+			s.schedules[i].LastRun = now.Format(scheduleTimeLayout)
+		}
+		s.schedules[i].LastStatus = status
+		if advance {
+			next, err := nextCronTime(s.schedules[i].Cron, now)
+			if err != nil {
+				return ErrValidation
+			}
+			s.schedules[i].NextRun = formatScheduleTimeIn(location, next)
+		}
+		if s.db != nil {
+			return upsertSchedule(context.Background(), s.db, s.schedules[i])
+		}
+		return nil
 	}
 	return ErrNotFound
 }
 
 func (s *Service) RunSchedule(id, operator string, advance bool) (Job, error) {
-	s.mu.RLock()
-	var schedule Schedule
-	found := false
-	for _, item := range s.schedules {
-		if item.ID == id {
-			schedule = cloneSchedule(item)
-			found = true
-			break
-		}
+	unlock, err := s.lockSchedule(id)
+	if err != nil {
+		return Job{}, err
 	}
-	s.mu.RUnlock()
-	if !found {
-		return Job{}, ErrNotFound
+	defer unlock()
+
+	schedule, err := s.scheduleByID(id)
+	if err != nil {
+		return Job{}, err
+	}
+	if advance {
+		location := scheduleLocationFor(schedule)
+		next, parseErr := parseScheduleTimeIn(schedule.NextRun, location)
+		if parseErr != nil || next.IsZero() || next.After(time.Now().In(location)) {
+			return Job{}, ErrInvalidState
+		}
 	}
 	if operator == "" {
 		operator = "scheduler"
+	}
+	if schedule.ConcurrencyPolicy == "forbid" || schedule.ConcurrencyPolicy == "replace" {
+		active, activeErr := s.Get(schedule.LastJobID)
+		if activeErr == nil && scheduleJobActive(active.Status) {
+			if schedule.ConcurrencyPolicy == "forbid" {
+				_ = s.recordScheduleResult(id, "skipped", advance)
+				return Job{}, ErrScheduleConflict
+			}
+			if active.Status == "running" {
+				if _, cancelErr := s.Cancel(active.ID); cancelErr != nil {
+					_ = s.recordScheduleResult(id, "replace_failed", advance)
+					return Job{}, ErrScheduleConflict
+				}
+			} else {
+				_ = s.recordScheduleResult(id, "replace_failed", advance)
+				return Job{}, ErrScheduleConflict
+			}
+		}
 	}
 	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, PlaybookID: schedule.PlaybookID, Variables: cloneStringMap(schedule.Variables), Parameters: cloneStringMap(schedule.Parameters), Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds, CredentialID: schedule.CredentialID})
 	if err == nil && job.Status == "pending" {
@@ -246,17 +435,13 @@ func (s *Service) RunSchedule(id, operator string, advance bool) (Job, error) {
 	if job.ID != "" {
 		status = job.Status
 	}
+	if recordErr := s.recordScheduleResult(id, status, advance); recordErr != nil && err == nil {
+		err = recordErr
+	}
 	s.mu.Lock()
 	for i := range s.schedules {
 		if s.schedules[i].ID == id {
-			s.schedules[i].LastRun = time.Now().In(s.location).Format(scheduleTimeLayout)
-			s.schedules[i].LastStatus = status
 			s.schedules[i].LastJobID = job.ID
-			if advance {
-				if next, nextErr := nextCronTime(s.schedules[i].Cron, time.Now().In(s.location)); nextErr == nil {
-					s.schedules[i].NextRun = formatScheduleTime(next)
-				}
-			}
 			if s.db != nil {
 				_ = upsertSchedule(context.Background(), s.db, s.schedules[i])
 			}
@@ -283,27 +468,46 @@ func (s *Service) RunScheduler(ctx context.Context) {
 }
 
 func (s *Service) runDueSchedules(_ context.Context) {
-	now := time.Now().In(s.location)
+	s.refreshSchedules()
+	now := time.Now()
+	type dueSchedule struct {
+		ID     string
+		Next   time.Time
+		Missed string
+	}
 	s.mu.RLock()
-	due := make([]string, 0)
+	due := make([]dueSchedule, 0)
+	type initialNextRun struct {
+		ID   string
+		Next string
+	}
+	initial := make([]initialNextRun, 0)
 	for _, schedule := range s.schedules {
 		if !schedule.Enabled {
 			continue
 		}
+		location := scheduleLocationFor(schedule)
 		if schedule.NextRun == "" {
-			if next, err := nextCronTime(schedule.Cron, now); err == nil {
-				schedule.NextRun = formatScheduleTime(next)
+			if next, err := nextCronTime(schedule.Cron, now.In(location)); err == nil {
+				initial = append(initial, initialNextRun{ID: schedule.ID, Next: formatScheduleTimeIn(location, next)})
 			}
 			continue
 		}
-		next, err := time.ParseInLocation(scheduleTimeLayout, schedule.NextRun, s.location)
-		if err == nil && !next.After(now) {
-			due = append(due, schedule.ID)
+		next, err := parseScheduleTimeIn(schedule.NextRun, location)
+		if err == nil && !next.After(now.In(location)) {
+			due = append(due, dueSchedule{ID: schedule.ID, Next: next, Missed: schedule.MissedPolicy})
 		}
 	}
 	s.mu.RUnlock()
-	for _, id := range due {
-		_, _ = s.RunSchedule(id, "scheduler", true)
+	for _, item := range initial {
+		_ = s.setScheduleNextRun(item.ID, item.Next)
+	}
+	for _, item := range due {
+		if item.Missed == "skip" && now.Sub(item.Next) > time.Minute {
+			_ = s.recordScheduleResult(item.ID, "missed_skipped", true)
+			continue
+		}
+		_, _ = s.RunSchedule(item.ID, "scheduler", true)
 	}
 }
 
@@ -311,6 +515,7 @@ func cloneSchedule(schedule Schedule) Schedule {
 	schedule.Targets = append([]string(nil), schedule.Targets...)
 	schedule.Variables = cloneStringMap(schedule.Variables)
 	schedule.Parameters = cloneStringMap(schedule.Parameters)
+	schedule.NextRuns = append([]string(nil), schedule.NextRuns...)
 	return schedule
 }
 
@@ -323,18 +528,22 @@ func cloneSchedules(items []Schedule) []Schedule {
 }
 
 func formatScheduleTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	return value.In(scheduleLocation()).Format(scheduleTimeLayout)
+	return formatScheduleTimeIn(scheduleLocation(), value)
 }
 
 func parseScheduleTime(value string) (time.Time, error) {
+	return parseScheduleTimeIn(value, scheduleLocation())
+}
+
+func parseScheduleTimeIn(value string, location *time.Location) (time.Time, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return time.Time{}, nil
 	}
-	return time.ParseInLocation(scheduleTimeLayout, value, scheduleLocation())
+	if location == nil {
+		location = scheduleLocation()
+	}
+	return time.ParseInLocation(scheduleTimeLayout, value, location)
 }
 
 func validateCron(expression string) error {
