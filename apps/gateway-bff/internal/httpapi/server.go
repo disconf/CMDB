@@ -2295,6 +2295,101 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 201, item)
 	})
+	mux.HandleFunc("PUT /api/v1/jobs/templates/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		var in jobs.TemplateInput
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := jobsService.UpdateTemplate(r.PathValue("id"), in)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "TEMPLATE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, jobs.ErrUnsafeCommand) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "UNSAFE_COMMAND", "message": "命令命中高危拦截规则"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.template.update", item.ID, item.Name)
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/jobs/templates/{id}/duplicate", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := jobsService.DuplicateTemplate(r.PathValue("id"), user.Username)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "TEMPLATE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "TEMPLATE_DUPLICATE_FAILED"})
+			return
+		}
+		auditService.Record(user.Username, "job.template.duplicate", item.ID, item.Name)
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/jobs/templates/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:manage") {
+			return
+		}
+		if err := jobsService.DeleteTemplate(r.PathValue("id")); errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "TEMPLATE_NOT_FOUND"})
+			return
+		} else if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TEMPLATE_DELETE_FAILED"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "job.template.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/jobs/target-options", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, cmdbService.RemoteTargetOptionsFor(assetScopeForUser(user)))
+	})
+	mux.HandleFunc("POST /api/v1/jobs/targets/resolve", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		var input struct {
+			ProjectGroups []string `json:"projectGroups"`
+			Tags          []string `json:"tags"`
+			AssetIDs      []string `json:"assetIds"`
+			IPs           []string `json:"ips"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid target selectors"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		assets := cmdbService.ResolveRemoteTargetsFor(assetScopeForUser(user), input.ProjectGroups, input.Tags, input.AssetIDs, input.IPs)
+		targets := make([]string, 0, len(assets))
+		seen := map[string]bool{}
+		for _, asset := range assets {
+			if asset.IP != "" && !seen[asset.IP] {
+				seen[asset.IP] = true
+				targets = append(targets, asset.IP)
+			}
+		}
+		if len(targets) == 0 {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "没有匹配到可执行目标主机"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"targets": targets, "assets": assets})
+	})
 	mux.HandleFunc("POST /api/v1/jobs/templates/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:manage") {
 			return

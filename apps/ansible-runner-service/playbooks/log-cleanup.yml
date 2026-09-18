@@ -1,0 +1,23 @@
+- name: Clean old log files
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    log_dir: /var/log
+    keep_days: 14
+  tasks:
+    - name: Find expired regular files
+      ansible.builtin.find:
+        paths: "{{ log_dir }}"
+        age: "{{ keep_days }}d"
+        age_stamp: mtime
+        file_type: file
+        recurse: true
+      register: expired_logs
+    - name: Remove expired files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ expired_logs.files }}"
+      loop_control:
+        label: "{{ item.path }}"

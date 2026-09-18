@@ -18,21 +18,28 @@ var ErrInvalidState = errors.New("invalid state")
 var ErrUnsafeCommand = errors.New("unsafe command")
 
 type Template struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	Description string `json:"description"`
-	Command     string `json:"command"`
-	Risk        string `json:"risk"`
-	LastRun     string `json:"lastRun"`
-	Enabled     bool   `json:"enabled"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Category    string            `json:"category"`
+	Description string            `json:"description"`
+	Command     string            `json:"command,omitempty"`
+	PlaybookID  string            `json:"playbookId,omitempty"`
+	Parameters  map[string]string `json:"parameters,omitempty"`
+	Version     int               `json:"version"`
+	Risk        string            `json:"risk"`
+	LastRun     string            `json:"lastRun"`
+	Enabled     bool              `json:"enabled"`
+	UpdatedAt   string            `json:"updatedAt,omitempty"`
+	UpdatedBy   string            `json:"updatedBy,omitempty"`
 }
 type TemplateInput struct {
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	Description string `json:"description"`
-	Command     string `json:"command"`
-	Risk        string `json:"risk"`
+	Name        string            `json:"name"`
+	Category    string            `json:"category"`
+	Description string            `json:"description"`
+	Command     string            `json:"command"`
+	PlaybookID  string            `json:"playbookId"`
+	Parameters  map[string]string `json:"parameters"`
+	Risk        string            `json:"risk"`
 }
 type Playbook struct {
 	ID          string            `json:"id"`
@@ -42,7 +49,9 @@ type Playbook struct {
 	Constants   map[string]string `json:"constants"`
 	Variables   map[string]string `json:"variables"`
 	Enabled     bool              `json:"enabled"`
+	Version     int               `json:"version"`
 	CreatedBy   string            `json:"createdBy"`
+	UpdatedAt   string            `json:"updatedAt,omitempty"`
 }
 type PlaybookInput struct {
 	ID          string            `json:"id"`
@@ -58,23 +67,41 @@ type Log struct {
 	Level   string `json:"level"`
 	Message string `json:"message"`
 }
+type TargetResult struct {
+	Target     string `json:"target"`
+	AssetID    string `json:"assetId,omitempty"`
+	AssetName  string `json:"assetName,omitempty"`
+	Status     string `json:"status"`
+	RC         int    `json:"rc"`
+	Changed    bool   `json:"changed"`
+	Stdout     string `json:"stdout,omitempty"`
+	Stderr     string `json:"stderr,omitempty"`
+	Error      string `json:"error,omitempty"`
+	DurationMS int64  `json:"durationMs"`
+}
+
 type Job struct {
-	ID             string            `json:"id"`
-	TemplateID     string            `json:"templateId"`
-	Name           string            `json:"name"`
-	Targets        []string          `json:"targets"`
-	Status         string            `json:"status"`
-	Progress       int               `json:"progress"`
-	Operator       string            `json:"operator"`
-	StartedAt      string            `json:"startedAt"`
-	Duration       string            `json:"duration"`
-	Logs           []Log             `json:"logs"`
-	TimeoutSeconds int               `json:"timeoutSeconds"`
-	Attempt        int               `json:"attempt"`
-	ApprovedBy     string            `json:"approvedBy"`
-	PlaybookID     string            `json:"playbookId"`
-	CredentialID   string            `json:"credentialId"`
-	Variables      map[string]string `json:"variables"`
+	ID              string            `json:"id"`
+	TemplateID      string            `json:"templateId"`
+	TemplateVersion int               `json:"templateVersion"`
+	Name            string            `json:"name"`
+	Targets         []string          `json:"targets"`
+	Status          string            `json:"status"`
+	Progress        int               `json:"progress"`
+	Operator        string            `json:"operator"`
+	StartedAt       string            `json:"startedAt"`
+	Duration        string            `json:"duration"`
+	Logs            []Log             `json:"logs"`
+	TimeoutSeconds  int               `json:"timeoutSeconds"`
+	Attempt         int               `json:"attempt"`
+	ApprovedBy      string            `json:"approvedBy"`
+	PlaybookID      string            `json:"playbookId"`
+	PlaybookVersion int               `json:"playbookVersion"`
+	CredentialID    string            `json:"credentialId"`
+	Variables       map[string]string `json:"variables"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	TargetResults   []TargetResult    `json:"targetResults,omitempty"`
+	ArtifactKeys    []string          `json:"artifactKeys,omitempty"`
 }
 type Schedule struct {
 	ID             string   `json:"id"`
@@ -105,6 +132,7 @@ type CreateInput struct {
 	TemplateID     string            `json:"templateId"`
 	PlaybookID     string            `json:"playbookId"`
 	Variables      map[string]string `json:"variables"`
+	Parameters     map[string]string `json:"parameters"`
 	Targets        []string          `json:"targets"`
 	Operator       string            `json:"operator"`
 	TimeoutSeconds int               `json:"timeoutSeconds"`
@@ -133,8 +161,14 @@ type Service struct {
 }
 
 func NewService() *Service {
-	nodeExporterTemplate := Template{"tpl-node-exporter", "安装 Node Exporter", "监控", "为CMDB主机安装并启动标准主机指标采集器", "install-node-exporter", "medium", "--", true}
-	s := &Service{playbooks: []Playbook{}, templates: []Template{{"tpl-health", "主机健康巡检", "巡检", "检查 CPU、内存、磁盘与关键进程", "health-check --full", "low", "--", true}, nodeExporterTemplate, {"tpl-restart", "应用滚动重启", "变更", "按实例顺序执行优雅重启", "rolling-restart --wait", "medium", "--", true}, {"tpl-clean", "日志空间清理", "维护", "清理超过保留周期的归档日志", "log-cleanup --days 14", "low", "--", true}, {"tpl-patch", "安全补丁安装", "安全", "安装已审批的系统安全更新", "patch-install --approved", "high", "--", true}}, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation()}
+	defaultTemplates := []Template{
+		{ID: "tpl-health", Name: "主机健康巡检", Category: "巡检", Description: "检查 CPU、内存、磁盘与关键进程", Command: "health-check --full", Version: 1, Risk: "low", LastRun: "--", Enabled: true},
+		{ID: "tpl-node-exporter", Name: "安装 Node Exporter", Category: "监控", Description: "为 CMDB 主机安装并启动标准主机指标采集器", Command: "install-node-exporter", Version: 1, Risk: "medium", LastRun: "--", Enabled: true},
+		{ID: "tpl-restart", Name: "应用滚动重启", Category: "变更", Description: "按实例顺序执行优雅重启", Command: "rolling-restart --wait", Version: 1, Risk: "medium", LastRun: "--", Enabled: true},
+		{ID: "tpl-clean", Name: "日志空间清理", Category: "维护", Description: "清理超过保留周期的归档日志", Command: "log-cleanup --days 14", Version: 1, Risk: "low", LastRun: "--", Enabled: true},
+		{ID: "tpl-patch", Name: "安全补丁安装", Category: "安全", Description: "安装已审批的系统安全更新", Command: "patch-install --approved", Version: 1, Risk: "high", LastRun: "--", Enabled: true},
+	}
+	s := &Service{playbooks: []Playbook{}, templates: defaultTemplates, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation()}
 	if !demo.Enabled() {
 		s.schedules = []Schedule{}
 	}
@@ -163,14 +197,20 @@ func NewService() *Service {
 		s.playbooks = persistedPlaybooks
 		s.next = len(jobs) + 1
 	}
-	foundNodeExporter := false
-	for _, item := range s.templates {
-		foundNodeExporter = foundNodeExporter || item.ID == nodeExporterTemplate.ID
-	}
-	if !foundNodeExporter {
-		s.templates = append(s.templates, nodeExporterTemplate)
+	for _, defaultItem := range defaultTemplates {
+		found := false
+		for _, item := range s.templates {
+			if item.ID == defaultItem.ID {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		s.templates = append(s.templates, defaultItem)
 		if s.db != nil {
-			_ = upsertTemplate(context.Background(), s.db, nodeExporterTemplate)
+			_ = upsertTemplate(context.Background(), s.db, defaultItem)
 		}
 	}
 	return s
@@ -187,12 +227,86 @@ func (s *Service) CreateTemplate(in TemplateInput) (Template, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := Template{ID: fmt.Sprintf("tpl-%d", time.Now().UnixNano()), Name: in.Name, Category: in.Category, Description: in.Description, Command: in.Command, Risk: in.Risk, LastRun: "--", Enabled: true}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	t := Template{ID: fmt.Sprintf("tpl-%d", time.Now().UnixNano()), Name: in.Name, Category: in.Category, Description: in.Description, Command: in.Command, PlaybookID: in.PlaybookID, Parameters: cloneStringMap(in.Parameters), Version: 1, Risk: in.Risk, LastRun: "--", Enabled: true, UpdatedAt: now}
 	s.templates = append([]Template{t}, s.templates...)
 	if s.db != nil {
 		_ = upsertTemplate(context.Background(), s.db, t)
 	}
 	return t, nil
+}
+func (s *Service) UpdateTemplate(id string, in TemplateInput) (Template, error) {
+	if err := validateTemplate(in); err != nil {
+		return Template{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.templates {
+		if s.templates[i].ID != id {
+			continue
+		}
+		s.templates[i].Name = in.Name
+		s.templates[i].Category = in.Category
+		s.templates[i].Description = in.Description
+		s.templates[i].Command = in.Command
+		s.templates[i].PlaybookID = in.PlaybookID
+		s.templates[i].Parameters = cloneStringMap(in.Parameters)
+		s.templates[i].Risk = in.Risk
+		s.templates[i].Version++
+		s.templates[i].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+		if s.db != nil {
+			_ = upsertTemplate(context.Background(), s.db, s.templates[i])
+		}
+		return s.templates[i], nil
+	}
+	return Template{}, ErrNotFound
+}
+
+func (s *Service) DeleteTemplate(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.templates {
+		if s.templates[i].ID != id {
+			continue
+		}
+		s.templates = append(s.templates[:i], s.templates[i+1:]...)
+		if s.db != nil {
+			return deleteTemplateRow(context.Background(), s.db, id)
+		}
+		return nil
+	}
+	return ErrNotFound
+}
+
+func (s *Service) DuplicateTemplate(id string, operator string) (Template, error) {
+	s.mu.RLock()
+	var source Template
+	found := false
+	for _, item := range s.templates {
+		if item.ID == id {
+			source = item
+			found = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if !found {
+		return Template{}, ErrNotFound
+	}
+	source.ID = fmt.Sprintf("tpl-%d", time.Now().UnixNano())
+	source.Name = source.Name + " - 副本"
+	source.Version = 1
+	source.Enabled = true
+	source.LastRun = "--"
+	source.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+	source.UpdatedBy = operator
+	s.mu.Lock()
+	s.templates = append([]Template{source}, s.templates...)
+	if s.db != nil {
+		_ = upsertTemplate(context.Background(), s.db, source)
+	}
+	s.mu.Unlock()
+	return source, nil
 }
 func (s *Service) ToggleTemplate(id string) (Template, error) {
 	s.mu.Lock()
@@ -209,8 +323,11 @@ func (s *Service) ToggleTemplate(id string) (Template, error) {
 	return Template{}, ErrNotFound
 }
 func validateTemplate(in TemplateInput) error {
-	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Command) == "" || (in.Risk != "low" && in.Risk != "medium" && in.Risk != "high") {
+	if strings.TrimSpace(in.Name) == "" || (strings.TrimSpace(in.Command) == "" && strings.TrimSpace(in.PlaybookID) == "") || (in.Risk != "low" && in.Risk != "medium" && in.Risk != "high") {
 		return ErrValidation
+	}
+	if strings.TrimSpace(in.Command) == "" {
+		return nil
 	}
 	cmd := strings.ToLower(in.Command)
 	blocked := []string{"rm -rf /", "mkfs", "dd if=/dev/zero", "shutdown -h", "reboot", "format c:"}
@@ -315,7 +432,7 @@ func (s *Service) Create(in CreateInput) (Job, error) {
 		status = "awaiting_approval"
 		message = "高风险任务已创建，等待其他管理员审批"
 	}
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, TemplateVersion: tpl.Version, PlaybookID: tpl.PlaybookID, Parameters: mergeStringMaps(tpl.Parameters, in.Parameters), Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -339,7 +456,7 @@ func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, PlaybookVersion: playbook.Version, Parameters: mergeStringMaps(playbook.Variables, in.Variables), Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -397,8 +514,12 @@ func (s *Service) start(id string, retry bool) (Job, error) {
 	j.Logs = append(j.Logs, Log{time.Now().Format("15:04:05"), "info", fmt.Sprintf("第 %d 次执行已进入队列", j.Attempt)})
 	s.persistLocked(*j)
 	attempt := j.Attempt
-	command := s.commandForJobLocked(*j)
-	request := ExecutionRequest{JobID: j.ID, Command: command, Targets: append([]string(nil), j.Targets...), Operator: j.Operator, Attempt: attempt, TimeoutSeconds: j.TimeoutSeconds, CredentialID: j.CredentialID}
+	request := s.executionRequestForJobLocked(*j)
+	request.JobID = j.ID
+	request.Targets = append([]string(nil), j.Targets...)
+	request.Operator = j.Operator
+	request.Attempt = attempt
+	request.TimeoutSeconds = j.TimeoutSeconds
 	out := cloneJob(*j)
 	s.mu.Unlock()
 	go s.execute(ctx, id, attempt, request)
@@ -435,7 +556,7 @@ func (s *Service) execute(ctx context.Context, id string, attempt int, request E
 		job, _ := s.Get(id)
 		progress = job.Progress
 	}
-	s.finish(id, attempt, result.Status, progress, start, result.Message)
+	s.finish(id, attempt, result.Status, progress, start, result.Message, result.Targets, result.ArtifactKeys)
 }
 func (s *Service) update(id string, attempt, progress int, message string) {
 	s.updateWithLevel(id, attempt, progress, "success", message)
@@ -461,7 +582,7 @@ func (s *Service) updateWithLevel(id string, attempt, progress int, level, messa
 		}
 	}
 }
-func (s *Service) finish(id string, attempt int, status string, progress int, start time.Time, message string) {
+func (s *Service) finish(id string, attempt int, status string, progress int, start time.Time, message string, targetResults []TargetResult, artifactKeys []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.jobs {
@@ -474,6 +595,8 @@ func (s *Service) finish(id string, attempt int, status string, progress int, st
 				level = "warning"
 			}
 			s.jobs[i].Logs = append(s.jobs[i].Logs, Log{time.Now().Format("15:04:05"), level, message})
+			s.jobs[i].TargetResults = append([]TargetResult(nil), targetResults...)
+			s.jobs[i].ArtifactKeys = append([]string(nil), artifactKeys...)
 			delete(s.cancels, id)
 			s.persistLocked(s.jobs[i])
 			return
@@ -489,6 +612,9 @@ func cloneJob(j Job) Job {
 	j.Targets = append([]string(nil), j.Targets...)
 	j.Logs = append([]Log(nil), j.Logs...)
 	j.Variables = cloneStringMap(j.Variables)
+	j.Parameters = cloneStringMap(j.Parameters)
+	j.TargetResults = append([]TargetResult(nil), j.TargetResults...)
+	j.ArtifactKeys = append([]string(nil), j.ArtifactKeys...)
 	return j
 }
 func cloneJobs(items []Job) []Job {

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const jobsSchema = `CREATE TABLE IF NOT EXISTS job_executions(id text PRIMARY KEY,template_id text NOT NULL,name text NOT NULL,targets jsonb NOT NULL,status text NOT NULL,progress integer NOT NULL,operator_name text NOT NULL,started_at text NOT NULL,duration text NOT NULL DEFAULT '',logs jsonb NOT NULL DEFAULT '[]',timeout_seconds integer NOT NULL DEFAULT 300,attempt integer NOT NULL DEFAULT 0,approved_by text NOT NULL DEFAULT '',playbook_id text NOT NULL DEFAULT '',credential_id text NOT NULL DEFAULT '',variables jsonb NOT NULL DEFAULT '{}',updated_at timestamptz NOT NULL DEFAULT now());ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS playbook_id text NOT NULL DEFAULT '';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS variables jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT '';CREATE INDEX IF NOT EXISTS idx_job_executions_updated ON job_executions(updated_at DESC);CREATE TABLE IF NOT EXISTS job_templates(id text PRIMARY KEY,name text NOT NULL,category text NOT NULL,description text NOT NULL,command_text text NOT NULL,risk text NOT NULL,enabled boolean NOT NULL DEFAULT true,updated_at timestamptz NOT NULL DEFAULT now());`
+const jobsSchema = `CREATE TABLE IF NOT EXISTS job_executions(id text PRIMARY KEY,template_id text NOT NULL,name text NOT NULL,targets jsonb NOT NULL,status text NOT NULL,progress integer NOT NULL,operator_name text NOT NULL,started_at text NOT NULL,duration text NOT NULL DEFAULT '',logs jsonb NOT NULL DEFAULT '[]',timeout_seconds integer NOT NULL DEFAULT 300,attempt integer NOT NULL DEFAULT 0,approved_by text NOT NULL DEFAULT '',playbook_id text NOT NULL DEFAULT '',credential_id text NOT NULL DEFAULT '',variables jsonb NOT NULL DEFAULT '{}',template_version integer NOT NULL DEFAULT 0,playbook_version integer NOT NULL DEFAULT 0,parameters jsonb NOT NULL DEFAULT '{}',target_results jsonb NOT NULL DEFAULT '[]',artifact_keys jsonb NOT NULL DEFAULT '[]',updated_at timestamptz NOT NULL DEFAULT now());ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS template_version integer NOT NULL DEFAULT 0;ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS playbook_version integer NOT NULL DEFAULT 0;ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS parameters jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS target_results jsonb NOT NULL DEFAULT '[]';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS artifact_keys jsonb NOT NULL DEFAULT '[]';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS playbook_id text NOT NULL DEFAULT '';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS variables jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_executions ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT '';CREATE INDEX IF NOT EXISTS idx_job_executions_updated ON job_executions(updated_at DESC);CREATE TABLE IF NOT EXISTS job_templates(id text PRIMARY KEY,name text NOT NULL,category text NOT NULL,description text NOT NULL,command_text text NOT NULL,playbook_id text NOT NULL DEFAULT '',parameters jsonb NOT NULL DEFAULT '{}',version integer NOT NULL DEFAULT 1,updated_by text NOT NULL DEFAULT '',risk text NOT NULL,enabled boolean NOT NULL DEFAULT true,updated_at timestamptz NOT NULL DEFAULT now());ALTER TABLE job_templates ADD COLUMN IF NOT EXISTS playbook_id text NOT NULL DEFAULT '';ALTER TABLE job_templates ADD COLUMN IF NOT EXISTS parameters jsonb NOT NULL DEFAULT '{}';ALTER TABLE job_templates ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;ALTER TABLE job_templates ADD COLUMN IF NOT EXISTS updated_by text NOT NULL DEFAULT '';`
 
 const jobSchedulesSchema = `
 CREATE TABLE IF NOT EXISTS job_schedules(
@@ -41,11 +41,12 @@ CREATE TABLE IF NOT EXISTS job_playbooks(
  constants jsonb NOT NULL DEFAULT '{}',
  variables jsonb NOT NULL DEFAULT '{}',
  enabled boolean NOT NULL DEFAULT true,
+ version integer NOT NULL DEFAULT 1,
  created_by text NOT NULL DEFAULT '',
  created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_job_playbooks_updated ON job_playbooks(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_job_playbooks_updated ON job_playbooks(updated_at DESC);ALTER TABLE job_playbooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 `
 
 func openPostgres(url string) (*sql.DB, []Job, error) {
@@ -93,15 +94,19 @@ func upsertJob(ctx context.Context, db *sql.DB, j Job) error {
 	targets, _ := json.Marshal(j.Targets)
 	logs, _ := json.Marshal(j.Logs)
 	variables, _ := json.Marshal(j.Variables)
-	_, err := db.ExecContext(ctx, `INSERT INTO job_executions(id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,credential_id,variables,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,progress=excluded.progress,duration=excluded.duration,logs=excluded.logs,attempt=excluded.attempt,approved_by=excluded.approved_by,playbook_id=excluded.playbook_id,credential_id=excluded.credential_id,variables=excluded.variables,updated_at=now()`, j.ID, j.TemplateID, j.Name, targets, j.Status, j.Progress, j.Operator, j.StartedAt, j.Duration, logs, j.TimeoutSeconds, j.Attempt, j.ApprovedBy, j.PlaybookID, j.CredentialID, variables)
+	parameters, _ := json.Marshal(j.Parameters)
+	targetResults, _ := json.Marshal(j.TargetResults)
+	artifactKeys, _ := json.Marshal(j.ArtifactKeys)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_executions(id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,credential_id,variables,template_version,playbook_version,parameters,target_results,artifact_keys,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,progress=excluded.progress,duration=excluded.duration,logs=excluded.logs,attempt=excluded.attempt,approved_by=excluded.approved_by,playbook_id=excluded.playbook_id,credential_id=excluded.credential_id,variables=excluded.variables,template_version=excluded.template_version,playbook_version=excluded.playbook_version,parameters=excluded.parameters,target_results=excluded.target_results,artifact_keys=excluded.artifact_keys,updated_at=now()`, j.ID, j.TemplateID, j.Name, targets, j.Status, j.Progress, j.Operator, j.StartedAt, j.Duration, logs, j.TimeoutSeconds, j.Attempt, j.ApprovedBy, j.PlaybookID, j.CredentialID, variables, j.TemplateVersion, j.PlaybookVersion, parameters, targetResults, artifactKeys)
 	return err
 }
 func upsertTemplate(ctx context.Context, db *sql.DB, t Template) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO job_templates(id,name,category,description,command_text,risk,enabled,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,description=excluded.description,command_text=excluded.command_text,risk=excluded.risk,enabled=excluded.enabled,updated_at=now()`, t.ID, t.Name, t.Category, t.Description, t.Command, t.Risk, t.Enabled)
+	parameters, _ := json.Marshal(t.Parameters)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_templates(id,name,category,description,command_text,playbook_id,parameters,version,updated_by,risk,enabled,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,category=excluded.category,description=excluded.description,command_text=excluded.command_text,playbook_id=excluded.playbook_id,parameters=excluded.parameters,version=excluded.version,updated_by=excluded.updated_by,risk=excluded.risk,enabled=excluded.enabled,updated_at=now()`, t.ID, t.Name, t.Category, t.Description, t.Command, t.PlaybookID, parameters, t.Version, t.UpdatedBy, t.Risk, t.Enabled)
 	return err
 }
 func loadTemplates(ctx context.Context, db *sql.DB) ([]Template, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id,name,category,description,command_text,risk,enabled FROM job_templates ORDER BY updated_at DESC`)
+	rows, err := db.QueryContext(ctx, `SELECT id,name,category,description,command_text,playbook_id,parameters,version,updated_by,risk,enabled,to_char(updated_at,'YYYY-MM-DD HH24:MI:SS') FROM job_templates ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +114,11 @@ func loadTemplates(ctx context.Context, db *sql.DB) ([]Template, error) {
 	var out []Template
 	for rows.Next() {
 		var t Template
-		if err = rows.Scan(&t.ID, &t.Name, &t.Category, &t.Description, &t.Command, &t.Risk, &t.Enabled); err != nil {
+		var parameters []byte
+		if err = rows.Scan(&t.ID, &t.Name, &t.Category, &t.Description, &t.Command, &t.PlaybookID, &parameters, &t.Version, &t.UpdatedBy, &t.Risk, &t.Enabled, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal(parameters, &t.Parameters)
 		t.LastRun = "--"
 		out = append(out, t)
 	}
@@ -163,7 +170,7 @@ func deleteScheduleRow(ctx context.Context, db *sql.DB, id string) error {
 }
 
 func loadPlaybooks(ctx context.Context, db *sql.DB) ([]Playbook, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id,name,description,content,constants,variables,enabled,created_by FROM job_playbooks ORDER BY updated_at DESC`)
+	rows, err := db.QueryContext(ctx, `SELECT id,name,description,content,constants,variables,enabled,version,created_by,to_char(updated_at,'YYYY-MM-DD HH24:MI:SS') FROM job_playbooks ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +179,7 @@ func loadPlaybooks(ctx context.Context, db *sql.DB) ([]Playbook, error) {
 	for rows.Next() {
 		var item Playbook
 		var constants, variables []byte
-		if err := rows.Scan(&item.ID, &item.Name, &item.Description, &item.Content, &constants, &variables, &item.Enabled, &item.CreatedBy); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Description, &item.Content, &constants, &variables, &item.Enabled, &item.Version, &item.CreatedBy, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(constants, &item.Constants)
@@ -185,17 +192,21 @@ func loadPlaybooks(ctx context.Context, db *sql.DB) ([]Playbook, error) {
 func upsertPlaybook(ctx context.Context, db *sql.DB, item Playbook) error {
 	constants, _ := json.Marshal(item.Constants)
 	variables, _ := json.Marshal(item.Variables)
-	_, err := db.ExecContext(ctx, `INSERT INTO job_playbooks(id,name,description,content,constants,variables,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,constants=excluded.constants,variables=excluded.variables,enabled=excluded.enabled,updated_at=now()`, item.ID, item.Name, item.Description, item.Content, constants, variables, item.Enabled, item.CreatedBy)
+	_, err := db.ExecContext(ctx, `INSERT INTO job_playbooks(id,name,description,content,constants,variables,enabled,created_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,constants=excluded.constants,variables=excluded.variables,enabled=excluded.enabled,updated_at=now()`, item.ID, item.Name, item.Description, item.Content, constants, variables, item.Enabled, item.Version, item.CreatedBy)
 	return err
 }
 
+func deleteTemplateRow(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM job_templates WHERE id=$1`, id)
+	return err
+}
 func deletePlaybookRow(ctx context.Context, db *sql.DB, id string) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM job_playbooks WHERE id=$1`, id)
 	return err
 }
 
 func loadJobs(ctx context.Context, db *sql.DB) ([]Job, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,credential_id,variables FROM job_executions ORDER BY updated_at DESC LIMIT 500`)
+	rows, err := db.QueryContext(ctx, `SELECT id,template_id,template_version,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,playbook_version,credential_id,variables,parameters,target_results,artifact_keys FROM job_executions ORDER BY updated_at DESC LIMIT 500`)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +223,7 @@ func loadJobs(ctx context.Context, db *sql.DB) ([]Job, error) {
 }
 
 func loadJobByID(ctx context.Context, db *sql.DB, id string) (Job, error) {
-	row := db.QueryRowContext(ctx, `SELECT id,template_id,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,credential_id,variables FROM job_executions WHERE id=$1`, id)
+	row := db.QueryRowContext(ctx, `SELECT id,template_id,template_version,name,targets,status,progress,operator_name,started_at,duration,logs,timeout_seconds,attempt,approved_by,playbook_id,playbook_version,credential_id,variables,parameters,target_results,artifact_keys FROM job_executions WHERE id=$1`, id)
 	job, err := scanJob(row)
 	if err == sql.ErrNoRows {
 		return Job{}, ErrNotFound
@@ -226,13 +237,16 @@ type jobScanner interface {
 
 func scanJob(row jobScanner) (Job, error) {
 	var job Job
-	var targets, logs, variables []byte
-	if err := row.Scan(&job.ID, &job.TemplateID, &job.Name, &targets, &job.Status, &job.Progress, &job.Operator, &job.StartedAt, &job.Duration, &logs, &job.TimeoutSeconds, &job.Attempt, &job.ApprovedBy, &job.PlaybookID, &job.CredentialID, &variables); err != nil {
+	var targets, logs, variables, parameters, targetResults, artifactKeys []byte
+	if err := row.Scan(&job.ID, &job.TemplateID, &job.TemplateVersion, &job.Name, &targets, &job.Status, &job.Progress, &job.Operator, &job.StartedAt, &job.Duration, &logs, &job.TimeoutSeconds, &job.Attempt, &job.ApprovedBy, &job.PlaybookID, &job.PlaybookVersion, &job.CredentialID, &variables, &parameters, &targetResults, &artifactKeys); err != nil {
 		return Job{}, err
 	}
 	_ = json.Unmarshal(targets, &job.Targets)
 	_ = json.Unmarshal(logs, &job.Logs)
 	_ = json.Unmarshal(variables, &job.Variables)
+	_ = json.Unmarshal(parameters, &job.Parameters)
+	_ = json.Unmarshal(targetResults, &job.TargetResults)
+	_ = json.Unmarshal(artifactKeys, &job.ArtifactKeys)
 	return job, nil
 }
 func normalizeInterruptedJob(job Job) (Job, bool) {

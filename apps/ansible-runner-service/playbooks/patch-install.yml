@@ -1,0 +1,19 @@
+- name: Install approved system updates
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Refresh apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+    - name: Apply distribution updates on Debian
+      ansible.builtin.apt:
+        upgrade: dist
+      when: ansible_os_family == "Debian"
+    - name: Apply updates on RedHat family
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+      when: ansible_os_family == "RedHat"

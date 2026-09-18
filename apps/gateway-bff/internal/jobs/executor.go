@@ -14,13 +14,18 @@ import (
 )
 
 type ExecutionRequest struct {
-	JobID          string   `json:"jobId"`
-	Command        string   `json:"command"`
-	Targets        []string `json:"targets"`
-	Operator       string   `json:"operator"`
-	Attempt        int      `json:"attempt"`
-	TimeoutSeconds int      `json:"timeoutSeconds"`
-	CredentialID   string   `json:"credentialId,omitempty"`
+	JobID           string            `json:"jobId"`
+	Command         string            `json:"command,omitempty"`
+	Content         string            `json:"content,omitempty"`
+	PlaybookID      string            `json:"playbookId,omitempty"`
+	PlaybookVersion int               `json:"playbookVersion,omitempty"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	CheckMode       bool              `json:"checkMode,omitempty"`
+	Targets         []string          `json:"targets"`
+	Operator        string            `json:"operator"`
+	Attempt         int               `json:"attempt"`
+	TimeoutSeconds  int               `json:"timeoutSeconds"`
+	CredentialID    string            `json:"credentialId,omitempty"`
 }
 type ExecutionEvent struct {
 	Progress int    `json:"progress"`
@@ -28,9 +33,11 @@ type ExecutionEvent struct {
 	Message  string `json:"message"`
 }
 type ExecutionResult struct {
-	Status  string           `json:"status"`
-	Message string           `json:"message"`
-	Events  []ExecutionEvent `json:"events,omitempty"`
+	Status       string           `json:"status"`
+	Message      string           `json:"message"`
+	Events       []ExecutionEvent `json:"events,omitempty"`
+	Targets      []TargetResult   `json:"targets,omitempty"`
+	ArtifactKeys []string         `json:"artifactKeys,omitempty"`
 }
 type ExecutorInfo struct {
 	Mode     string `json:"mode"`
@@ -44,7 +51,7 @@ type Executor interface {
 type simulatedExecutor struct{}
 
 func (simulatedExecutor) Info() ExecutorInfo { return ExecutorInfo{Mode: "simulated", Ready: true} }
-func (simulatedExecutor) Execute(ctx context.Context, _ ExecutionRequest, emit func(ExecutionEvent)) ExecutionResult {
+func (simulatedExecutor) Execute(ctx context.Context, input ExecutionRequest, emit func(ExecutionEvent)) ExecutionResult {
 	steps := []string{"执行前安全检查完成", "目标连接检查完成", "作业指令已下发", "目标执行结果已回收", "执行后健康检查完成"}
 	for i, msg := range steps {
 		select {
@@ -54,7 +61,11 @@ func (simulatedExecutor) Execute(ctx context.Context, _ ExecutionRequest, emit f
 			emit(ExecutionEvent{Progress: (i + 1) * 20, Level: "success", Message: msg})
 		}
 	}
-	return ExecutionResult{Status: "success", Message: "任务执行完成"}
+	targets := make([]TargetResult, 0, len(input.Targets))
+	for _, target := range input.Targets {
+		targets = append(targets, TargetResult{Target: target, Status: "success", RC: 0, DurationMS: 1000})
+	}
+	return ExecutionResult{Status: "success", Message: "任务执行完成", Targets: targets}
 }
 
 type httpExecutor struct {

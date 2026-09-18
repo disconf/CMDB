@@ -11,7 +11,7 @@ import httpx
 
 from app.artifacts import ArtifactStore
 from app.config import Settings
-from app.schemas import RunEvent, RunRequest, RunResponse
+from app.schemas import RunEvent, RunRequest, RunResponse, TargetResult
 
 
 class ExecutionError(Exception):
@@ -112,13 +112,6 @@ class RunnerService:
         )
 
     async def execute(self, payload: RunRequest) -> RunResponse:
-        playbook = self.settings.command_map.get(payload.command)
-        if not playbook:
-            raise UnknownProfileError("command is not mapped to an approved playbook")
-        playbook_path = (Path(self.settings.playbook_dir) / playbook).resolve()
-        root = Path(self.settings.playbook_dir).resolve()
-        if root not in playbook_path.parents or not playbook_path.is_file():
-            raise UnknownProfileError("approved playbook is unavailable")
         source_known_hosts = Path(self.settings.known_hosts_path)
         if not source_known_hosts.is_file():
             raise ExecutionError("known_hosts is unavailable")
@@ -126,8 +119,23 @@ class RunnerService:
         Path(self.settings.work_dir).mkdir(parents=True, exist_ok=True)
         work = Path(tempfile.mkdtemp(prefix=f"{payload.jobId}-", dir=self.settings.work_dir))
         events: list[RunEvent] = []
+        target_results: dict[str, TargetResult] = {}
+        artifact_keys: list[str] = []
         cancel = threading.Event()
         try:
+            if payload.content.strip():
+                playbook_path = work / "playbook.yml"
+                playbook_path.write_text(payload.content, encoding="utf-8")
+            else:
+                playbook_name = self.settings.command_map.get(payload.command)
+                if not playbook_name and payload.playbookId:
+                    playbook_name = payload.playbookId + ".yml"
+                if not playbook_name:
+                    raise UnknownProfileError("command or playbook is not mapped to an approved playbook")
+                playbook_path = (Path(self.settings.playbook_dir) / playbook_name).resolve()
+                root = Path(self.settings.playbook_dir).resolve()
+                if root not in playbook_path.parents or not playbook_path.is_file():
+                    raise UnknownProfileError("approved playbook is unavailable")
             run_known_hosts = work / "known_hosts"
             shutil.copyfile(source_known_hosts, run_known_hosts)
             inventory = await self.resolve_inventory(
@@ -152,6 +160,28 @@ class RunnerService:
                             level="info",
                             message=stdout[-1000:],
                         )
+                    )
+                event_name = str(event.get("event", ""))
+                event_data = event.get("event_data") or {}
+                host = str(event_data.get("host") or event.get("host") or "")
+                response = event_data.get("res") or {}
+                if host and event_name in {"runner_on_ok", "runner_on_failed", "runner_on_unreachable", "runner_on_skipped"}:
+                    result_status = "success"
+                    changed = bool(response.get("changed"))
+                    if event_name == "runner_on_failed":
+                        result_status = "failed"
+                    elif event_name == "runner_on_unreachable":
+                        result_status = "unreachable"
+                    elif event_name == "runner_on_skipped":
+                        result_status = "skipped"
+                    target_results[host] = TargetResult(
+                        target=host,
+                        status=result_status,
+                        rc=int(response.get("rc") or 0),
+                        changed=changed,
+                        stdout=str(response.get("stdout") or response.get("msg") or "")[-32000:],
+                        stderr=str(response.get("stderr") or "")[-32000:],
+                        error=str(response.get("msg") or "") if result_status not in {"success", "skipped"} else "",
                     )
                 return True
 
@@ -202,6 +232,7 @@ class RunnerService:
             if self.artifacts.enabled:
                 try:
                     key = await self.artifacts.upload(work, payload.jobId, payload.attempt)
+                    artifact_keys.append(key)
                     events.append(
                         RunEvent(
                             progress=100 if status == "success" else min(99, 10 + len(events) * 5),
@@ -221,6 +252,8 @@ class RunnerService:
                 status=status,
                 message="playbook completed" if status == "success" else f"playbook {result.status}",
                 events=events,
+                targets=list(target_results.values()),
+                artifactKeys=artifact_keys,
             )
         finally:
             shutil.rmtree(work, ignore_errors=True)

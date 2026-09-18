@@ -1,0 +1,16 @@
+- name: Rolling restart a service
+  hosts: all
+  gather_facts: false
+  become: true
+  serial: "{{ service_serial | default(1) }}"
+  vars:
+    service_name: nginx
+  tasks:
+    - name: Validate service name
+      ansible.builtin.assert:
+        that:
+          - service_name | length > 0
+    - name: Restart service
+      ansible.builtin.service:
+        name: "{{ service_name }}"
+        state: restarted

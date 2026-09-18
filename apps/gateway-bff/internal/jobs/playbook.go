@@ -71,7 +71,7 @@ func (s *Service) CreatePlaybook(input PlaybookInput, createdBy string) (Playboo
 	if err != nil {
 		return Playbook{}, err
 	}
-	item := Playbook{ID: playbookID(), Name: input.Name, Description: input.Description, Content: input.Content, Constants: cloneStringMap(input.Constants), Variables: cloneStringMap(input.Variables), Enabled: *input.Enabled, CreatedBy: createdBy}
+	item := Playbook{ID: playbookID(), Name: input.Name, Description: input.Description, Content: input.Content, Constants: cloneStringMap(input.Constants), Variables: cloneStringMap(input.Variables), Enabled: *input.Enabled, Version: 1, CreatedBy: createdBy, UpdatedAt: time.Now().Format("2006-01-02 15:04:05")}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.playbooks = append([]Playbook{item}, s.playbooks...)
@@ -96,6 +96,8 @@ func (s *Service) UpdatePlaybook(id string, input PlaybookInput) (Playbook, erro
 			s.playbooks[i].Constants = cloneStringMap(input.Constants)
 			s.playbooks[i].Variables = cloneStringMap(input.Variables)
 			s.playbooks[i].Enabled = *input.Enabled
+			s.playbooks[i].Version++
+			s.playbooks[i].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 			if s.db != nil {
 				_ = upsertPlaybook(context.Background(), s.db, s.playbooks[i])
 			}
@@ -180,6 +182,50 @@ func compilePlaybook(playbook Playbook, overrides map[string]string) (string, er
 	return result, nil
 }
 
+func (s *Service) executionRequestForJobLocked(job Job) ExecutionRequest {
+	request := ExecutionRequest{CredentialID: job.CredentialID, PlaybookVersion: job.PlaybookVersion, Parameters: cloneStringMap(job.Parameters)}
+	if job.PlaybookID != "" {
+		request.PlaybookID = job.PlaybookID
+		for _, playbook := range s.playbooks {
+			if playbook.ID != job.PlaybookID {
+				continue
+			}
+			request.PlaybookVersion = playbook.Version
+			request.Content, _ = compilePlaybook(playbook, mergeStringMaps(job.Variables, job.Parameters))
+			return request
+		}
+		return request
+	}
+	for _, template := range s.templates {
+		if template.ID != job.TemplateID {
+			continue
+		}
+		request.PlaybookID = template.PlaybookID
+		request.Parameters = mergeStringMaps(template.Parameters, job.Parameters)
+		if template.PlaybookID == "" {
+			request.Command = template.Command
+			return request
+		}
+		for _, playbook := range s.playbooks {
+			if playbook.ID != template.PlaybookID {
+				continue
+			}
+			request.PlaybookVersion = playbook.Version
+			request.Content, _ = compilePlaybook(playbook, mergeStringMaps(job.Variables, request.Parameters))
+			return request
+		}
+		return request
+	}
+	return request
+}
+
+func mergeStringMaps(defaults, overrides map[string]string) map[string]string {
+	values := cloneStringMap(defaults)
+	for key, value := range overrides {
+		values[key] = value
+	}
+	return values
+}
 func (s *Service) commandForJobLocked(job Job) string {
 	if job.PlaybookID != "" {
 		for _, playbook := range s.playbooks {
