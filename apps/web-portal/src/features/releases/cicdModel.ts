@@ -81,3 +81,42 @@ export type CICDResources = {
 export const argoSyncLabel = (status:string) => ({ Synced:'已同步', OutOfSync:'待同步', Unknown:'未知' }[status] || status)
 export const argoHealthLabel = (status:string) => ({ Healthy:'健康', Degraded:'异常', Progressing:'进行中', Missing:'缺失', Unknown:'未知' }[status] || status)
 export const pipelineStatusLabel = (status:string) => ({ success:'成功', failed:'失败', running:'执行中', pending:'等待中', canceled:'已取消', skipped:'已跳过', manual:'手动', created:'已创建' }[status] || status)
+
+export type ResourceRelation = {
+  id:string
+  resourceType:string
+  resourceId:string
+  resourceName:string
+  assetId:string
+  assetName:string
+  assetType:string
+  relationType:string
+  source:string
+  actor?:string
+  createdAt:string
+  updatedAt:string
+}
+
+export type RelationSuggestion = {
+  assetId:string
+  assetName:string
+  assetType:string
+  assetIp?:string
+  score:number
+  reason:string
+}
+
+export const relationTypeLabel = (type:string) => ({
+  'deployed-to':'部署到',
+  'runs-on':'运行于',
+  'belongs-to':'属于',
+  'built-from':'构建来源',
+  'monitored-by':'监控关联',
+  'related-to':'关联',
+}[type] || type)
+
+export const relationResourceTypeLabel = (type:string) => ({
+  'harbor-repository':'Harbor 镜像仓库',
+  'argocd-application':'Argo CD 应用',
+  'gitlab-project':'GitLab 项目',
+}[type] || type)

@@ -93,6 +93,7 @@ func NewServer() *Server {
 	auditService := audit.NewService()
 	cicdService := cicd.NewService()
 	registerCICDRoutes(mux, authService, auditService, cicdService)
+	registerCICDRelationRoutes(mux, authService, auditService, cicdService, cmdbService)
 	registerRancherRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
@@ -3581,5 +3582,3 @@ func requestLogger(next http.Handler) http.Handler {
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
 	})
 }
-
-

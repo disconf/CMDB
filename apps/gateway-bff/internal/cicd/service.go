@@ -73,6 +73,9 @@ type Service struct {
 	resourceMu    sync.Mutex
 	resourceCache ResourceOverview
 	resourceAt    time.Time
+
+	relationMu sync.RWMutex
+	relations  []ResourceRelation
 }
 
 type probeResult struct {
@@ -90,6 +93,10 @@ func NewService() *Service {
 		if err := service.initStatusStore(context.Background(), db); err != nil {
 			_ = db.Close()
 			panic(fmt.Sprintf("migrate CI/CD status repository: %v", err))
+		}
+		if err := service.initRelationStore(context.Background(), db); err != nil {
+			_ = db.Close()
+			panic(fmt.Sprintf("migrate CI/CD relation repository: %v", err))
 		}
 		service.db = db
 	}

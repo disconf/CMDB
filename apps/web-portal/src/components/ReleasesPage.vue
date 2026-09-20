@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Box, Check, Clock3, GitCommit, KeyRound, Play, RefreshCw, RotateCcw, Rocket, ShieldAlert, ShieldCheck, XCircle } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { releaseStatusLabel } from '@/features/releases/releasesModel'
-import { argoHealthLabel, argoSyncLabel, integrationDetailLabel, integrationStatusLabel, integrationTypeLabel, pipelineStatusLabel, summarizeIntegrations, type CICDIntegration, type CICDResources } from '@/features/releases/cicdModel'
+import { argoHealthLabel, argoSyncLabel, integrationDetailLabel, integrationStatusLabel, integrationTypeLabel, pipelineStatusLabel, relationResourceTypeLabel, relationTypeLabel, summarizeIntegrations, type CICDIntegration, type CICDResources, type RelationSuggestion, type ResourceRelation } from '@/features/releases/cicdModel'
 
 type Stage = { id:string; name:string; status:string; duration:string; message:string }
 type Release = { id:string; application:string; version:string; previousVersion:string; environment:string; status:string; progress:number; operator:string; startedAt:string; strategy:string; approval:string; approvalType?:string; approvalRequester?:string; approvalComment?:string; approvedBy?:string; approvedAt?:string; authorizationExpiresAt?:string; authorizationUsedAt?:string; ticketId:string; source:string; externalId:string; commit:string; stages:Stage[] }
@@ -11,13 +11,15 @@ type Artifact = { id:string; application:string; version:string; commit:string; 
 type Summary = { today:number; running:number; success:number; failed:number; successRate:number }
 type Executor = { mode:string; ready:boolean; endpoint?:string }
 type ApprovalResponse = { release:Release; authorizationToken:string; expiresAt:string }
-type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources'
+type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources' | 'relations'
 
 const auth = useAuthStore()
 const releases = ref<Release[]>([])
 const artifacts = ref<Artifact[]>([])
 const integrations = ref<CICDIntegration[]>([])
 const resources = ref<CICDResources>()
+const relations = ref<ResourceRelation[]>([])
+const relationSuggestions = ref<RelationSuggestion[]>([])
 const summary = ref<Summary>()
 const executor = ref<Executor>()
 const selected = ref<Release>()
@@ -26,6 +28,9 @@ const loading = ref(false)
 const busy = ref(false)
 const integrationTesting = ref('')
 const resourcesLoading = ref(false)
+const relationLoading = ref(false)
+const relationSaving = ref(false)
+const relationForm = ref({ resourceType:'harbor-repository', resourceId:'', resourceName:'', assetId:'', assetName:'', assetType:'', relationType:'deployed-to' })
 const message = ref('')
 const error = ref('')
 const approvalComment = ref('')
@@ -123,6 +128,69 @@ async function loadResources(force=false) {
 function openTab(next:Tab) {
   tab.value = next
   if (next === 'resources' && !resources.value) void loadResources()
+  if (next === 'relations' && !relations.value.length) void loadRelations()
+}
+
+async function loadRelations() {
+  relationLoading.value = true
+  try {
+    relations.value = await request<ResourceRelation[]>('/api/v1/cicd/relations')
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '关联关系加载失败'
+  } finally {
+    relationLoading.value = false
+  }
+}
+
+async function suggestRelations() {
+  relationLoading.value = true
+  relationSuggestions.value = []
+  try {
+    const query = new URLSearchParams({ resourceType:relationForm.value.resourceType, resourceId:relationForm.value.resourceId, resourceName:relationForm.value.resourceName })
+    relationSuggestions.value = await request<RelationSuggestion[]>(`/api/v1/cicd/relations/suggestions?${query}`)
+    if (!relationSuggestions.value.length) message.value = '未找到匹配资产，可以手工填写资产信息'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '智能匹配失败'
+  } finally {
+    relationLoading.value = false
+  }
+}
+
+function applySuggestion(item:RelationSuggestion) {
+  relationForm.value.assetId = item.assetId
+  relationForm.value.assetName = item.assetName
+  relationForm.value.assetType = item.assetType
+  message.value = `已选择资产 ${item.assetName}`
+}
+
+async function saveRelation() {
+  relationSaving.value = true
+  error.value = ''
+  try {
+    const item = await request<ResourceRelation>('/api/v1/cicd/relations', { method:'POST', body:JSON.stringify(relationForm.value) })
+    const index = relations.value.findIndex(existing => existing.id === item.id)
+    if (index >= 0) relations.value.splice(index, 1, item); else relations.value.unshift(item)
+    relationSuggestions.value = []
+    message.value = '资源与 CMDB 资产关联已保存'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '关联关系保存失败'
+  } finally {
+    relationSaving.value = false
+  }
+}
+
+async function deleteRelation(id:string) {
+  relationSaving.value = true
+  try {
+    const response = await fetch(`/api/v1/cicd/relations/${id}`, { method:'DELETE', headers:headers.value })
+    if (!response.ok) throw new Error('关联删除失败')
+    relations.value = relations.value.filter(item => item.id !== id)
+    message.value = '关联关系已删除'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '关联删除失败'
+  } finally {
+    relationSaving.value = false
+  }
 }
 
 async function start() {
@@ -225,6 +293,13 @@ onMounted(load)
       <article><XCircle/><span>连接异常<strong>{{integrationSummary.errors}}</strong></span></article>
       <article><ShieldAlert/><span>未配置<strong>{{integrationSummary.notConfigured}}</strong></span></article>
     </div>
+    <div v-else-if="tab==='relations'" class="release-summary">
+      <article><Box/><span>资源关联<strong>{{relations.length}}</strong></span></article>
+      <article><Check/><span>Harbor<strong>{{relations.filter(item=>item.resourceType==='harbor-repository').length}}</strong></span></article>
+      <article><Rocket/><span>Argo CD<strong>{{relations.filter(item=>item.resourceType==='argocd-application').length}}</strong></span></article>
+      <article><GitCommit/><span>GitLab<strong>{{relations.filter(item=>item.resourceType==='gitlab-project').length}}</strong></span></article>
+      <article><ShieldCheck/><span>自动匹配<strong>{{relations.filter(item=>item.source==='auto').length}}</strong></span></article>
+    </div>
     <div v-else-if="tab==='resources'" class="release-summary">
       <article><Box/><span>镜像仓库<strong>{{resources?.harbor.repositories||0}}</strong></span></article>
       <article><Check/><span>Argo 应用<strong>{{resources?.argoCD.applications||0}}</strong></span></article>
@@ -242,7 +317,7 @@ onMounted(load)
 
     <div class="release-workspace">
       <main>
-        <nav><button :class="{active:tab==='releases'}" @click="openTab('releases')">发布流水线</button><button :class="{active:tab==='artifacts'}" @click="openTab('artifacts')">制品仓库</button><button :class="{active:tab==='integrations'}" @click="openTab('integrations')">CI/CD 集成</button><button :class="{active:tab==='resources'}" @click="openTab('resources')">资源总览</button></nav>
+        <nav><button :class="{active:tab==='releases'}" @click="openTab('releases')">发布流水线</button><button :class="{active:tab==='artifacts'}" @click="openTab('artifacts')">制品仓库</button><button :class="{active:tab==='integrations'}" @click="openTab('integrations')">CI/CD 集成</button><button :class="{active:tab==='resources'}" @click="openTab('resources')">资源总览</button><button :class="{active:tab==='relations'}" @click="openTab('relations')">资源关系</button></nav>
 
         <template v-if="tab==='releases'">
           <article v-for="item in releases" :key="item.id" class="release-card" :class="{selected:selected?.id===item.id}" @click="selected=item">
@@ -292,6 +367,35 @@ onMounted(load)
           <div v-else class="empty-release"><RefreshCw :class="{spin:resourcesLoading}"/><strong>正在读取 CI/CD 资源</strong><span>请稍候</span></div>
         </template>
 
+        <template v-else-if="tab==='relations'">
+          <div class="integration-toolbar">
+            <div><strong>资源关系治理</strong><span>把 CI/CD 资源关联到 CMDB 资产，支持智能匹配和手工维护。</span></div>
+            <button :disabled="relationLoading" @click="loadRelations"><RefreshCw :class="{spin:relationLoading}"/>刷新关系</button>
+          </div>
+          <div class="relation-layout">
+            <form class="relation-form" @submit.prevent="saveRelation">
+              <label>资源类型<select v-model="relationForm.resourceType"><option value="harbor-repository">Harbor 镜像仓库</option><option value="argocd-application">Argo CD 应用</option><option value="gitlab-project">GitLab 项目</option></select></label>
+              <label>资源编号<input v-model="relationForm.resourceId" placeholder="例如 cmdb/gateway-bff"></label>
+              <label>资源名称<input v-model="relationForm.resourceName" placeholder="例如 gateway-bff"></label>
+              <label>CMDB 资产 ID<input v-model="relationForm.assetId" placeholder="可以点击智能匹配填充"></label>
+              <label>CMDB 资产名称<input v-model="relationForm.assetName"></label>
+              <label>资产类型<select v-model="relationForm.assetType"><option value="k8s-cluster">K8s 集群</option><option value="k8s-node">K8s 节点</option><option value="virtual-machine">虚拟机</option><option value="physical-server">物理机</option><option value="middleware">中间件</option><option value="database">数据库</option><option value="network-device">网络设备</option></select></label>
+              <label>关联类型<select v-model="relationForm.relationType"><option value="deployed-to">部署到</option><option value="runs-on">运行于</option><option value="belongs-to">属于</option><option value="built-from">构建来源</option><option value="monitored-by">监控关联</option><option value="related-to">关联</option></select></label>
+              <div class="relation-form-actions"><button type="button" :disabled="relationLoading" @click="suggestRelations">智能匹配</button><button class="primary" type="submit" :disabled="relationSaving">保存关联</button></div>
+            </form>
+            <div class="relation-suggestions">
+              <header><strong>匹配建议</strong><span>根据资源编号、名称和资产类型评分</span></header>
+              <button v-for="item in relationSuggestions" :key="item.assetId" type="button" @click="applySuggestion(item)"><strong>{{item.assetName}}</strong><span>{{item.assetId}} · {{item.reason}}</span><em>{{item.score}}</em></button>
+              <div v-if="!relationSuggestions.length" class="resource-empty">填写资源信息后点击“智能匹配”</div>
+            </div>
+          </div>
+          <div class="relation-list">
+            <header><strong>已维护关系</strong><span>删除关联不会修改外部 CI/CD 系统</span></header>
+            <article v-for="item in relations" :key="item.id"><div><strong>{{item.resourceName}}</strong><small>{{relationResourceTypeLabel(item.resourceType)}} · {{item.resourceId}}</small></div><b>{{relationTypeLabel(item.relationType)}}</b><div><strong>{{item.assetName}}</strong><small>{{item.assetType}} · {{item.assetId}}</small></div><button :disabled="relationSaving" @click="deleteRelation(item.id)">删除</button></article>
+            <div v-if="!relations.length" class="resource-empty">暂未维护资源关系</div>
+          </div>
+        </template>
+
         <template v-else-if="tab==='integrations'">
           <div class="integration-toolbar">
             <div><strong>CI/CD 工具链接</strong><span>统一检测 Harbor、Argo CD、GitLab 的连接与认证状态</span></div>
@@ -324,6 +428,14 @@ onMounted(load)
           <span>RESOURCE OVERVIEW</span><h2>资源同步视图</h2>
           <p class="resource-aside-note">Harbor 展示项目与最近更新的镜像仓库；Argo CD 展示应用同步与健康状态；GitLab 配置后展示项目、默认分支和 Pipeline。</p>
           <div class="integration-principle"><Clock3/><span>资源数据为实时读取并在 Gateway 内存缓存 30 秒；点击刷新资源可立即重新读取。</span></div>
+        </template>
+
+        <template v-else-if="tab==='relations'">
+          <span>RESOURCE RELATIONS</span><h2>资源关系说明</h2>
+          <div class="integration-guide"><Rocket/><div><strong>部署关联</strong><span>把 Argo CD 应用关联到 K8s 集群或节点，快速定位部署位置。</span></div></div>
+          <div class="integration-guide"><Box/><div><strong>制品关联</strong><span>把 Harbor 仓库关联到中间件、数据库或宿主机，形成构建到运行的关系。</span></div></div>
+          <div class="integration-guide"><GitCommit/><div><strong>代码关联</strong><span>把 GitLab 项目关联到服务资产，串联提交、Pipeline 和发布记录。</span></div></div>
+          <div class="integration-principle"><ShieldCheck/><span>关联关系只保存在运维平台内，不会修改外部 CI/CD 系统或 CMDB 基础资产。</span></div>
         </template>
 
         <template v-else-if="tab==='integrations'">

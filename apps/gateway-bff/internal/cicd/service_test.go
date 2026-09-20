@@ -241,3 +241,39 @@ func TestResourcesParsesGitLabProjectsAndPipeline(t *testing.T) {
 		t.Fatalf("unexpected GitLab pipeline: %#v", project.LatestPipeline)
 	}
 }
+
+func TestResourceRelationsLifecycle(t *testing.T) {
+	service := NewServiceWithConfig(Config{HTTPTimeout: time.Second})
+	input := RelationInput{ResourceType: "argocd-application", ResourceID: "ops-qa/cmdb", ResourceName: "cmdb", AssetID: "k8s-jzq", AssetName: "jzq-cluster", AssetType: "k8s-cluster", RelationType: "deployed-to"}
+	item, err := service.CreateRelation(context.Background(), input, "tester")
+	if err != nil {
+		t.Fatalf("create relation: %v", err)
+	}
+	if item.ID == "" || item.Source != "manual" || item.Actor != "tester" {
+		t.Fatalf("unexpected relation: %#v", item)
+	}
+	updated, err := service.CreateRelation(context.Background(), input, "tester-2")
+	if err != nil || updated.ID != item.ID {
+		t.Fatalf("relation upsert failed: %#v %v", updated, err)
+	}
+	if relations := service.ListRelations(context.Background(), "argocd-application"); len(relations) != 1 {
+		t.Fatalf("unexpected relation list: %#v", relations)
+	}
+	if err := service.DeleteRelation(context.Background(), item.ID); err != nil {
+		t.Fatalf("delete relation: %v", err)
+	}
+	if relations := service.ListRelations(context.Background(), ""); len(relations) != 0 {
+		t.Fatalf("relation was not deleted: %#v", relations)
+	}
+}
+
+func TestRelationSuggestionsRankMatchingAssets(t *testing.T) {
+	service := NewServiceWithConfig(Config{HTTPTimeout: time.Second})
+	suggestions := service.SuggestRelations("argocd-application", "ops-qa/cmdb", "cmdb", []AssetCandidate{
+		{ID: "k8s-jzq", Name: "jzq-cluster", Type: "k8s-cluster"},
+		{ID: "cmdb", Name: "cmdb", Type: "k8s-cluster"},
+	}, 10)
+	if len(suggestions) != 2 || suggestions[0].AssetID != "cmdb" || suggestions[0].Score <= suggestions[1].Score {
+		t.Fatalf("unexpected suggestions: %#v", suggestions)
+	}
+}

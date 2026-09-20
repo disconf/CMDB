@@ -31,3 +31,11 @@ describe('CI/CD resource labels', () => {
     expect(pipelineStatusLabel('success')).toBe('成功')
   })
 })
+import { relationResourceTypeLabel, relationTypeLabel } from './cicdModel'
+
+describe('CI/CD relation labels', () => {
+  it('translates relation types', () => {
+    expect(relationTypeLabel('deployed-to')).toBe('部署到')
+    expect(relationResourceTypeLabel('argocd-application')).toBe('Argo CD 应用')
+  })
+})
