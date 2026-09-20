@@ -64,3 +64,21 @@ func (s *Service) ReceiveJobFailure(input JobFailureInput) (int, error) {
 	}
 	return s.ReceiveWebhook(payload)
 }
+
+func (s *Service) ResolveJobFailure(input JobFailureInput) (int, error) {
+	if input.JobID == "" {
+		return 0, nil
+	}
+	labels := map[string]string{"alertname": "job-failure", "instance": input.Target, "cmdb_asset_id": input.Target, "severity": "info", "owner": input.Owner, "project_group": input.ProjectGroup, "job_id": input.JobID, "job_name": input.JobName}
+	annotations := map[string]string{"summary": input.JobName + " 执行已恢复", "description": "任务后续执行成功，系统自动关闭告警和关联工单"}
+	now := time.Now()
+	payload := WebhookPayload{Receiver: "cmdb-jobs", Status: "resolved", GroupKey: "job:" + input.JobID, Alerts: []struct {
+		Status      string            `json:"status"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
+		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
+		Fingerprint string            `json:"fingerprint"`
+	}{{Status: "resolved", Labels: labels, Annotations: annotations, StartsAt: now, EndsAt: now, Fingerprint: "job-failed-" + input.JobID}}}
+	return s.ReceiveWebhook(payload)
+}

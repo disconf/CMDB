@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"strings"
-
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/monitor"
@@ -10,7 +8,7 @@ import (
 )
 
 func handleJobTerminal(job jobs.Job, monitorService *monitor.Service, ticketsService *tickets.Service, cmdbService *cmdb.Service) {
-	if job.Status != "failed" {
+	if job.Status != "failed" && job.Status != "success" {
 		return
 	}
 	target := ""
@@ -32,15 +30,20 @@ func handleJobTerminal(job jobs.Job, monitorService *monitor.Service, ticketsSer
 	if len(job.Logs) > 0 {
 		message = job.Logs[len(job.Logs)-1].Message
 	}
+	alertID := "job-failed-" + job.ID
+	title := "自动化任务失败: " + job.Name
+	if job.Status == "success" {
+		_, _ = monitorService.ResolveJobFailure(monitor.JobFailureInput{JobID: job.ID, JobName: job.Name, Target: target, TargetName: targetName, Owner: owner, ProjectGroup: projectGroup})
+		_, _, _ = ticketsService.SyncAlert(tickets.AlertInput{ID: alertID, Title: title, Severity: "info", Status: "resolved", Target: target, Message: "任务后续执行成功，系统自动关闭告警和关联工单", Owner: owner})
+		return
+	}
 	severity := "warning"
 	if job.Operator == "scheduler" {
 		severity = "critical"
 	}
-	_, _ = monitorService.ReceiveJobFailure(monitor.JobFailureInput{JobID: job.ID, JobName: job.Name, Target: target, TargetName: targetName, Message: message, Severity: severity, Owner: owner, ProjectGroup: projectGroup, StartedAt: job.StartedAt})
-	automation := job.PlaybookID
-	if automation == "" {
-		automation = job.TemplateID
+	if targetName != "" {
+		message = targetName + " " + message
 	}
-	description := strings.Join([]string{"调度任务失败", "任务ID: " + job.ID, "目标: " + strings.Join(job.Targets, ", "), "错误: " + message}, "\n")
-	_, _ = ticketsService.Create(tickets.CreateInput{Title: "调度任务失败: " + job.Name, Type: "incident", Priority: "high", Applicant: "scheduler", Description: description, RelatedAsset: target, RelatedAlert: "job-failed-" + job.ID, ProjectGroup: projectGroup, AutomationTemplate: automation})
+	_, _ = monitorService.ReceiveJobFailure(monitor.JobFailureInput{JobID: job.ID, JobName: job.Name, Target: target, TargetName: targetName, Message: message, Severity: severity, Owner: owner, ProjectGroup: projectGroup, StartedAt: job.StartedAt})
+	_, _, _ = ticketsService.SyncAlert(tickets.AlertInput{ID: alertID, Title: title, Severity: severity, Status: "firing", Target: target, Message: message, Owner: owner})
 }
