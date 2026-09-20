@@ -264,6 +264,7 @@ type Service struct {
 	location         *time.Location
 	templateVersions map[string][]TemplateVersion
 	playbookVersions map[string][]PlaybookVersion
+	terminalHandler  func(Job)
 }
 
 func NewService() *Service {
@@ -357,6 +358,7 @@ func (s *Service) CreateTemplate(in TemplateInput) (Template, error) {
 	return t, nil
 }
 func (s *Service) UpdateTemplate(id string, in TemplateInput) (Template, error) {
+	s.refreshTemplates()
 	if err := validateTemplate(in); err != nil {
 		return Template{}, err
 	}
@@ -385,6 +387,7 @@ func (s *Service) UpdateTemplate(id string, in TemplateInput) (Template, error) 
 }
 
 func (s *Service) DeleteTemplate(id string) error {
+	s.refreshTemplates()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.templates {
@@ -401,6 +404,7 @@ func (s *Service) DeleteTemplate(id string) error {
 }
 
 func (s *Service) DuplicateTemplate(id string, operator string) (Template, error) {
+	s.refreshTemplates()
 	s.mu.RLock()
 	var source Template
 	found := false
@@ -432,6 +436,7 @@ func (s *Service) DuplicateTemplate(id string, operator string) (Template, error
 	return source, nil
 }
 func (s *Service) ToggleTemplate(id string) (Template, error) {
+	s.refreshTemplates()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.templates {
@@ -480,6 +485,12 @@ func (s *Service) Schedules() []Schedule {
 	return cloneSchedules(s.schedules)
 }
 func (s *Service) ExecutorInfo() ExecutorInfo { return s.executor.Info() }
+func (s *Service) SetTerminalHandler(handler func(Job)) {
+	s.mu.Lock()
+	s.terminalHandler = handler
+	s.mu.Unlock()
+
+}
 func (s *Service) Analytics(days int, scheduledOnly bool) JobAnalytics {
 	if days <= 0 {
 		days = 14
@@ -968,8 +979,8 @@ func (s *Service) updateWithLevel(id string, attempt, progress int, level, messa
 	}
 }
 func (s *Service) finish(id string, attempt int, status string, progress int, start time.Time, message string, targetResults []TargetResult, artifactKeys []string) {
+	var completed *Job
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for i := range s.jobs {
 		if s.jobs[i].ID == id && s.jobs[i].Status == "running" && s.jobs[i].Attempt == attempt {
 			s.jobs[i].Status = status
@@ -979,13 +990,20 @@ func (s *Service) finish(id string, attempt int, status string, progress int, st
 			if status != "success" {
 				level = "warning"
 			}
-			s.jobs[i].Logs = append(s.jobs[i].Logs, Log{time.Now().Format("15:04:05"), level, message})
+			s.jobs[i].Logs = append(s.jobs[i].Logs, Log{Time: time.Now().Format("15:04:05"), Level: level, Message: message})
 			s.jobs[i].TargetResults = mergeTargetResults(s.jobs[i].TargetResults, targetResults)
 			s.jobs[i].ArtifactKeys = mergeArtifactKeys(s.jobs[i].ArtifactKeys, artifactKeys)
 			delete(s.cancels, id)
 			s.persistLocked(s.jobs[i])
-			return
+			item := cloneJob(s.jobs[i])
+			completed = &item
+			break
 		}
+	}
+	handler := s.terminalHandler
+	s.mu.Unlock()
+	if completed != nil && handler != nil {
+		go handler(*completed)
 	}
 }
 

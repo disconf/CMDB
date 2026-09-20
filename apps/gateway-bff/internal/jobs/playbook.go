@@ -114,6 +114,7 @@ func (s *Service) CreatePlaybook(input PlaybookInput, createdBy string) (Playboo
 }
 
 func (s *Service) UpdatePlaybook(id string, input PlaybookInput) (Playbook, error) {
+	s.refreshPlaybooks()
 	input, err := validatePlaybookInput(input)
 	if err != nil {
 		return Playbook{}, err
@@ -141,6 +142,7 @@ func (s *Service) UpdatePlaybook(id string, input PlaybookInput) (Playbook, erro
 }
 
 func (s *Service) TogglePlaybook(id string) (Playbook, error) {
+	s.refreshPlaybooks()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.playbooks {
@@ -157,6 +159,7 @@ func (s *Service) TogglePlaybook(id string) (Playbook, error) {
 }
 
 func (s *Service) DeletePlaybook(id string) error {
+	s.refreshPlaybooks()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.playbooks {

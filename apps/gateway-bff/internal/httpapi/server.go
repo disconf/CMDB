@@ -68,6 +68,7 @@ func NewServer() *Server {
 	jobsService := jobs.NewService()
 	go jobsService.RunScheduler(context.Background())
 	ticketsService := tickets.NewService()
+	jobsService.SetTerminalHandler(func(job jobs.Job) { handleJobTerminal(job, monitorService, ticketsService, cmdbService) })
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()
 	aiopsService := aiops.NewService()
