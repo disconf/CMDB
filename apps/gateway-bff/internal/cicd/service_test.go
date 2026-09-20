@@ -277,3 +277,18 @@ func TestRelationSuggestionsRankMatchingAssets(t *testing.T) {
 		t.Fatalf("unexpected suggestions: %#v", suggestions)
 	}
 }
+
+func TestBuildAutoResourcesIncludesEnabledToolTypes(t *testing.T) {
+	overview := ResourceOverview{
+		Harbor: HarborResources{Available: true, RecentRepositories: []HarborRepository{{Project: "cmdb", Name: "gateway-bff"}}},
+		ArgoCD: ArgoCDResources{Available: true, Items: []ArgoApplication{{Name: "cmdb", Namespace: "argocd"}}},
+		GitLab: GitLabResources{Available: true, RecentProjects: []GitLabProject{{ID: 42, Name: "cmdb-web"}}},
+	}
+	resources := buildAutoResources(overview, map[string]bool{"harbor-repository": true, "argocd-application": true, "gitlab-project": true})
+	if len(resources) != 3 {
+		t.Fatalf("unexpected auto resources: %#v", resources)
+	}
+	if resources[0].ResourceID != "cmdb/gateway-bff" || resources[1].ResourceID != "argocd/cmdb" || resources[2].ResourceID != "42" {
+		t.Fatalf("unexpected auto resource ids: %#v", resources)
+	}
+}

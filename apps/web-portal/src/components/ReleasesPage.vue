@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Box, Check, Clock3, GitCommit, KeyRound, Play, RefreshCw, RotateCcw, Rocket, ShieldAlert, ShieldCheck, XCircle } from 'lucide-vue-next'
+import { Box, Check, Clock3, GitCommit, KeyRound, Play, Radar, RefreshCw, RotateCcw, Rocket, ShieldAlert, ShieldCheck, XCircle } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { releaseStatusLabel } from '@/features/releases/releasesModel'
 import { argoHealthLabel, argoSyncLabel, integrationDetailLabel, integrationStatusLabel, integrationTypeLabel, pipelineStatusLabel, relationResourceTypeLabel, relationTypeLabel, summarizeIntegrations, type CICDIntegration, type CICDResources, type RelationSuggestion, type ResourceRelation } from '@/features/releases/cicdModel'
@@ -11,6 +11,9 @@ type Artifact = { id:string; application:string; version:string; commit:string; 
 type Summary = { today:number; running:number; success:number; failed:number; successRate:number }
 type Executor = { mode:string; ready:boolean; endpoint?:string }
 type ApprovalResponse = { release:Release; authorizationToken:string; expiresAt:string }
+type AutoDiscoveryItem = { resourceType:string; resourceId:string; resourceName:string; assetId?:string; assetName?:string; assetType?:string; score:number; reason?:string; action:string }
+type AutoDiscoveryResult = { scanned:number; matched:number; applied:number; updated:number; skipped:number; failed:number; items:AutoDiscoveryItem[] }
+type ImpactAnalysis = { resourceType:string; resourceId:string; directAssets:Array<{assetId:string;assetName:string;assetType:string;status:string;relationType:string;source:string}>; downstreamAssets:Array<{fromAssetId:string;fromAssetName:string;relationType:string;assetId:string;assetName:string;assetType:string;status:string}>; impactCount:number }
 type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources' | 'relations'
 
 const auth = useAuthStore()
@@ -20,6 +23,8 @@ const integrations = ref<CICDIntegration[]>([])
 const resources = ref<CICDResources>()
 const relations = ref<ResourceRelation[]>([])
 const relationSuggestions = ref<RelationSuggestion[]>([])
+const autoDiscovery = ref<AutoDiscoveryResult>()
+const impact = ref<ImpactAnalysis>()
 const summary = ref<Summary>()
 const executor = ref<Executor>()
 const selected = ref<Release>()
@@ -129,6 +134,32 @@ function openTab(next:Tab) {
   tab.value = next
   if (next === 'resources' && !resources.value) void loadResources()
   if (next === 'relations' && !relations.value.length) void loadRelations()
+}
+
+async function autoDiscoverRelations(apply=false) {
+  relationSaving.value = true
+  error.value = ''
+  try {
+    autoDiscovery.value = await request<AutoDiscoveryResult>('/api/v1/cicd/relations/auto-discover', { method:'POST', body:JSON.stringify({ resourceTypes:['harbor-repository','argocd-application','gitlab-project'], apply }) })
+    if (apply) await loadRelations()
+    message.value = apply ? `已应用 ${autoDiscovery.value.applied + autoDiscovery.value.updated} 条自动关联` : `自动发现扫描 ${autoDiscovery.value.scanned} 个资源，匹配 ${autoDiscovery.value.matched} 个资产`
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '自动发现关联失败'
+  } finally {
+    relationSaving.value = false
+  }
+}
+
+async function loadImpact(item:ResourceRelation) {
+  relationLoading.value = true
+  try {
+    const query = new URLSearchParams({ resourceType:item.resourceType, resourceId:item.resourceId })
+    impact.value = await request<ImpactAnalysis>(`/api/v1/cicd/relations/impact?${query}`)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '影响分析加载失败'
+  } finally {
+    relationLoading.value = false
+  }
 }
 
 async function loadRelations() {
@@ -370,7 +401,7 @@ onMounted(load)
         <template v-else-if="tab==='relations'">
           <div class="integration-toolbar">
             <div><strong>资源关系治理</strong><span>把 CI/CD 资源关联到 CMDB 资产，支持智能匹配和手工维护。</span></div>
-            <button :disabled="relationLoading" @click="loadRelations"><RefreshCw :class="{spin:relationLoading}"/>刷新关系</button>
+            <div><button :disabled="relationSaving" @click="autoDiscoverRelations(false)"><Radar/>自动发现关系</button><button :disabled="relationLoading" @click="loadRelations"><RefreshCw :class="{spin:relationLoading}"/>刷新关系</button></div>
           </div>
           <div class="relation-layout">
             <form class="relation-form" @submit.prevent="saveRelation">
@@ -391,8 +422,16 @@ onMounted(load)
           </div>
           <div class="relation-list">
             <header><strong>已维护关系</strong><span>删除关联不会修改外部 CI/CD 系统</span></header>
-            <article v-for="item in relations" :key="item.id"><div><strong>{{item.resourceName}}</strong><small>{{relationResourceTypeLabel(item.resourceType)}} · {{item.resourceId}}</small></div><b>{{relationTypeLabel(item.relationType)}}</b><div><strong>{{item.assetName}}</strong><small>{{item.assetType}} · {{item.assetId}}</small></div><button :disabled="relationSaving" @click="deleteRelation(item.id)">删除</button></article>
+            <article v-for="item in relations" :key="item.id"><div><strong>{{item.resourceName}}</strong><small>{{relationResourceTypeLabel(item.resourceType)}} · {{item.resourceId}}</small></div><b>{{relationTypeLabel(item.relationType)}}</b><div><strong>{{item.assetName}}</strong><small>{{item.assetType}} · {{item.assetId}}</small></div><div class="relation-actions"><button @click="loadImpact(item)">影响分析</button><button :disabled="relationSaving" @click="deleteRelation(item.id)">删除</button></div></article>
             <div v-if="!relations.length" class="resource-empty">暂未维护资源关系</div>
+          </div>
+          <div v-if="autoDiscovery" class="auto-discovery-result">
+            <header><div><strong>自动发现结果</strong><span>扫描 {{autoDiscovery.scanned}} · 匹配 {{autoDiscovery.matched}} · 已应用 {{autoDiscovery.applied}} · 更新 {{autoDiscovery.updated}} · 跳过 {{autoDiscovery.skipped}}</span></div><button class="primary" :disabled="relationSaving||autoDiscovery.matched===0" @click="autoDiscoverRelations(true)">应用匹配</button></header>
+            <article v-for="item in autoDiscovery.items" :key="`${item.resourceType}/${item.resourceId}`"><div><strong>{{item.resourceName}}</strong><small>{{relationResourceTypeLabel(item.resourceType)}} · {{item.resourceId}}</small></div><b>{{item.assetName||'未匹配'}}</b><span>{{item.score}} 分 · {{item.reason||item.action}}</span></article>
+          </div>
+          <div v-if="impact" class="impact-panel">
+            <header><div><strong>影响分析</strong><span>{{relationResourceTypeLabel(impact.resourceType)}} · {{impact.resourceId}} · 影响 {{impact.impactCount}} 个资产</span></div><button @click="impact=undefined">关闭</button></header>
+            <div class="impact-columns"><section><h4>直接关联资产</h4><article v-for="item in impact.directAssets" :key="item.assetId"><strong>{{item.assetName}}</strong><span>{{item.assetType}} · {{item.status}} · {{relationTypeLabel(item.relationType)}}</span></article><p v-if="!impact.directAssets.length">暂无直接关联资产</p></section><section><h4>下游影响资产</h4><article v-for="item in impact.downstreamAssets" :key="`${item.fromAssetId}-${item.assetId}`"><strong>{{item.assetName}}</strong><span>{{item.assetType}} · {{item.status}} · 来自 {{item.fromAssetName}}</span></article><p v-if="!impact.downstreamAssets.length">暂无下游关联资产</p></section></div>
           </div>
         </template>
 
