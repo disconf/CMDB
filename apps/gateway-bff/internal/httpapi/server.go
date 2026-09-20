@@ -19,6 +19,7 @@ import (
 	"cmdb/gateway-bff/internal/assetgovernance"
 	"cmdb/gateway-bff/internal/audit"
 	"cmdb/gateway-bff/internal/auth"
+	"cmdb/gateway-bff/internal/cicd"
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/credentials"
 	"cmdb/gateway-bff/internal/dashboard"
@@ -90,6 +91,8 @@ func NewServer() *Server {
 	credentialsService := credentials.NewService()
 	k8sService := k8s.NewService(cmdbService)
 	auditService := audit.NewService()
+	cicdService := cicd.NewService()
+	registerCICDRoutes(mux, authService, auditService, cicdService)
 	registerRancherRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
@@ -3578,3 +3581,5 @@ func requestLogger(next http.Handler) http.Handler {
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
 	})
 }
+
+
