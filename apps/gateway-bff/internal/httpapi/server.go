@@ -2413,7 +2413,7 @@ func NewServer() *Server {
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
 		scope := newUserScope(cmdbService, user)
-		writeJSON(w, 200, filterJobs(jobsService.Jobs(), scope))
+		writeJSON(w, 200, filterJobsQuery(jobsService.Jobs(), r.URL.Query(), cmdbService, scope))
 	})
 	mux.HandleFunc("GET /api/v1/jobs/executions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {

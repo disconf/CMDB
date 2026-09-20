@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"fmt"
+	"net/url"
 	"strings"
+	"time"
 
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cmdb"
@@ -186,6 +189,106 @@ func filterJobs(items []jobs.Job, scope userScope) []jobs.Job {
 		}
 	}
 	return result
+}
+
+func filterJobsQuery(items []jobs.Job, query url.Values, cmdbService *cmdb.Service, scope userScope) []jobs.Job {
+	filtered := filterJobs(items, scope)
+	keyword := strings.ToLower(strings.TrimSpace(query.Get("q")))
+	statusFilter := strings.TrimSpace(query.Get("status"))
+	projectGroup := strings.TrimSpace(query.Get("projectGroup"))
+	tag := strings.TrimSpace(query.Get("tag"))
+	from, hasFrom := parseJobFilterTime(query.Get("from"), false)
+	to, hasTo := parseJobFilterTime(query.Get("to"), true)
+	if keyword == "" && statusFilter == "" && projectGroup == "" && tag == "" && !hasFrom && !hasTo {
+		return filtered
+	}
+	statuses := map[string]bool{}
+	for _, item := range strings.Split(statusFilter, ",") {
+		if value := strings.TrimSpace(item); value != "" {
+			statuses[value] = true
+		}
+	}
+	assets := map[string]cmdb.Asset{}
+	if projectGroup != "" || tag != "" {
+		for _, asset := range cmdbService.InventoryAssets() {
+			assets[asset.ID] = asset
+			if asset.IP != "" {
+				assets[asset.IP] = asset
+			}
+		}
+	}
+	result := make([]jobs.Job, 0, len(filtered))
+	for _, job := range filtered {
+		if len(statuses) > 0 && !statuses[job.Status] {
+			continue
+		}
+		if keyword != "" {
+			haystack := strings.ToLower(strings.Join([]string{job.ID, job.Name, job.Operator, strings.Join(job.Targets, ",")}, " "))
+			if !strings.Contains(haystack, keyword) {
+				continue
+			}
+		}
+		if projectGroup != "" || tag != "" {
+			matched := false
+			for _, target := range job.Targets {
+				asset, ok := assets[target]
+				if !ok {
+					continue
+				}
+				if projectGroup != "" && asset.ProjectGroup == projectGroup {
+					matched = true
+				}
+				if tag != "" {
+					for _, item := range asset.Tags {
+						if item == tag {
+							matched = true
+							break
+						}
+					}
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		if hasFrom || hasTo {
+			started, err := parseJobStartedAt(job.StartedAt)
+			if err != nil || (hasFrom && started.Before(from)) || (hasTo && started.After(to)) {
+				continue
+			}
+		}
+		result = append(result, job)
+	}
+	return result
+}
+
+func parseJobStartedAt(value string) (time.Time, error) {
+	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
+		if parsed, err := time.ParseInLocation(layout, strings.TrimSpace(value), time.Local); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid job start time %q", value)
+}
+
+func parseJobFilterTime(value string, endOfDay bool) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02", value, time.Local); err == nil {
+		if endOfDay {
+			return parsed.Add(24*time.Hour - time.Second), true
+		}
+		return parsed, true
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02 15:04:05", value, time.Local); err == nil {
+		return parsed, true
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, true
+	}
+	return time.Time{}, false
 }
 
 func filterSchedules(items []jobs.Schedule, scope userScope) []jobs.Schedule {
