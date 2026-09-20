@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Box, Check, Clock3, GitCommit, KeyRound, Play, RefreshCw, RotateCcw, Rocket, ShieldAlert, ShieldCheck, XCircle } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { releaseStatusLabel } from '@/features/releases/releasesModel'
-import { integrationDetailLabel, integrationStatusLabel, integrationTypeLabel, summarizeIntegrations, type CICDIntegration } from '@/features/releases/cicdModel'
+import { argoHealthLabel, argoSyncLabel, integrationDetailLabel, integrationStatusLabel, integrationTypeLabel, pipelineStatusLabel, summarizeIntegrations, type CICDIntegration, type CICDResources } from '@/features/releases/cicdModel'
 
 type Stage = { id:string; name:string; status:string; duration:string; message:string }
 type Release = { id:string; application:string; version:string; previousVersion:string; environment:string; status:string; progress:number; operator:string; startedAt:string; strategy:string; approval:string; approvalType?:string; approvalRequester?:string; approvalComment?:string; approvedBy?:string; approvedAt?:string; authorizationExpiresAt?:string; authorizationUsedAt?:string; ticketId:string; source:string; externalId:string; commit:string; stages:Stage[] }
@@ -11,12 +11,13 @@ type Artifact = { id:string; application:string; version:string; commit:string; 
 type Summary = { today:number; running:number; success:number; failed:number; successRate:number }
 type Executor = { mode:string; ready:boolean; endpoint?:string }
 type ApprovalResponse = { release:Release; authorizationToken:string; expiresAt:string }
-type Tab = 'releases' | 'artifacts' | 'integrations'
+type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources'
 
 const auth = useAuthStore()
 const releases = ref<Release[]>([])
 const artifacts = ref<Artifact[]>([])
 const integrations = ref<CICDIntegration[]>([])
+const resources = ref<CICDResources>()
 const summary = ref<Summary>()
 const executor = ref<Executor>()
 const selected = ref<Release>()
@@ -24,6 +25,7 @@ const tab = ref<Tab>('releases')
 const loading = ref(false)
 const busy = ref(false)
 const integrationTesting = ref('')
+const resourcesLoading = ref(false)
 const message = ref('')
 const error = ref('')
 const approvalComment = ref('')
@@ -57,6 +59,7 @@ async function load(preferredId?:string) {
     integrations.value = nextIntegrations
     const id = preferredId || selected.value?.id
     if (id) selected.value = releases.value.find(item => item.id === id)
+    if (!resources.value) void loadResources()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '发布数据加载失败'
   } finally {
@@ -100,6 +103,26 @@ async function testAllIntegrations() {
   } finally {
     integrationTesting.value = ''
   }
+}
+
+async function loadResources(force=false) {
+  resourcesLoading.value = true
+  error.value = ''
+  try {
+    resources.value = force
+      ? await request<CICDResources>('/api/v1/cicd/resources/refresh', { method:'POST' })
+      : await request<CICDResources>('/api/v1/cicd/resources')
+    message.value = `CI/CD 资源数据已更新：${formatCheckedAt(resources.value.generatedAt)}`
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'CI/CD 资源数据加载失败'
+  } finally {
+    resourcesLoading.value = false
+  }
+}
+
+function openTab(next:Tab) {
+  tab.value = next
+  if (next === 'resources' && !resources.value) void loadResources()
 }
 
 async function start() {
@@ -202,6 +225,13 @@ onMounted(load)
       <article><XCircle/><span>连接异常<strong>{{integrationSummary.errors}}</strong></span></article>
       <article><ShieldAlert/><span>未配置<strong>{{integrationSummary.notConfigured}}</strong></span></article>
     </div>
+    <div v-else-if="tab==='resources'" class="release-summary">
+      <article><Box/><span>镜像仓库<strong>{{resources?.harbor.repositories||0}}</strong></span></article>
+      <article><Check/><span>Argo 应用<strong>{{resources?.argoCD.applications||0}}</strong></span></article>
+      <article><ShieldCheck/><span>已同步<strong>{{resources?.argoCD.synced||0}}</strong></span></article>
+      <article><ShieldAlert/><span>异常应用<strong>{{resources?.argoCD.degraded||0}}</strong></span></article>
+      <article><GitCommit/><span>代码项目<strong>{{resources?.gitlab.projects||0}}</strong></span></article>
+    </div>
     <div v-else class="release-summary">
       <article><Rocket/><span>今日发布<strong>{{summary?.today||0}}</strong></span></article>
       <article><Clock3/><span>发布中<strong>{{summary?.running||0}}</strong></span></article>
@@ -212,7 +242,7 @@ onMounted(load)
 
     <div class="release-workspace">
       <main>
-        <nav><button :class="{active:tab==='releases'}" @click="tab='releases'">发布流水线</button><button :class="{active:tab==='artifacts'}" @click="tab='artifacts'">制品仓库</button><button :class="{active:tab==='integrations'}" @click="tab='integrations'">CI/CD 集成</button></nav>
+        <nav><button :class="{active:tab==='releases'}" @click="openTab('releases')">发布流水线</button><button :class="{active:tab==='artifacts'}" @click="openTab('artifacts')">制品仓库</button><button :class="{active:tab==='integrations'}" @click="openTab('integrations')">CI/CD 集成</button><button :class="{active:tab==='resources'}" @click="openTab('resources')">资源总览</button></nav>
 
         <template v-if="tab==='releases'">
           <article v-for="item in releases" :key="item.id" class="release-card" :class="{selected:selected?.id===item.id}" @click="selected=item">
@@ -228,7 +258,41 @@ onMounted(load)
           <div v-if="!artifacts.length" class="empty-release">暂无制品记录</div>
         </template>
 
-        <template v-else>
+        <template v-else-if="tab==='resources'">
+          <div class="integration-toolbar">
+            <div><strong>CI/CD 资源总览</strong><span>展示 Harbor 仓库、Argo CD 应用同步状态和 GitLab 项目链路，数据缓存 30 秒。</span></div>
+            <button :disabled="resourcesLoading" @click="loadResources(true)"><RefreshCw :class="{spin:resourcesLoading}"/>刷新资源</button>
+          </div>
+          <div v-if="resources" class="resource-grid">
+            <article class="resource-card">
+              <header><i><Box/></i><div><small>CONTAINER REGISTRY</small><h3>Harbor 镜像仓库</h3></div><em :data-status="resources.harbor.status">{{resources.harbor.message}}</em></header>
+              <div class="resource-kpis"><span>项目<strong>{{resources.harbor.projects}}</strong></span><span>仓库<strong>{{resources.harbor.repositories}}</strong></span></div>
+              <div class="resource-list">
+                <article v-for="repo in resources.harbor.recentRepositories" :key="`${repo.project}/${repo.name}`"><div><strong>{{repo.project}}/{{repo.name}}</strong><small>更新 {{formatCheckedAt(repo.updatedAt)}}</small></div><span>制品 {{repo.artifactCount}} · 拉取 {{repo.pullCount}}</span></article>
+                <div v-if="!resources.harbor.recentRepositories.length" class="resource-empty">暂无可见仓库数据</div>
+              </div>
+            </article>
+            <article class="resource-card resource-card-wide">
+              <header><i><Rocket/></i><div><small>GITOPS DELIVERY</small><h3>Argo CD 应用状态</h3></div><em :data-status="resources.argoCD.status">{{resources.argoCD.message}}</em></header>
+              <div class="resource-kpis"><span>应用<strong>{{resources.argoCD.applications}}</strong></span><span>健康<strong>{{resources.argoCD.healthy}}</strong></span><span>已同步<strong>{{resources.argoCD.synced}}</strong></span><span>待同步<strong>{{resources.argoCD.outOfSync}}</strong></span><span>异常<strong>{{resources.argoCD.degraded}}</strong></span></div>
+              <div class="resource-list">
+                <article v-for="app in resources.argoCD.items" :key="`${app.namespace}/${app.name}`"><div><strong>{{app.name}}</strong><small>{{app.project}} · {{app.destination}} · {{app.revision||'无版本信息'}}</small></div><div class="resource-badges"><span :data-status="app.syncStatus">{{argoSyncLabel(app.syncStatus)}}</span><span :data-status="app.healthStatus">{{argoHealthLabel(app.healthStatus)}}</span></div></article>
+                <div v-if="!resources.argoCD.items.length" class="resource-empty">暂无 Argo CD 应用数据</div>
+              </div>
+            </article>
+            <article class="resource-card resource-card-wide">
+              <header><i><GitCommit/></i><div><small>SOURCE CONTROL</small><h3>GitLab 项目与 Pipeline</h3></div><em :data-status="resources.gitlab.status">{{resources.gitlab.message}}</em></header>
+              <div v-if="resources.gitlab.available" class="resource-list">
+                <article v-for="project in resources.gitlab.recentProjects" :key="project.id"><div><strong>{{project.name}}</strong><small>{{project.path}} · 默认分支 {{project.defaultBranch||'—'}}</small></div><div class="resource-badges"><span v-if="project.latestPipeline" :data-status="project.latestPipeline.status">{{pipelineStatusLabel(project.latestPipeline.status)}}</span><a v-if="project.webUrl" :href="project.webUrl" target="_blank" rel="noreferrer">打开项目</a></div></article>
+                <div v-if="!resources.gitlab.recentProjects.length" class="resource-empty">暂无项目数据</div>
+              </div>
+              <div v-else class="resource-empty">配置 GitLab 地址与 Token 后，这里会展示项目、默认分支和最近 Pipeline 状态。</div>
+            </article>
+          </div>
+          <div v-else class="empty-release"><RefreshCw :class="{spin:resourcesLoading}"/><strong>正在读取 CI/CD 资源</strong><span>请稍候</span></div>
+        </template>
+
+        <template v-else-if="tab==='integrations'">
           <div class="integration-toolbar">
             <div><strong>CI/CD 工具链接</strong><span>统一检测 Harbor、Argo CD、GitLab 的连接与认证状态</span></div>
             <button :disabled="integrationTesting!==''" @click="testAllIntegrations"><RefreshCw :class="{spin:integrationTesting==='all'}"/>检测全部</button>
@@ -256,7 +320,13 @@ onMounted(load)
       </main>
 
       <aside class="release-detail">
-        <template v-if="tab==='integrations'">
+        <template v-if="tab==='resources'">
+          <span>RESOURCE OVERVIEW</span><h2>资源同步视图</h2>
+          <p class="resource-aside-note">Harbor 展示项目与最近更新的镜像仓库；Argo CD 展示应用同步与健康状态；GitLab 配置后展示项目、默认分支和 Pipeline。</p>
+          <div class="integration-principle"><Clock3/><span>资源数据为实时读取并在 Gateway 内存缓存 30 秒；点击刷新资源可立即重新读取。</span></div>
+        </template>
+
+        <template v-else-if="tab==='integrations'">
           <span>INTEGRATION GUIDE</span><h2>连接器使用说明</h2>
           <div class="integration-guide"><Box/><div><strong>Harbor</strong><span>同步镜像、版本和安全扫描结果，作为发布制品来源。</span></div></div>
           <div class="integration-guide"><Rocket/><div><strong>Argo CD</strong><span>读取应用同步状态，并把部署结果回写到发布流水线。</span></div></div>

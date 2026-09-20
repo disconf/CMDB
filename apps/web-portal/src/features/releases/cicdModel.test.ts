@@ -22,3 +22,12 @@ describe('CI/CD integration model', () => {
     expect(integrationDetailLabel('authMode')).toBe('认证方式')
   })
 })
+import { argoHealthLabel, argoSyncLabel, pipelineStatusLabel } from './cicdModel'
+
+describe('CI/CD resource labels', () => {
+  it('translates Argo CD and pipeline states', () => {
+    expect(argoSyncLabel('Synced')).toBe('已同步')
+    expect(argoHealthLabel('Degraded')).toBe('异常')
+    expect(pipelineStatusLabel('success')).toBe('成功')
+  })
+})

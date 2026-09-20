@@ -47,3 +47,37 @@ export const summarizeIntegrations = (items: CICDIntegration[]): CICDIntegration
   errors: items.filter(item => item.status === 'error').length,
   notConfigured: items.filter(item => item.status === 'not_configured').length,
 })
+
+export type CICDResources = {
+  generatedAt: string
+  harbor: {
+    available: boolean
+    status: CICDIntegration['status']
+    message: string
+    projects: number
+    repositories: number
+    recentRepositories: Array<{ project:string; name:string; artifactCount:number; pullCount:number; updatedAt?:string }>
+  }
+  argoCD: {
+    available: boolean
+    status: CICDIntegration['status']
+    message: string
+    applications: number
+    healthy: number
+    degraded: number
+    synced: number
+    outOfSync: number
+    items: Array<{ name:string; namespace:string; project:string; destination:string; syncStatus:string; healthStatus:string; revision?:string; lastOperation?:string; updatedAt?:string }>
+  }
+  gitlab: {
+    available: boolean
+    status: CICDIntegration['status']
+    message: string
+    projects: number
+    recentProjects: Array<{ id:number; name:string; path:string; visibility?:string; defaultBranch?:string; lastActivityAt?:string; webUrl?:string; latestPipeline?:{ status:string; ref?:string; sha?:string; updatedAt?:string; webUrl?:string } }>
+  }
+}
+
+export const argoSyncLabel = (status:string) => ({ Synced:'已同步', OutOfSync:'待同步', Unknown:'未知' }[status] || status)
+export const argoHealthLabel = (status:string) => ({ Healthy:'健康', Degraded:'异常', Progressing:'进行中', Missing:'缺失', Unknown:'未知' }[status] || status)
+export const pipelineStatusLabel = (status:string) => ({ success:'成功', failed:'失败', running:'执行中', pending:'等待中', canceled:'已取消', skipped:'已跳过', manual:'手动', created:'已创建' }[status] || status)

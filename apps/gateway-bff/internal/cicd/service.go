@@ -69,6 +69,10 @@ type Service struct {
 	integrations map[string]Integration
 	client       *http.Client
 	db           *sql.DB
+
+	resourceMu    sync.Mutex
+	resourceCache ResourceOverview
+	resourceAt    time.Time
 }
 
 type probeResult struct {

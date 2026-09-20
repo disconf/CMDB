@@ -41,4 +41,24 @@ func registerCICDRoutes(mux *http.ServeMux, authService *auth.Service, auditServ
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+
+	mux.HandleFunc("GET /api/v1/cicd/resources", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:view") {
+			return
+		}
+		force := r.URL.Query().Get("refresh") == "true"
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, service.Resources(r.Context(), force))
+	})
+
+	mux.HandleFunc("POST /api/v1/cicd/resources/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:manage") {
+			return
+		}
+		overview := service.Resources(r.Context(), true)
+		if user, err := authService.CurrentUser(bearerToken(r)); err == nil {
+			auditService.Record(user.Username, "cicd.resources.refresh", "resources", overview.GeneratedAt)
+		}
+		writeJSON(w, http.StatusOK, overview)
+	})
 }
