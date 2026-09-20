@@ -71,3 +71,14 @@ func TestCommentAndSummary(t *testing.T) {
 		t.Fatalf("summary: %#v %v", summary, err)
 	}
 }
+
+func TestTicketLinksTaskAndRelease(t *testing.T) {
+	service := NewService()
+	item, err := service.Create(CreateInput{Title: "关联交付", Type: "change", Priority: "medium", Applicant: "tester", RelatedTask: "job-1", RelatedRelease: "release-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.RelatedTask != "job-1" || item.RelatedRelease != "release-1" {
+		t.Fatalf("ticket links not stored: %#v", item)
+	}
+}

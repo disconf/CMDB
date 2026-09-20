@@ -16,6 +16,8 @@ export type Ticket = {
   risk: string
   relatedAsset: string
   relatedAlert: string
+  relatedTask: string
+  relatedRelease: string
   projectGroup: string
   automationTemplate: string
   steps: TicketStep[]
@@ -29,6 +31,8 @@ export type TicketInput = {
   description: string
   relatedAsset: string
   relatedAlert: string
+  relatedTask: string
+  relatedRelease: string
   projectGroup: string
   automationTemplate: string
 }

@@ -55,6 +55,8 @@ type Ticket struct {
 	Risk               string  `json:"risk"`
 	RelatedAsset       string  `json:"relatedAsset"`
 	RelatedAlert       string  `json:"relatedAlert"`
+	RelatedTask        string  `json:"relatedTask"`
+	RelatedRelease     string  `json:"relatedRelease"`
 	ProjectGroup       string  `json:"projectGroup"`
 	AutomationTemplate string  `json:"automationTemplate"`
 	Steps              []Step  `json:"steps"`
@@ -73,6 +75,8 @@ type CreateInput struct {
 	Description        string `json:"description"`
 	RelatedAsset       string `json:"relatedAsset"`
 	RelatedAlert       string `json:"relatedAlert"`
+	RelatedTask        string `json:"relatedTask"`
+	RelatedRelease     string `json:"relatedRelease"`
 	ProjectGroup       string `json:"projectGroup"`
 	AutomationTemplate string `json:"automationTemplate"`
 }
@@ -274,7 +278,7 @@ func buildTicket(id string, in CreateInput, now time.Time) Ticket {
 	item := Ticket{
 		ID: id, Title: in.Title, Type: in.Type, Priority: in.Priority, Status: StatusPending,
 		Applicant: in.Applicant, Assignee: assignee, Description: strings.TrimSpace(in.Description),
-		RelatedAsset: strings.TrimSpace(in.RelatedAsset), RelatedAlert: strings.TrimSpace(in.RelatedAlert),
+		RelatedAsset: strings.TrimSpace(in.RelatedAsset), RelatedAlert: strings.TrimSpace(in.RelatedAlert), RelatedTask: strings.TrimSpace(in.RelatedTask), RelatedRelease: strings.TrimSpace(in.RelatedRelease),
 		ProjectGroup: strings.TrimSpace(in.ProjectGroup), AutomationTemplate: strings.TrimSpace(in.AutomationTemplate),
 		Risk: riskForPriority(in.Priority), Steps: steps,
 		Timeline:  []Event{{Time: now.Format("2006-01-02 15:04"), Actor: in.Applicant, Action: "提交工单", Comment: strings.TrimSpace(in.Description)}},

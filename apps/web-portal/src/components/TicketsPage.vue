@@ -19,7 +19,7 @@ const newComment = ref('')
 const assigneeDraft = ref('')
 const errorMessage = ref('')
 
-const emptyForm = (): TicketInput => ({ title: '', type: 'change', priority: 'medium', description: '', relatedAsset: '', relatedAlert: '', projectGroup: '', automationTemplate: '' })
+const emptyForm = (): TicketInput => ({ title: '', type: 'change', priority: 'medium', description: '', relatedAsset: '', relatedAlert: '', relatedTask: '', relatedRelease: '', projectGroup: '', automationTemplate: '' })
 const form = reactive<TicketInput>(emptyForm())
 
 const visible = computed(() => tickets.value.filter(item => {
