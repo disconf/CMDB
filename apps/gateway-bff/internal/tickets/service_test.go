@@ -3,6 +3,7 @@ package tickets
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestCreateApproveAndClose(t *testing.T) {
@@ -80,5 +81,30 @@ func TestTicketLinksTaskAndRelease(t *testing.T) {
 	}
 	if item.RelatedTask != "job-1" || item.RelatedRelease != "release-1" {
 		t.Fatalf("ticket links not stored: %#v", item)
+	}
+}
+
+func TestSLAEscalationUpdatesOwnerAndTimeline(t *testing.T) {
+	service := NewService()
+	item, err := service.Create(CreateInput{Title: "SLA升级验证", Type: "incident", Priority: "medium", Applicant: "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	for i := range service.tickets {
+		if service.tickets[i].ID == item.ID {
+			service.tickets[i].createdAt = time.Now().Add(-24 * time.Hour)
+			service.tickets[i].updatedAt = service.tickets[i].createdAt
+			service.tickets[i].slaDueAt = time.Now().Add(-12 * time.Hour)
+		}
+	}
+	service.mu.Unlock()
+	count, err := service.EscalateOverdue()
+	if err != nil || count != 1 {
+		t.Fatalf("escalation count=%d err=%v", count, err)
+	}
+	updated, err := service.Get(item.ID)
+	if err != nil || updated.EscalationLevel < 2 || updated.EscalatedAt == "" || updated.Assignee == "" {
+		t.Fatalf("ticket not escalated: %#v err=%v", updated, err)
 	}
 }

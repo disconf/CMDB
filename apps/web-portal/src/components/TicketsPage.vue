@@ -179,7 +179,7 @@ onMounted(load)
             <span>关联资产<b>{{ selected.relatedAsset || '—' }}</b></span>
             <span>关联告警<b>{{ selected.relatedAlert || '—' }}</b></span>
             <span>项目组<b>{{ selected.projectGroup || '—' }}</b></span>
-            <span>变更风险<b :data-risk="selected.risk">{{ selected.risk }}</b></span>
+            <span>变更风险<b :data-risk="selected.risk">{{ selected.risk }}</b></span><span v-if="selected.escalationLevel">SLA升级<b>第 {{ selected.escalationLevel }} 级 · {{ selected.escalatedAt }}</b></span>
           </div>
 
           <div class="assignee-row">

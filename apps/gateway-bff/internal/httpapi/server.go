@@ -68,6 +68,7 @@ func NewServer() *Server {
 	jobsService := jobs.NewService()
 	go jobsService.RunScheduler(context.Background())
 	ticketsService := tickets.NewService()
+	go ticketsService.RunSLAEscalation(context.Background(), time.Minute)
 	jobsService.SetTerminalHandler(func(job jobs.Job) { handleJobTerminal(job, monitorService, ticketsService, cmdbService) })
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()

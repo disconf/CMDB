@@ -59,6 +59,8 @@ type Ticket struct {
 	RelatedRelease     string  `json:"relatedRelease"`
 	ProjectGroup       string  `json:"projectGroup"`
 	AutomationTemplate string  `json:"automationTemplate"`
+	EscalationLevel    int     `json:"escalationLevel"`
+	EscalatedAt        string  `json:"escalatedAt,omitempty"`
 	Steps              []Step  `json:"steps"`
 	Timeline           []Event `json:"timeline"`
 
@@ -178,6 +180,81 @@ func (s *Service) List() ([]Ticket, error) {
 		applyDerived(&out[i], time.Now())
 	}
 	return out, nil
+}
+
+func (s *Service) RunSLAEscalation(ctx context.Context, interval time.Duration) {
+	if interval < 30*time.Second {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		_, _ = s.EscalateOverdue()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) EscalateOverdue() (int, error) {
+	items, err := s.List()
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	escalated := 0
+	for _, item := range items {
+		if !item.statusActive() || item.slaDueAt.IsZero() || now.Before(item.slaDueAt) {
+			continue
+		}
+		level := slaEscalationLevel(item, now)
+		if level <= item.EscalationLevel {
+			continue
+		}
+		_, err := s.mutate(item.ID, func(current *Ticket, at time.Time) error {
+			if !current.statusActive() {
+				return ErrInvalidState
+			}
+			current.EscalationLevel = level
+			current.EscalatedAt = at.Format("2006-01-02 15:04")
+			switch level {
+			case 1:
+				current.Assignee = "运维值班组长"
+				current.Priority = "high"
+			case 2:
+				current.Assignee = "运维经理"
+				current.Priority = "critical"
+			default:
+				current.Assignee = "平台负责人"
+				current.Priority = "critical"
+			}
+			current.Risk = riskForPriority(current.Priority)
+			current.Timeline = append(current.Timeline, Event{Time: current.EscalatedAt, Actor: "SLA引擎", Action: "SLA超时升级", Comment: fmt.Sprintf("工单已超过SLA，升级至第 %d 级，处理人：%s", level, current.Assignee)})
+			return nil
+		})
+		if err != nil {
+			return escalated, err
+		}
+		escalated++
+	}
+	return escalated, nil
+}
+
+func slaEscalationLevel(item Ticket, now time.Time) int {
+	overdue := now.Sub(item.slaDueAt)
+	base := slaDuration(item.Priority)
+	if base <= 0 {
+		base = 4 * time.Hour
+	}
+	if overdue >= 2*base {
+		return 3
+	}
+	if overdue >= base {
+		return 2
+	}
+	return 1
 }
 
 func (s *Service) Summary() (Summary, error) {

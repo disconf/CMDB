@@ -20,6 +20,8 @@ export type Ticket = {
   relatedRelease: string
   projectGroup: string
   automationTemplate: string
+  escalationLevel: number
+  escalatedAt?: string
   steps: TicketStep[]
   timeline: TicketEvent[]
 }
