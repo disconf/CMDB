@@ -139,6 +139,7 @@ func normalizeScheduleInput(input ScheduleInput, template Template) (ScheduleInp
 	input.Timezone = strings.TrimSpace(input.Timezone)
 	input.ConcurrencyPolicy = strings.ToLower(strings.TrimSpace(input.ConcurrencyPolicy))
 	input.MissedPolicy = strings.ToLower(strings.TrimSpace(input.MissedPolicy))
+	input.RetryMax, input.RetryIntervalSeconds = normalizeRetryPolicy(input.RetryMax, input.RetryIntervalSeconds)
 	if input.Timezone == "" {
 		input.Timezone = "Asia/Shanghai"
 	}
@@ -203,7 +204,7 @@ func (s *Service) CreateSchedule(input ScheduleInput, createdBy string) (Schedul
 	if err != nil {
 		return Schedule{}, ErrValidation
 	}
-	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, PlaybookID: playbook.ID, PlaybookName: playbook.Name, Variables: cloneStringMap(input.Variables), Parameters: cloneStringMap(input.Parameters), Targets: append([]string(nil), input.Targets...), Cron: input.Cron, Timezone: input.Timezone, ConcurrencyPolicy: input.ConcurrencyPolicy, MissedPolicy: input.MissedPolicy, TimeoutSeconds: input.TimeoutSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTimeIn(location, next), CreatedBy: createdBy}
+	schedule := Schedule{ID: scheduleID(), Name: input.Name, TemplateID: template.ID, TemplateName: template.Name, PlaybookID: playbook.ID, PlaybookName: playbook.Name, Variables: cloneStringMap(input.Variables), Parameters: cloneStringMap(input.Parameters), Targets: append([]string(nil), input.Targets...), Cron: input.Cron, Timezone: input.Timezone, ConcurrencyPolicy: input.ConcurrencyPolicy, MissedPolicy: input.MissedPolicy, TimeoutSeconds: input.TimeoutSeconds, RetryMax: input.RetryMax, RetryIntervalSeconds: input.RetryIntervalSeconds, CredentialID: input.CredentialID, Enabled: *input.Enabled, NextRun: formatScheduleTimeIn(location, next), CreatedBy: createdBy}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schedules = append([]Schedule{schedule}, s.schedules...)
@@ -247,6 +248,8 @@ func (s *Service) UpdateSchedule(id string, input ScheduleInput) (Schedule, erro
 		s.schedules[i].ConcurrencyPolicy = input.ConcurrencyPolicy
 		s.schedules[i].MissedPolicy = input.MissedPolicy
 		s.schedules[i].TimeoutSeconds = input.TimeoutSeconds
+		s.schedules[i].RetryMax = input.RetryMax
+		s.schedules[i].RetryIntervalSeconds = input.RetryIntervalSeconds
 		s.schedules[i].CredentialID = input.CredentialID
 		s.schedules[i].Enabled = *input.Enabled
 		if s.schedules[i].Enabled {
@@ -427,7 +430,7 @@ func (s *Service) RunSchedule(id, operator string, advance bool) (Job, error) {
 			}
 		}
 	}
-	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, PlaybookID: schedule.PlaybookID, Variables: cloneStringMap(schedule.Variables), Parameters: cloneStringMap(schedule.Parameters), Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds, CredentialID: schedule.CredentialID})
+	job, err := s.Create(CreateInput{TemplateID: schedule.TemplateID, PlaybookID: schedule.PlaybookID, Variables: cloneStringMap(schedule.Variables), Parameters: cloneStringMap(schedule.Parameters), Targets: schedule.Targets, Operator: operator, TimeoutSeconds: schedule.TimeoutSeconds, CredentialID: schedule.CredentialID, RetryMax: schedule.RetryMax, RetryIntervalSeconds: schedule.RetryIntervalSeconds})
 	if err == nil && job.Status == "pending" {
 		job, err = s.Run(job.ID)
 	}

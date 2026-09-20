@@ -21,28 +21,32 @@ var ErrUnsafeCommand = errors.New("unsafe command")
 var ErrScheduleConflict = errors.New("schedule conflict")
 
 type Template struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Category    string            `json:"category"`
-	Description string            `json:"description"`
-	Command     string            `json:"command,omitempty"`
-	PlaybookID  string            `json:"playbookId,omitempty"`
-	Parameters  map[string]string `json:"parameters,omitempty"`
-	Version     int               `json:"version"`
-	Risk        string            `json:"risk"`
-	LastRun     string            `json:"lastRun"`
-	Enabled     bool              `json:"enabled"`
-	UpdatedAt   string            `json:"updatedAt,omitempty"`
-	UpdatedBy   string            `json:"updatedBy,omitempty"`
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Category             string            `json:"category"`
+	Description          string            `json:"description"`
+	Command              string            `json:"command,omitempty"`
+	PlaybookID           string            `json:"playbookId,omitempty"`
+	Parameters           map[string]string `json:"parameters,omitempty"`
+	Version              int               `json:"version"`
+	Risk                 string            `json:"risk"`
+	RetryMax             int               `json:"retryMax"`
+	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
+	LastRun              string            `json:"lastRun"`
+	Enabled              bool              `json:"enabled"`
+	UpdatedAt            string            `json:"updatedAt,omitempty"`
+	UpdatedBy            string            `json:"updatedBy,omitempty"`
 }
 type TemplateInput struct {
-	Name        string            `json:"name"`
-	Category    string            `json:"category"`
-	Description string            `json:"description"`
-	Command     string            `json:"command"`
-	PlaybookID  string            `json:"playbookId"`
-	Parameters  map[string]string `json:"parameters"`
-	Risk        string            `json:"risk"`
+	Name                 string            `json:"name"`
+	Category             string            `json:"category"`
+	Description          string            `json:"description"`
+	Command              string            `json:"command"`
+	PlaybookID           string            `json:"playbookId"`
+	Parameters           map[string]string `json:"parameters"`
+	Risk                 string            `json:"risk"`
+	RetryMax             int               `json:"retryMax"`
+	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
 }
 type Playbook struct {
 	ID          string            `json:"id"`
@@ -84,76 +88,84 @@ type TargetResult struct {
 }
 
 type Job struct {
-	ID              string            `json:"id"`
-	TemplateID      string            `json:"templateId"`
-	TemplateVersion int               `json:"templateVersion"`
-	Name            string            `json:"name"`
-	Targets         []string          `json:"targets"`
-	Status          string            `json:"status"`
-	Progress        int               `json:"progress"`
-	Operator        string            `json:"operator"`
-	StartedAt       string            `json:"startedAt"`
-	Duration        string            `json:"duration"`
-	Logs            []Log             `json:"logs"`
-	TimeoutSeconds  int               `json:"timeoutSeconds"`
-	Attempt         int               `json:"attempt"`
-	ApprovedBy      string            `json:"approvedBy"`
-	PlaybookID      string            `json:"playbookId"`
-	PlaybookVersion int               `json:"playbookVersion"`
-	CredentialID    string            `json:"credentialId"`
-	Variables       map[string]string `json:"variables"`
-	Parameters      map[string]string `json:"parameters,omitempty"`
-	TargetResults   []TargetResult    `json:"targetResults,omitempty"`
-	ArtifactKeys    []string          `json:"artifactKeys,omitempty"`
+	ID                   string            `json:"id"`
+	TemplateID           string            `json:"templateId"`
+	TemplateVersion      int               `json:"templateVersion"`
+	Name                 string            `json:"name"`
+	Targets              []string          `json:"targets"`
+	Status               string            `json:"status"`
+	Progress             int               `json:"progress"`
+	Operator             string            `json:"operator"`
+	StartedAt            string            `json:"startedAt"`
+	Duration             string            `json:"duration"`
+	Logs                 []Log             `json:"logs"`
+	TimeoutSeconds       int               `json:"timeoutSeconds"`
+	Attempt              int               `json:"attempt"`
+	RetryMax             int               `json:"retryMax"`
+	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
+	ApprovedBy           string            `json:"approvedBy"`
+	PlaybookID           string            `json:"playbookId"`
+	PlaybookVersion      int               `json:"playbookVersion"`
+	CredentialID         string            `json:"credentialId"`
+	Variables            map[string]string `json:"variables"`
+	Parameters           map[string]string `json:"parameters,omitempty"`
+	TargetResults        []TargetResult    `json:"targetResults,omitempty"`
+	ArtifactKeys         []string          `json:"artifactKeys,omitempty"`
 }
 type Schedule struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	TemplateID        string            `json:"templateId,omitempty"`
-	TemplateName      string            `json:"templateName,omitempty"`
-	PlaybookID        string            `json:"playbookId,omitempty"`
-	PlaybookName      string            `json:"playbookName,omitempty"`
-	Variables         map[string]string `json:"variables,omitempty"`
-	Parameters        map[string]string `json:"parameters,omitempty"`
-	Targets           []string          `json:"targets"`
-	Cron              string            `json:"cron"`
-	TimeoutSeconds    int               `json:"timeoutSeconds"`
-	Enabled           bool              `json:"enabled"`
-	NextRun           string            `json:"nextRun"`
-	LastRun           string            `json:"lastRun"`
-	LastStatus        string            `json:"lastStatus"`
-	LastJobID         string            `json:"lastJobId"`
-	CreatedBy         string            `json:"createdBy"`
-	CredentialID      string            `json:"credentialId"`
-	Timezone          string            `json:"timezone"`
-	ConcurrencyPolicy string            `json:"concurrencyPolicy"`
-	MissedPolicy      string            `json:"missedPolicy"`
-	NextRuns          []string          `json:"nextRuns,omitempty"`
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	TemplateID           string            `json:"templateId,omitempty"`
+	TemplateName         string            `json:"templateName,omitempty"`
+	PlaybookID           string            `json:"playbookId,omitempty"`
+	PlaybookName         string            `json:"playbookName,omitempty"`
+	Variables            map[string]string `json:"variables,omitempty"`
+	Parameters           map[string]string `json:"parameters,omitempty"`
+	Targets              []string          `json:"targets"`
+	Cron                 string            `json:"cron"`
+	TimeoutSeconds       int               `json:"timeoutSeconds"`
+	RetryMax             int               `json:"retryMax"`
+	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
+	Enabled              bool              `json:"enabled"`
+	NextRun              string            `json:"nextRun"`
+	LastRun              string            `json:"lastRun"`
+	LastStatus           string            `json:"lastStatus"`
+	LastJobID            string            `json:"lastJobId"`
+	CreatedBy            string            `json:"createdBy"`
+	CredentialID         string            `json:"credentialId"`
+	Timezone             string            `json:"timezone"`
+	ConcurrencyPolicy    string            `json:"concurrencyPolicy"`
+	MissedPolicy         string            `json:"missedPolicy"`
+	NextRuns             []string          `json:"nextRuns,omitempty"`
 }
 type ScheduleInput struct {
-	Name              string            `json:"name"`
-	TemplateID        string            `json:"templateId"`
-	PlaybookID        string            `json:"playbookId"`
-	Variables         map[string]string `json:"variables"`
-	Parameters        map[string]string `json:"parameters"`
-	Targets           []string          `json:"targets"`
-	Cron              string            `json:"cron"`
-	TimeoutSeconds    int               `json:"timeoutSeconds"`
-	CredentialID      string            `json:"credentialId"`
-	Enabled           *bool             `json:"enabled"`
-	Timezone          string            `json:"timezone"`
-	ConcurrencyPolicy string            `json:"concurrencyPolicy"`
-	MissedPolicy      string            `json:"missedPolicy"`
+	Name                 string            `json:"name"`
+	TemplateID           string            `json:"templateId"`
+	PlaybookID           string            `json:"playbookId"`
+	Variables            map[string]string `json:"variables"`
+	Parameters           map[string]string `json:"parameters"`
+	Targets              []string          `json:"targets"`
+	Cron                 string            `json:"cron"`
+	TimeoutSeconds       int               `json:"timeoutSeconds"`
+	CredentialID         string            `json:"credentialId"`
+	RetryMax             int               `json:"retryMax"`
+	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
+	Enabled              *bool             `json:"enabled"`
+	Timezone             string            `json:"timezone"`
+	ConcurrencyPolicy    string            `json:"concurrencyPolicy"`
+	MissedPolicy         string            `json:"missedPolicy"`
 }
 type CreateInput struct {
-	TemplateID     string            `json:"templateId"`
-	PlaybookID     string            `json:"playbookId"`
-	Variables      map[string]string `json:"variables"`
-	Parameters     map[string]string `json:"parameters"`
-	Targets        []string          `json:"targets"`
-	Operator       string            `json:"operator"`
-	TimeoutSeconds int               `json:"timeoutSeconds"`
-	CredentialID   string            `json:"credentialId"`
+	TemplateID           string            `json:"templateId"`
+	PlaybookID           string            `json:"playbookId"`
+	Variables            map[string]string `json:"variables"`
+	Parameters           map[string]string `json:"parameters"`
+	Targets              []string          `json:"targets"`
+	Operator             string            `json:"operator"`
+	TimeoutSeconds       int               `json:"timeoutSeconds"`
+	CredentialID         string            `json:"credentialId"`
+	RetryMax             int               `json:"retryMax"`
+	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
 }
 type ApprovalInput struct {
 	Decision string `json:"decision"`
@@ -265,6 +277,7 @@ type Service struct {
 	templateVersions map[string][]TemplateVersion
 	playbookVersions map[string][]PlaybookVersion
 	terminalHandler  func(Job)
+	retryTimers      map[string]*time.Timer
 }
 
 func NewService() *Service {
@@ -275,7 +288,7 @@ func NewService() *Service {
 		{ID: "tpl-clean", Name: "日志空间清理", Category: "维护", Description: "清理超过保留周期的归档日志", Command: "log-cleanup --days 14", Version: 1, Risk: "low", LastRun: "--", Enabled: true},
 		{ID: "tpl-patch", Name: "安全补丁安装", Category: "安全", Description: "安装已审批的系统安全更新", Command: "patch-install --approved", Version: 1, Risk: "high", LastRun: "--", Enabled: true},
 	}
-	s := &Service{playbooks: []Playbook{}, templates: defaultTemplates, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation(), templateVersions: map[string][]TemplateVersion{}, playbookVersions: map[string][]PlaybookVersion{}}
+	s := &Service{playbooks: []Playbook{}, templates: defaultTemplates, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation(), templateVersions: map[string][]TemplateVersion{}, playbookVersions: map[string][]PlaybookVersion{}, retryTimers: map[string]*time.Timer{}}
 	if !demo.Enabled() {
 		s.schedules = []Schedule{}
 	}
@@ -349,7 +362,8 @@ func (s *Service) CreateTemplate(in TemplateInput) (Template, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().Format("2006-01-02 15:04:05")
-	t := Template{ID: fmt.Sprintf("tpl-%d", time.Now().UnixNano()), Name: in.Name, Category: in.Category, Description: in.Description, Command: in.Command, PlaybookID: in.PlaybookID, Parameters: cloneStringMap(in.Parameters), Version: 1, Risk: in.Risk, LastRun: "--", Enabled: true, UpdatedAt: now}
+	normalizedRetryMax, normalizedRetryInterval := normalizeRetryPolicy(in.RetryMax, in.RetryIntervalSeconds)
+	t := Template{ID: fmt.Sprintf("tpl-%d", time.Now().UnixNano()), Name: in.Name, Category: in.Category, Description: in.Description, Command: in.Command, PlaybookID: in.PlaybookID, Parameters: cloneStringMap(in.Parameters), Version: 1, Risk: in.Risk, RetryMax: normalizedRetryMax, RetryIntervalSeconds: normalizedRetryInterval, LastRun: "--", Enabled: true, UpdatedAt: now}
 	s.templates = append([]Template{t}, s.templates...)
 	if s.db != nil {
 		_ = upsertTemplate(context.Background(), s.db, t)
@@ -375,6 +389,7 @@ func (s *Service) UpdateTemplate(id string, in TemplateInput) (Template, error) 
 		s.templates[i].PlaybookID = in.PlaybookID
 		s.templates[i].Parameters = cloneStringMap(in.Parameters)
 		s.templates[i].Risk = in.Risk
+		s.templates[i].RetryMax, s.templates[i].RetryIntervalSeconds = normalizeRetryPolicy(in.RetryMax, in.RetryIntervalSeconds)
 		s.templates[i].Version++
 		s.templates[i].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 		if s.db != nil {
@@ -449,6 +464,24 @@ func (s *Service) ToggleTemplate(id string) (Template, error) {
 		}
 	}
 	return Template{}, ErrNotFound
+}
+func normalizeRetryPolicy(maxRetries, intervalSeconds int) (int, int) {
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if maxRetries > 10 {
+		maxRetries = 10
+	}
+	if intervalSeconds <= 0 {
+		intervalSeconds = 30
+	}
+	if intervalSeconds < 10 {
+		intervalSeconds = 10
+	}
+	if intervalSeconds > 3600 {
+		intervalSeconds = 3600
+	}
+	return maxRetries, intervalSeconds
 }
 func validateTemplate(in TemplateInput) error {
 	if strings.TrimSpace(in.Name) == "" || (strings.TrimSpace(in.Command) == "" && strings.TrimSpace(in.PlaybookID) == "") || (in.Risk != "low" && in.Risk != "medium" && in.Risk != "high") {
@@ -762,7 +795,7 @@ func (s *Service) Create(in CreateInput) (Job, error) {
 		status = "awaiting_approval"
 		message = "高风险任务已创建，等待其他管理员审批"
 	}
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, TemplateVersion: tpl.Version, PlaybookID: tpl.PlaybookID, Parameters: mergeStringMaps(tpl.Parameters, in.Parameters), Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, TemplateVersion: tpl.Version, PlaybookID: tpl.PlaybookID, Parameters: mergeStringMaps(tpl.Parameters, in.Parameters), Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, RetryMax: tpl.RetryMax, RetryIntervalSeconds: tpl.RetryIntervalSeconds, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -786,7 +819,8 @@ func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, PlaybookVersion: playbook.Version, Parameters: mergeStringMaps(playbook.Variables, in.Variables), Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, Attempt: 0}
+	normalizedRetryMax, normalizedRetryInterval := normalizeRetryPolicy(in.RetryMax, in.RetryIntervalSeconds)
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, PlaybookVersion: playbook.Version, Parameters: mergeStringMaps(playbook.Variables, in.Variables), Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, RetryMax: normalizedRetryMax, RetryIntervalSeconds: normalizedRetryInterval, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -858,6 +892,7 @@ func (s *Service) Review(id, reviewer string, input ApprovalInput) (Job, error) 
 	return Job{}, ErrNotFound
 }
 func (s *Service) startTargets(id string, retry bool, requestedTargets []string) (Job, error) {
+	s.cancelRetryTimer(id)
 	if _, err := s.Get(id); err != nil {
 		return Job{}, err
 	}
@@ -1002,9 +1037,51 @@ func (s *Service) finish(id string, attempt int, status string, progress int, st
 	}
 	handler := s.terminalHandler
 	s.mu.Unlock()
-	if completed != nil && handler != nil {
-		go handler(*completed)
+	if completed != nil {
+		if completed.Status == "failed" && completed.Attempt <= completed.RetryMax {
+			s.scheduleAutomaticRetry(*completed)
+		} else if handler != nil {
+			go handler(*completed)
+		}
 	}
+}
+
+func (s *Service) scheduleAutomaticRetry(job Job) {
+	if job.RetryMax <= 0 {
+		return
+	}
+	interval := time.Duration(job.RetryIntervalSeconds) * time.Second
+	if interval < 10*time.Second {
+		interval = 10 * time.Second
+	}
+	s.mu.Lock()
+	if previous := s.retryTimers[job.ID]; previous != nil {
+		previous.Stop()
+	}
+	timer := time.AfterFunc(interval, func() {
+		s.mu.Lock()
+		delete(s.retryTimers, job.ID)
+		s.mu.Unlock()
+		_, _ = s.Retry(job.ID)
+	})
+	s.retryTimers[job.ID] = timer
+	for i := range s.jobs {
+		if s.jobs[i].ID == job.ID {
+			s.jobs[i].Logs = append(s.jobs[i].Logs, Log{Time: time.Now().Format("15:04:05"), Level: "warning", Message: fmt.Sprintf("任务失败，将在 %d 秒后自动重试（%d/%d）", int(interval.Seconds()), job.Attempt, job.RetryMax)})
+			s.persistLocked(s.jobs[i])
+			break
+		}
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) cancelRetryTimer(id string) {
+	s.mu.Lock()
+	if timer := s.retryTimers[id]; timer != nil {
+		timer.Stop()
+		delete(s.retryTimers, id)
+	}
+	s.mu.Unlock()
 }
 
 func mergeTargetResults(existing, incoming []TargetResult) []TargetResult {
