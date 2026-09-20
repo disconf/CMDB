@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"io"
@@ -2406,6 +2407,24 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("GET /api/v1/jobs/executions/export", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		items := filterJobsQuery(jobsService.Jobs(), r.URL.Query(), cmdbService, scope)
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="job-executions-`+time.Now().Format("20060102-150405")+`.csv"`)
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
+		writer := csv.NewWriter(w)
+		_ = writer.Write([]string{"任务ID", "任务名称", "状态", "执行人", "目标数量", "目标", "模板ID", "模板版本", "Playbook ID", "Playbook版本", "开始时间", "耗时", "进度", "审批人", "归档数量"})
+		for _, item := range items {
+			_ = writer.Write([]string{item.ID, item.Name, item.Status, item.Operator, strconv.Itoa(len(item.Targets)), strings.Join(item.Targets, " | "), item.TemplateID, strconv.Itoa(item.TemplateVersion), item.PlaybookID, strconv.Itoa(item.PlaybookVersion), item.StartedAt, item.Duration, strconv.Itoa(item.Progress), item.ApprovedBy, strconv.Itoa(len(item.ArtifactKeys))})
+		}
+		writer.Flush()
 	})
 	mux.HandleFunc("GET /api/v1/jobs/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
