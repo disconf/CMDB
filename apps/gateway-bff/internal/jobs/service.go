@@ -165,6 +165,32 @@ type Summary struct {
 	Schedules    int `json:"schedules"`
 	Playbooks    int `json:"playbooks"`
 }
+type RunnerQueueSummary struct {
+	Pending          int `json:"pending"`
+	AwaitingApproval int `json:"awaitingApproval"`
+	Running          int `json:"running"`
+	Failed           int `json:"failed"`
+	Success          int `json:"success"`
+}
+type RunnerJobSummary struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Status     string   `json:"status"`
+	Operator   string   `json:"operator"`
+	Progress   int      `json:"progress"`
+	StartedAt  string   `json:"startedAt"`
+	Duration   string   `json:"duration"`
+	Targets    []string `json:"targets"`
+	Attempt    int      `json:"attempt"`
+	PlaybookID string   `json:"playbookId"`
+	TemplateID string   `json:"templateId"`
+}
+type RunnerOverview struct {
+	Capabilities RunnerCapabilities `json:"capabilities"`
+	Queue        RunnerQueueSummary `json:"queue"`
+	ActiveJobs   []RunnerJobSummary `json:"activeJobs"`
+	RecentJobs   []RunnerJobSummary `json:"recentJobs"`
+}
 
 type Service struct {
 	mu        sync.RWMutex
@@ -389,6 +415,49 @@ func (s *Service) Schedules() []Schedule {
 	return cloneSchedules(s.schedules)
 }
 func (s *Service) ExecutorInfo() ExecutorInfo { return s.executor.Info() }
+func (s *Service) RunnerOverview(ctx context.Context) RunnerOverview {
+	info := s.executor.Info()
+	capabilities := RunnerCapabilities{Mode: info.Mode, Ready: info.Ready, Endpoint: info.Endpoint, Status: "ok", Version: "simulated", Profiles: []string{}, Features: []string{"safe-simulation"}}
+	if executor, ok := s.executor.(*httpExecutor); ok {
+		value, err := executor.Capabilities(ctx)
+		if err == nil {
+			capabilities = value
+		} else {
+			capabilities.Mode = info.Mode
+			capabilities.Ready = false
+			capabilities.Endpoint = info.Endpoint
+			capabilities.Error = err.Error()
+		}
+	}
+	jobs := s.Jobs()
+	queue := RunnerQueueSummary{}
+	active := make([]RunnerJobSummary, 0, 20)
+	recent := make([]RunnerJobSummary, 0, 20)
+	toSummary := func(job Job) RunnerJobSummary {
+		return RunnerJobSummary{ID: job.ID, Name: job.Name, Status: job.Status, Operator: job.Operator, Progress: job.Progress, StartedAt: job.StartedAt, Duration: job.Duration, Targets: append([]string(nil), job.Targets...), Attempt: job.Attempt, PlaybookID: job.PlaybookID, TemplateID: job.TemplateID}
+	}
+	for _, job := range jobs {
+		switch job.Status {
+		case "pending":
+			queue.Pending++
+		case "awaiting_approval":
+			queue.AwaitingApproval++
+		case "running":
+			queue.Running++
+		case "failed":
+			queue.Failed++
+		case "success":
+			queue.Success++
+		}
+		if (job.Status == "pending" || job.Status == "awaiting_approval" || job.Status == "running") && len(active) < 20 {
+			active = append(active, toSummary(job))
+		}
+		if (job.Status == "success" || job.Status == "failed" || job.Status == "cancelled" || job.Status == "rejected" || job.Status == "returned") && len(recent) < 20 {
+			recent = append(recent, toSummary(job))
+		}
+	}
+	return RunnerOverview{Capabilities: capabilities, Queue: queue, ActiveJobs: active, RecentJobs: recent}
+}
 func (s *Service) Jobs() []Job {
 	if s.db != nil {
 		if jobs, err := loadJobs(context.Background(), s.db); err == nil {

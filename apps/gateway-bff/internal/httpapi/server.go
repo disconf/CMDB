@@ -2195,6 +2195,12 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, jobsService.ExecutorInfo())
 	})
+	mux.HandleFunc("GET /api/v1/jobs/runner", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		writeJSON(w, 200, jobsService.RunnerOverview(r.Context()))
+	})
 	mux.HandleFunc("GET /api/v1/jobs/templates", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
 			return

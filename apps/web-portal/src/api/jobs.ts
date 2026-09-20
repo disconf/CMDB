@@ -10,6 +10,10 @@ export type Schedule={id:string;name:string;templateId?:string;templateName?:str
 export type ScheduleInput={name:string;templateId:string;playbookId:string;variables:Record<string,string>;parameters:Record<string,string>;targets:string[];cron:string;timezone:string;concurrencyPolicy:'allow'|'forbid'|'replace';missedPolicy:'skip'|'run';timeoutSeconds:number;enabled:boolean;credentialId:string}
 export type Summary={templates:number;running:number;successToday:number;failedToday:number;schedules:number;playbooks:number}
 export type ExecutorInfo={mode:string;ready:boolean;endpoint:string}
+export type RunnerCapabilities={mode:string;ready:boolean;endpoint:string;status:string;version:string;profiles:string[];maxTargets:number;artifactArchive:boolean;features:string[];error?:string}
+export type RunnerQueueSummary={pending:number;awaitingApproval:number;running:number;failed:number;success:number}
+export type RunnerJobSummary={id:string;name:string;status:string;operator:string;progress:number;startedAt:string;duration:string;targets:string[];attempt:number;playbookId:string;templateId:string}
+export type RunnerOverview={capabilities:RunnerCapabilities;queue:RunnerQueueSummary;activeJobs:RunnerJobSummary[];recentJobs:RunnerJobSummary[]}
 export type JobTargetOptions={projectGroups:string[];tags:string[]}
 export type JobTargetResolve={targets:string[];assets:AssetPage['data']}
 export type ApprovalDecision='approve'|'reject'|'return'
@@ -38,5 +42,6 @@ export const toggleSchedule=(token:string,id:string)=>request<Schedule>(`/api/v1
 export const runSchedule=(token:string,id:string)=>request<Job>(`/api/v1/jobs/schedules/${id}/run`,token,{method:'POST'})
 export const previewSchedule=(token:string,input:{cron:string;timezone:string;count?:number})=>request<{nextRuns:string[]}>('/api/v1/jobs/schedules/preview',token,{method:'POST',body:JSON.stringify(input)})
 export const deleteSchedule=(token:string,id:string)=>request<void>(`/api/v1/jobs/schedules/${id}`,token,{method:'DELETE'})
+export const fetchRunnerOverview=(token:string)=>request<RunnerOverview>('/api/v1/jobs/runner',token)
 export const fetchJobTargetOptions=(token:string)=>request<JobTargetOptions>('/api/v1/jobs/target-options',token)
 export const resolveJobTargets=(token:string,input:{projectGroups:string[];tags:string[];assetIds:string[];ips:string[]})=>request<JobTargetResolve>('/api/v1/jobs/targets/resolve',token,{method:'POST',body:JSON.stringify(input)})

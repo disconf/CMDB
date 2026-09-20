@@ -44,6 +44,18 @@ type ExecutorInfo struct {
 	Ready    bool   `json:"ready"`
 	Endpoint string `json:"endpoint"`
 }
+type RunnerCapabilities struct {
+	Mode            string   `json:"mode"`
+	Ready           bool     `json:"ready"`
+	Endpoint        string   `json:"endpoint"`
+	Status          string   `json:"status"`
+	Version         string   `json:"version"`
+	Profiles        []string `json:"profiles"`
+	MaxTargets      int      `json:"maxTargets"`
+	ArtifactArchive bool     `json:"artifactArchive"`
+	Features        []string `json:"features"`
+	Error           string   `json:"error,omitempty"`
+}
 type Executor interface {
 	Execute(context.Context, ExecutionRequest, func(ExecutionEvent)) ExecutionResult
 	Info() ExecutorInfo
@@ -75,6 +87,31 @@ type httpExecutor struct {
 
 func (e *httpExecutor) Info() ExecutorInfo {
 	return ExecutorInfo{Mode: "ansible-runner", Ready: e.endpoint != "", Endpoint: e.endpoint}
+}
+func (e *httpExecutor) Capabilities(ctx context.Context) (RunnerCapabilities, error) {
+	result := RunnerCapabilities{Mode: "ansible-runner", Ready: e.endpoint != "", Endpoint: e.endpoint}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, e.endpoint+"/api/v1/capabilities", nil)
+	if err != nil {
+		return result, err
+	}
+	if e.token != "" {
+		request.Header.Set("Authorization", "Bearer "+e.token)
+	}
+	response, err := e.client.Do(request)
+	if err != nil {
+		return result, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return result, fmt.Errorf("runner capabilities returned %d", response.StatusCode)
+	}
+	if err = json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return result, err
+	}
+	result.Mode = "ansible-runner"
+	result.Ready = true
+	result.Endpoint = e.endpoint
+	return result, nil
 }
 func (e *httpExecutor) Execute(ctx context.Context, input ExecutionRequest, emit func(ExecutionEvent)) ExecutionResult {
 	body, _ := json.Marshal(input)

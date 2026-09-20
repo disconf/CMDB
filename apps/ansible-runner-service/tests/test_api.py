@@ -26,3 +26,12 @@ def test_executes_approved_request():
 
 def test_health():
     assert client.get("/health").json()["status"] == "ok"
+
+def test_capabilities_requires_token_and_reports_profiles():
+    assert client.get("/api/v1/capabilities").status_code == 401
+    response = client.get("/api/v1/capabilities", headers={"Authorization": "Bearer 0123456789abcdef-test-token"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == "1.0.7"
+    assert body["maxTargets"] >= 1
+    assert len(body["profiles"]) >= 5

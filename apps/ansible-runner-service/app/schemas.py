@@ -15,4 +15,5 @@ class RunRequest(BaseModel):
 class RunEvent(BaseModel):progress:int=Field(ge=0,le=100);level:str;message:str
 class TargetResult(BaseModel):target:str;assetId:str="";assetName:str="";status:str;rc:int=0;changed:bool=False;stdout:str="";stderr:str="";error:str="";durationMs:int=0
 class RunResponse(BaseModel):status:str;message:str;events:list[RunEvent]=Field(default_factory=list);targets:list[TargetResult]=Field(default_factory=list);artifactKeys:list[str]=Field(default_factory=list)
-class HealthResponse(BaseModel):status:str;profiles:int
+class HealthResponse(BaseModel):status:str;profiles:int;version:str="";maxTargets:int=0;artifactArchive:bool=False
+class CapabilitiesResponse(BaseModel):status:str;version:str;profiles:list[str];maxTargets:int;artifactArchive:bool;features:list[str]

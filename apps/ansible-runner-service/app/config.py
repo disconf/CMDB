@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config=SettingsConfigDict(env_file=".env",extra="ignore")
+    service_version:str="1.0.10"
     runner_api_token:str=Field(min_length=16)
     cmdb_base_url:str="http://gateway:8080"
     cmdb_token:str=""

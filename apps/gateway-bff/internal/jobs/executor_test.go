@@ -38,3 +38,18 @@ func TestExecutorDefaultsToSimulation(t *testing.T) {
 		t.Fatalf("info %#v", info)
 	}
 }
+
+func TestHTTPExecutorCapabilities(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/capabilities" || r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("unexpected request %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(RunnerCapabilities{Status: "ok", Version: "1.0.7", Profiles: []string{"health"}, MaxTargets: 100})
+	}))
+	defer server.Close()
+	executor := &httpExecutor{endpoint: server.URL, token: "secret", client: server.Client()}
+	value, err := executor.Capabilities(context.Background())
+	if err != nil || value.Version != "1.0.7" || !value.Ready || value.Mode != "ansible-runner" {
+		t.Fatalf("capabilities %#v err=%v", value, err)
+	}
+}
