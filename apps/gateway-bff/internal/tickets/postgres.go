@@ -33,12 +33,15 @@ CREATE TABLE IF NOT EXISTS cmdb_tickets(
  automation_template text NOT NULL DEFAULT '',
  escalation_level integer NOT NULL DEFAULT 0,
  escalated_at text NOT NULL DEFAULT '',
+ task_authorization_hash text NOT NULL DEFAULT '',
+ task_authorization_expires_at text NOT NULL DEFAULT '',
+ task_authorization_used_at text NOT NULL DEFAULT '',
  steps jsonb NOT NULL DEFAULT '[]'::jsonb,
  timeline jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_cmdb_tickets_updated ON cmdb_tickets(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cmdb_tickets_status ON cmdb_tickets(status,created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cmdb_tickets_alert ON cmdb_tickets(related_alert,status);ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS related_task text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS related_release text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS escalation_level integer NOT NULL DEFAULT 0;ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS escalated_at text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_cmdb_tickets_alert ON cmdb_tickets(related_alert,status);ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS related_task text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS related_release text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS escalation_level integer NOT NULL DEFAULT 0;ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS escalated_at text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS task_authorization_hash text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS task_authorization_expires_at text NOT NULL DEFAULT '';ALTER TABLE cmdb_tickets ADD COLUMN IF NOT EXISTS task_authorization_used_at text NOT NULL DEFAULT '';
 `
 
 type ticketQueryer interface {
@@ -86,19 +89,19 @@ func upsertTicket(ctx context.Context, execer ticketExecer, item Ticket) error {
 	_, err := execer.ExecContext(ctx, `
 INSERT INTO cmdb_tickets(
  id,title,ticket_type,priority,status,applicant,assignee,description,created_at,updated_at,
- sla_due_at,risk,related_asset,related_alert,related_task,related_release,project_group,automation_template,escalation_level,escalated_at,steps,timeline
-) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+ sla_due_at,risk,related_asset,related_alert,related_task,related_release,project_group,automation_template,escalation_level,escalated_at,task_authorization_hash,task_authorization_expires_at,task_authorization_used_at,steps,timeline
+) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
 ON CONFLICT(id) DO UPDATE SET
  title=excluded.title,ticket_type=excluded.ticket_type,priority=excluded.priority,status=excluded.status,
  applicant=excluded.applicant,assignee=excluded.assignee,description=excluded.description,
  updated_at=excluded.updated_at,sla_due_at=excluded.sla_due_at,risk=excluded.risk,
  related_asset=excluded.related_asset,related_alert=excluded.related_alert,related_task=excluded.related_task,related_release=excluded.related_release,
- project_group=excluded.project_group,automation_template=excluded.automation_template,escalation_level=excluded.escalation_level,escalated_at=excluded.escalated_at,
+ project_group=excluded.project_group,automation_template=excluded.automation_template,escalation_level=excluded.escalation_level,escalated_at=excluded.escalated_at,task_authorization_hash=excluded.task_authorization_hash,task_authorization_expires_at=excluded.task_authorization_expires_at,task_authorization_used_at=excluded.task_authorization_used_at,
  steps=excluded.steps,timeline=excluded.timeline`,
 		item.ID, item.Title, item.Type, normalizePriority(item.Priority), item.Status, item.Applicant,
 		item.Assignee, item.Description, item.createdAt, item.updatedAt, item.slaDueAt,
 		item.Risk, item.RelatedAsset, item.RelatedAlert, item.RelatedTask, item.RelatedRelease, item.ProjectGroup,
-		item.AutomationTemplate, item.EscalationLevel, item.EscalatedAt, steps, timeline,
+		item.AutomationTemplate, item.EscalationLevel, item.EscalatedAt, item.TaskAuthorizationHash, item.TaskAuthorizationExpiresAt, item.TaskAuthorizationUsedAt, steps, timeline,
 	)
 	return err
 }
@@ -123,7 +126,7 @@ func loadTickets(ctx context.Context, queryer ticketQueryer) ([]Ticket, error) {
 
 const ticketSelectSQL = `SELECT
  id,title,ticket_type,priority,status,applicant,assignee,description,created_at,updated_at,
- sla_due_at,risk,related_asset,related_alert,related_task,related_release,project_group,automation_template,escalation_level,escalated_at,steps,timeline
+ sla_due_at,risk,related_asset,related_alert,related_task,related_release,project_group,automation_template,escalation_level,escalated_at,task_authorization_hash,task_authorization_expires_at,task_authorization_used_at,steps,timeline
 FROM cmdb_tickets`
 
 func loadTicketByID(ctx context.Context, queryer ticketQueryer, id string) (Ticket, error) {
@@ -172,7 +175,7 @@ func scanTicket(scanner ticketScanner) (Ticket, error) {
 		&item.ID, &item.Title, &item.Type, &item.Priority, &item.Status,
 		&item.Applicant, &item.Assignee, &item.Description, &item.createdAt,
 		&item.updatedAt, &item.slaDueAt, &item.Risk, &item.RelatedAsset,
-		&item.RelatedAlert, &item.RelatedTask, &item.RelatedRelease, &item.ProjectGroup, &item.AutomationTemplate, &item.EscalationLevel, &item.EscalatedAt,
+		&item.RelatedAlert, &item.RelatedTask, &item.RelatedRelease, &item.ProjectGroup, &item.AutomationTemplate, &item.EscalationLevel, &item.EscalatedAt, &item.TaskAuthorizationHash, &item.TaskAuthorizationExpiresAt, &item.TaskAuthorizationUsedAt,
 		&steps, &timeline,
 	); err != nil {
 		return Ticket{}, err

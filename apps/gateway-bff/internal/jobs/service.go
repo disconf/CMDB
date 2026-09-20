@@ -166,6 +166,9 @@ type CreateInput struct {
 	CredentialID         string            `json:"credentialId"`
 	RetryMax             int               `json:"retryMax"`
 	RetryIntervalSeconds int               `json:"retryIntervalSeconds"`
+	TicketID             string            `json:"ticketId,omitempty"`
+	AuthorizationToken   string            `json:"authorizationToken,omitempty"`
+	PreApproved          bool              `json:"-"`
 }
 type ApprovalInput struct {
 	Decision string `json:"decision"`
@@ -791,11 +794,16 @@ func (s *Service) Create(in CreateInput) (Job, error) {
 	defer s.mu.Unlock()
 	now := time.Now()
 	status, message := "pending", "任务已创建，等待执行"
-	if tpl.Risk == "high" {
+	approvedBy := ""
+	if in.PreApproved && strings.TrimSpace(in.TicketID) != "" {
+		approvedBy = "ticket:" + strings.TrimSpace(in.TicketID)
+		message = "工单一次性授权已消费，任务进入执行队列"
+	}
+	if tpl.Risk == "high" && !in.PreApproved {
 		status = "awaiting_approval"
 		message = "高风险任务已创建，等待其他管理员审批"
 	}
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, TemplateVersion: tpl.Version, PlaybookID: tpl.PlaybookID, Parameters: mergeStringMaps(tpl.Parameters, in.Parameters), Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, RetryMax: tpl.RetryMax, RetryIntervalSeconds: tpl.RetryIntervalSeconds, Attempt: 0}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: tpl.ID, TemplateVersion: tpl.Version, PlaybookID: tpl.PlaybookID, Parameters: mergeStringMaps(tpl.Parameters, in.Parameters), Name: tpl.Name, Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, RetryMax: tpl.RetryMax, RetryIntervalSeconds: tpl.RetryIntervalSeconds, ApprovedBy: approvedBy, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)
@@ -820,7 +828,11 @@ func (s *Service) createPlaybookExecution(in CreateInput) (Job, error) {
 	defer s.mu.Unlock()
 	now := time.Now()
 	normalizedRetryMax, normalizedRetryInterval := normalizeRetryPolicy(in.RetryMax, in.RetryIntervalSeconds)
-	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, PlaybookVersion: playbook.Version, Parameters: mergeStringMaps(playbook.Variables, in.Variables), Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: "awaiting_approval", Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", "Playbook 已创建，等待其他管理员审批"}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, RetryMax: normalizedRetryMax, RetryIntervalSeconds: normalizedRetryInterval, Attempt: 0}
+	status, message, approvedBy := "awaiting_approval", "Playbook 已创建，等待其他管理员审批", ""
+	if in.PreApproved && strings.TrimSpace(in.TicketID) != "" {
+		status, message, approvedBy = "pending", "工单一次性授权已消费，Playbook 进入执行队列", "ticket:"+strings.TrimSpace(in.TicketID)
+	}
+	j := Job{ID: fmt.Sprintf("job-%d-%03d", now.Unix(), s.next), TemplateID: "playbook:" + playbook.ID, PlaybookID: playbook.ID, PlaybookVersion: playbook.Version, Parameters: mergeStringMaps(playbook.Variables, in.Variables), Name: playbook.Name, Variables: cloneStringMap(in.Variables), Targets: append([]string(nil), in.Targets...), Status: status, Operator: in.Operator, StartedAt: now.Format("2006-01-02 15:04:05"), Logs: []Log{{now.Format("15:04:05"), "info", message}}, TimeoutSeconds: in.TimeoutSeconds, CredentialID: in.CredentialID, RetryMax: normalizedRetryMax, RetryIntervalSeconds: normalizedRetryInterval, ApprovedBy: approvedBy, Attempt: 0}
 	s.next++
 	s.jobs = append([]Job{j}, s.jobs...)
 	s.persistLocked(j)

@@ -22,6 +22,9 @@ export type Ticket = {
   automationTemplate: string
   escalationLevel: number
   escalatedAt?: string
+  taskAuthorizationExpiresAt?: string
+  taskAuthorizationUsedAt?: string
+  taskAuthorizationToken?: string
   steps: TicketStep[]
   timeline: TicketEvent[]
 }

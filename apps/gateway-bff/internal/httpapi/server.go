@@ -2707,6 +2707,17 @@ func NewServer() *Server {
 			writeJSON(w, 403, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
 			return
 		}
+		if strings.TrimSpace(in.TicketID) != "" || strings.TrimSpace(in.AuthorizationToken) != "" {
+			resourceID := strings.TrimSpace(in.TemplateID)
+			if resourceID == "" {
+				resourceID = strings.TrimSpace(in.PlaybookID)
+			}
+			if _, authErr := ticketsService.ConsumeTaskAuthorization(strings.TrimSpace(in.TicketID), in.AuthorizationToken, resourceID); authErr != nil {
+				writeJSON(w, 409, map[string]string{"code": "TASK_AUTHORIZATION_INVALID", "message": "工单任务授权无效、已过期或已使用"})
+				return
+			}
+			in.PreApproved = true
+		}
 		in.Operator = u.Username
 		j, err := jobsService.Create(in)
 		if errors.Is(err, jobs.ErrValidation) {

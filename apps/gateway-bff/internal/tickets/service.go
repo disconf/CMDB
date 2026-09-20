@@ -3,7 +3,11 @@ package tickets
 import (
 	"cmdb/gateway-bff/internal/demo"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -40,29 +44,33 @@ type Event struct {
 }
 
 type Ticket struct {
-	ID                 string  `json:"id"`
-	Title              string  `json:"title"`
-	Type               string  `json:"type"`
-	Priority           string  `json:"priority"`
-	Status             string  `json:"status"`
-	Applicant          string  `json:"applicant"`
-	Assignee           string  `json:"assignee"`
-	Description        string  `json:"description"`
-	CreatedAt          string  `json:"createdAt"`
-	UpdatedAt          string  `json:"updatedAt,omitempty"`
-	SLA                string  `json:"sla"`
-	SLADueAt           string  `json:"slaDueAt,omitempty"`
-	Risk               string  `json:"risk"`
-	RelatedAsset       string  `json:"relatedAsset"`
-	RelatedAlert       string  `json:"relatedAlert"`
-	RelatedTask        string  `json:"relatedTask"`
-	RelatedRelease     string  `json:"relatedRelease"`
-	ProjectGroup       string  `json:"projectGroup"`
-	AutomationTemplate string  `json:"automationTemplate"`
-	EscalationLevel    int     `json:"escalationLevel"`
-	EscalatedAt        string  `json:"escalatedAt,omitempty"`
-	Steps              []Step  `json:"steps"`
-	Timeline           []Event `json:"timeline"`
+	ID                         string  `json:"id"`
+	Title                      string  `json:"title"`
+	Type                       string  `json:"type"`
+	Priority                   string  `json:"priority"`
+	Status                     string  `json:"status"`
+	Applicant                  string  `json:"applicant"`
+	Assignee                   string  `json:"assignee"`
+	Description                string  `json:"description"`
+	CreatedAt                  string  `json:"createdAt"`
+	UpdatedAt                  string  `json:"updatedAt,omitempty"`
+	SLA                        string  `json:"sla"`
+	SLADueAt                   string  `json:"slaDueAt,omitempty"`
+	Risk                       string  `json:"risk"`
+	RelatedAsset               string  `json:"relatedAsset"`
+	RelatedAlert               string  `json:"relatedAlert"`
+	RelatedTask                string  `json:"relatedTask"`
+	RelatedRelease             string  `json:"relatedRelease"`
+	ProjectGroup               string  `json:"projectGroup"`
+	AutomationTemplate         string  `json:"automationTemplate"`
+	EscalationLevel            int     `json:"escalationLevel"`
+	EscalatedAt                string  `json:"escalatedAt,omitempty"`
+	TaskAuthorizationHash      string  `json:"-"`
+	TaskAuthorizationExpiresAt string  `json:"taskAuthorizationExpiresAt,omitempty"`
+	TaskAuthorizationUsedAt    string  `json:"taskAuthorizationUsedAt,omitempty"`
+	TaskAuthorizationToken     string  `json:"taskAuthorizationToken,omitempty"`
+	Steps                      []Step  `json:"steps"`
+	Timeline                   []Event `json:"timeline"`
 
 	createdAt time.Time
 	updatedAt time.Time
@@ -366,17 +374,68 @@ func buildTicket(id string, in CreateInput, now time.Time) Ticket {
 }
 
 func (s *Service) Approve(id, actor, comment string) (Ticket, error) {
-	return s.mutate(id, func(item *Ticket, now time.Time) error {
-		if item.Status != StatusPending {
+	var token string
+	item, err := s.mutate(id, func(current *Ticket, now time.Time) error {
+		if current.Status != StatusPending {
 			return ErrInvalidState
 		}
 		if actor == "" {
 			return ErrValidation
 		}
-		item.Status = StatusApproved
-		completeStep(item, "approve", actor, now)
-		item.Steps[2].Status = "current"
-		item.Timeline = append(item.Timeline, Event{Time: now.Format("2006-01-02 15:04"), Actor: actor, Action: "审批通过", Comment: strings.TrimSpace(comment)})
+		current.Status = StatusApproved
+		completeStep(current, "approve", actor, now)
+		current.Steps[2].Status = "current"
+		if current.AutomationTemplate != "" {
+			value, hash, expiry, genErr := newTaskAuthorization()
+			if genErr != nil {
+				return genErr
+			}
+			token = value
+			current.TaskAuthorizationHash = hash
+			current.TaskAuthorizationExpiresAt = expiry
+			current.TaskAuthorizationUsedAt = ""
+			current.Timeline = append(current.Timeline, Event{Time: now.Format("2006-01-02 15:04"), Actor: actor, Action: "签发一次性任务授权", Comment: "有效期 10 分钟，只能使用一次"})
+		}
+		current.Timeline = append(current.Timeline, Event{Time: now.Format("2006-01-02 15:04"), Actor: actor, Action: "审批通过", Comment: strings.TrimSpace(comment)})
+		return nil
+	})
+	if err == nil && token != "" {
+		item.TaskAuthorizationToken = token
+	}
+	return item, err
+}
+
+func newTaskAuthorization() (string, string, string, error) {
+	data := make([]byte, 32)
+	if _, err := rand.Read(data); err != nil {
+		return "", "", "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(data)
+	sum := sha256.Sum256([]byte(token))
+	return token, hex.EncodeToString(sum[:]), time.Now().Add(10 * time.Minute).Format(time.RFC3339), nil
+}
+
+func (s *Service) ConsumeTaskAuthorization(id, token, resourceID string) (Ticket, error) {
+	token = strings.TrimSpace(token)
+	resourceID = strings.TrimSpace(resourceID)
+	if token == "" || resourceID == "" {
+		return Ticket{}, ErrInvalidState
+	}
+	sum := sha256.Sum256([]byte(token))
+	hash := hex.EncodeToString(sum[:])
+	return s.mutate(id, func(item *Ticket, now time.Time) error {
+		if item.Status != StatusApproved || item.TaskAuthorizationHash == "" || item.TaskAuthorizationHash != hash || item.AutomationTemplate != resourceID {
+			return ErrInvalidState
+		}
+		if item.TaskAuthorizationUsedAt != "" {
+			return ErrInvalidState
+		}
+		expiry, err := time.Parse(time.RFC3339, item.TaskAuthorizationExpiresAt)
+		if err != nil || !expiry.After(now) {
+			return ErrInvalidState
+		}
+		item.TaskAuthorizationUsedAt = now.Format(time.RFC3339)
+		item.Timeline = append(item.Timeline, Event{Time: now.Format("2006-01-02 15:04"), Actor: "系统", Action: "消费一次性任务授权", Comment: "授权已绑定到自动化任务执行"})
 		return nil
 	})
 }

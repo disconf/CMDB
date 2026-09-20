@@ -108,3 +108,22 @@ func TestSLAEscalationUpdatesOwnerAndTimeline(t *testing.T) {
 		t.Fatalf("ticket not escalated: %#v err=%v", updated, err)
 	}
 }
+
+func TestTaskAuthorizationIsOneTime(t *testing.T) {
+	service := NewService()
+	item, err := service.Create(CreateInput{Title: "任务授权", Type: "change", Priority: "high", Applicant: "tester", AutomationTemplate: "tpl-health"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.Approve(item.ID, "approver", "ok")
+	if err != nil || approved.TaskAuthorizationToken == "" {
+		t.Fatalf("approval token missing: %#v err=%v", approved, err)
+	}
+	used, err := service.ConsumeTaskAuthorization(item.ID, approved.TaskAuthorizationToken, "tpl-health")
+	if err != nil || used.TaskAuthorizationUsedAt == "" {
+		t.Fatalf("first consume failed: %#v err=%v", used, err)
+	}
+	if _, err = service.ConsumeTaskAuthorization(item.ID, approved.TaskAuthorizationToken, "tpl-health"); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("second consume must fail, got %v", err)
+	}
+}

@@ -17,6 +17,7 @@ const showCreate = ref(false)
 const decisionComment = ref('')
 const newComment = ref('')
 const assigneeDraft = ref('')
+const taskAuthorizationToken = ref('')
 const errorMessage = ref('')
 
 const emptyForm = (): TicketInput => ({ title: '', type: 'change', priority: 'medium', description: '', relatedAsset: '', relatedAlert: '', relatedTask: '', relatedRelease: '', projectGroup: '', automationTemplate: '' })
@@ -48,6 +49,7 @@ async function load(preferredId?: string) {
 
 function choose(item: Ticket) {
   selected.value = item
+  taskAuthorizationToken.value = ''
   decisionComment.value = ''
   newComment.value = ''
   assigneeDraft.value = item.assignee
@@ -80,6 +82,7 @@ async function decide(action: 'approve' | 'reject' | 'close' | 'cancel') {
   saving.value = true
   try {
     const item = await decideTicket(auth.token, selected.value.id, action, decisionComment.value)
+    if (action === 'approve' && item.taskAuthorizationToken) taskAuthorizationToken.value = item.taskAuthorizationToken
     await load(item.id)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '工单操作失败'
@@ -88,6 +91,7 @@ async function decide(action: 'approve' | 'reject' | 'close' | 'cancel') {
   }
 }
 
+function copyTaskAuthorization() { if (taskAuthorizationToken.value) void navigator.clipboard.writeText(taskAuthorizationToken.value) }
 async function addComment() {
   if (!selected.value || !newComment.value.trim()) return
   saving.value = true
@@ -217,7 +221,7 @@ onMounted(load)
               <button v-if="selected.status === 'approved'" class="primary" @click="decide('close')">完成工单</button>
             </footer>
           </template>
-          <a v-if="selected.automationTemplate && selected.status === 'approved'" href="/jobs">使用 {{ selected.automationTemplate }} 进入自动化任务中心 →</a>
+          <section v-if="selected.automationTemplate && selected.status === 'approved'" class="ticket-task-authorization"><div><strong>一次性任务执行授权</strong><small>{{taskAuthorizationToken?`有效期至 ${selected.taskAuthorizationExpiresAt}`:'授权码只在审批响应中展示一次，请重新审批获取'}}</small></div><code v-if="taskAuthorizationToken">{{taskAuthorizationToken}}</code><button v-if="taskAuthorizationToken" @click="copyTaskAuthorization">复制授权码</button><a href="/jobs">进入自动化任务中心 →</a></section><a v-else-if="selected.automationTemplate" href="/jobs">使用 {{ selected.automationTemplate }} 进入自动化任务中心 →</a>
         </template>
         <div v-else class="empty-ticket"><GitPullRequest /><strong>选择工单</strong><span>查看审批流、关联资产与处理记录</span></div>
       </aside>
