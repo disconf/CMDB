@@ -1,6 +1,10 @@
 from fastapi import Depends,FastAPI,HTTPException
+import asyncio
+from fastapi.responses import StreamingResponse
+from urllib.parse import quote
 from app.dependencies import AuthDep,SettingsDep
 from app.schemas import CapabilitiesResponse,HealthResponse,RunRequest,RunResponse
+from app.artifacts import ArtifactStore
 from app.services import AssetResolutionError,ExecutionError,RunnerService,UnknownProfileError
 def get_service(settings:SettingsDep)->RunnerService:return RunnerService(settings)
 def create_app()->FastAPI:
@@ -13,6 +17,12 @@ def create_app()->FastAPI:
         features=["playbook-runtime","check-mode","host-results","target-resolution","timeout-control"]
         if artifact_archive:features.append("artifact-archive")
         return CapabilitiesResponse(status="ok",version=settings.service_version,profiles=sorted(settings.command_map.keys()),maxTargets=settings.max_targets,artifactArchive=artifact_archive,features=features)
+    @app.get("/api/v1/artifacts/{key:path}")
+    async def artifact(key:str,_:AuthDep,settings:SettingsDep):
+        if not key.startswith("jobs/") or not key.endswith(".zip"):raise HTTPException(status_code=400,detail="Invalid artifact key")
+        body=await asyncio.to_thread(ArtifactStore(settings).open,key)
+        filename=key.rsplit("/",1)[-1]
+        return StreamingResponse(body.iter_chunks(chunk_size=1024*1024),media_type="application/zip",headers={"Content-Disposition":f"attachment; filename*=UTF-8''{quote(filename)}"})
     @app.post("/api/v1/run",response_model=RunResponse,dependencies=[Depends(lambda:None)])
     async def run(payload:RunRequest,_:AuthDep,service:RunnerService=Depends(get_service))->RunResponse:
         try:return await service.execute(payload)

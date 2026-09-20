@@ -43,5 +43,6 @@ export const runSchedule=(token:string,id:string)=>request<Job>(`/api/v1/jobs/sc
 export const previewSchedule=(token:string,input:{cron:string;timezone:string;count?:number})=>request<{nextRuns:string[]}>('/api/v1/jobs/schedules/preview',token,{method:'POST',body:JSON.stringify(input)})
 export const deleteSchedule=(token:string,id:string)=>request<void>(`/api/v1/jobs/schedules/${id}`,token,{method:'DELETE'})
 export const fetchRunnerOverview=(token:string)=>request<RunnerOverview>('/api/v1/jobs/runner',token)
+export async function fetchJobArtifact(token:string,id:string,index:number):Promise<Blob>{const response=await fetch(`/api/v1/jobs/executions/${id}/artifacts/${index}`,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok){const data=await response.json().catch(()=>({message:'归档下载失败'}));throw new Error((data as {message?:string}).message||`归档下载失败 (${response.status})`)}return response.blob()}
 export const fetchJobTargetOptions=(token:string)=>request<JobTargetOptions>('/api/v1/jobs/target-options',token)
 export const resolveJobTargets=(token:string,input:{projectGroups:string[];tags:string[];assetIds:string[];ips:string[]})=>request<JobTargetResolve>('/api/v1/jobs/targets/resolve',token,{method:'POST',body:JSON.stringify(input)})

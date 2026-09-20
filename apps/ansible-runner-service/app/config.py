@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config=SettingsConfigDict(env_file=".env",extra="ignore")
-    service_version:str="1.0.10"
+    service_version:str="1.0.13"
     runner_api_token:str=Field(min_length=16)
     cmdb_base_url:str="http://gateway:8080"
     cmdb_token:str=""
@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     s3_secret_access_key:str=""
     s3_bucket:str="cmdb-job-artifacts"
     s3_region:str="us-east-1"
+    s3_ca_bundle:str=""
+    s3_insecure_skip_verify:bool=False
     @property
     def command_map(self)->dict[str,str]:
         value=json.loads(self.runner_command_map_json)

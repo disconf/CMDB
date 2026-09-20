@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -415,6 +416,12 @@ func (s *Service) Schedules() []Schedule {
 	return cloneSchedules(s.schedules)
 }
 func (s *Service) ExecutorInfo() ExecutorInfo { return s.executor.Info() }
+func (s *Service) DownloadArtifact(ctx context.Context, key string) (io.ReadCloser, error) {
+	if executor, ok := s.executor.(*httpExecutor); ok {
+		return executor.DownloadArtifact(ctx, key)
+	}
+	return nil, ErrNotFound
+}
 func (s *Service) RunnerOverview(ctx context.Context) RunnerOverview {
 	info := s.executor.Info()
 	capabilities := RunnerCapabilities{Mode: info.Mode, Ready: info.Ready, Endpoint: info.Endpoint, Status: "ok", Version: "simulated", Profiles: []string{}, Features: []string{"safe-simulation"}}

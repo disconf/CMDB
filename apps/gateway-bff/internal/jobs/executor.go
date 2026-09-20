@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -112,6 +113,28 @@ func (e *httpExecutor) Capabilities(ctx context.Context) (RunnerCapabilities, er
 	result.Ready = true
 	result.Endpoint = e.endpoint
 	return result, nil
+}
+func (e *httpExecutor) DownloadArtifact(ctx context.Context, key string) (io.ReadCloser, error) {
+	key = strings.TrimPrefix(strings.TrimSpace(key), "/")
+	if !strings.HasPrefix(key, "jobs/") || !strings.HasSuffix(key, ".zip") {
+		return nil, ErrNotFound
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, e.endpoint+"/api/v1/artifacts/"+key, nil)
+	if err != nil {
+		return nil, err
+	}
+	if e.token != "" {
+		request.Header.Set("Authorization", "Bearer "+e.token)
+	}
+	response, err := e.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		_ = response.Body.Close()
+		return nil, ErrNotFound
+	}
+	return response.Body, nil
 }
 func (e *httpExecutor) Execute(ctx context.Context, input ExecutionRequest, emit func(ExecutionEvent)) ExecutionResult {
 	body, _ := json.Marshal(input)

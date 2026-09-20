@@ -2434,6 +2434,38 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, j)
 	})
+	mux.HandleFunc("GET /api/v1/jobs/executions/{id}/artifacts/{index}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		job, err := jobsService.Get(r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "JOB_NOT_FOUND"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		if !scope.global && !allIdentifiersAllowed(job.Targets, scope) {
+			writeJSON(w, 403, map[string]string{"code": "DATA_SCOPE_FORBIDDEN"})
+			return
+		}
+		index, parseErr := strconv.Atoi(r.PathValue("index"))
+		if parseErr != nil || index < 0 || index >= len(job.ArtifactKeys) {
+			writeJSON(w, 404, map[string]string{"code": "ARTIFACT_NOT_FOUND"})
+			return
+		}
+		body, downloadErr := jobsService.DownloadArtifact(r.Context(), job.ArtifactKeys[index])
+		if downloadErr != nil {
+			writeJSON(w, 502, map[string]string{"code": "ARTIFACT_DOWNLOAD_FAILED", "message": "执行归档暂不可用"})
+			return
+		}
+		defer body.Close()
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+job.ID+`-artifact-`+strconv.Itoa(index+1)+`.zip"`)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, body)
+	})
 	mux.HandleFunc("GET /api/v1/jobs/schedules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
 			return
