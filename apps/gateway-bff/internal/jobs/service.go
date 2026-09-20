@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -191,6 +192,40 @@ type RunnerOverview struct {
 	Queue        RunnerQueueSummary `json:"queue"`
 	ActiveJobs   []RunnerJobSummary `json:"activeJobs"`
 	RecentJobs   []RunnerJobSummary `json:"recentJobs"`
+}
+type JobAnalyticsSummary struct {
+	Total              int     `json:"total"`
+	Success            int     `json:"success"`
+	Failed             int     `json:"failed"`
+	Running            int     `json:"running"`
+	AwaitingApproval   int     `json:"awaitingApproval"`
+	SuccessRate        float64 `json:"successRate"`
+	AverageDurationSec int     `json:"averageDurationSeconds"`
+}
+type JobDailyTrend struct {
+	Date        string  `json:"date"`
+	Total       int     `json:"total"`
+	Success     int     `json:"success"`
+	Failed      int     `json:"failed"`
+	SuccessRate float64 `json:"successRate"`
+}
+type JobStatusCount struct {
+	Status string `json:"status"`
+	Count  int    `json:"count"`
+}
+type JobFailureStat struct {
+	Name     string  `json:"name"`
+	Total    int     `json:"total"`
+	Failed   int     `json:"failed"`
+	FailRate float64 `json:"failRate"`
+}
+type JobAnalytics struct {
+	Days               int                 `json:"days"`
+	ScheduledOnly      bool                `json:"scheduledOnly"`
+	Summary            JobAnalyticsSummary `json:"summary"`
+	Daily              []JobDailyTrend     `json:"daily"`
+	StatusDistribution []JobStatusCount    `json:"statusDistribution"`
+	TopFailures        []JobFailureStat    `json:"topFailures"`
 }
 
 type Service struct {
@@ -416,6 +451,123 @@ func (s *Service) Schedules() []Schedule {
 	return cloneSchedules(s.schedules)
 }
 func (s *Service) ExecutorInfo() ExecutorInfo { return s.executor.Info() }
+func (s *Service) Analytics(days int, scheduledOnly bool) JobAnalytics {
+	if days <= 0 {
+		days = 14
+	}
+	if days > 90 {
+		days = 90
+	}
+	location := scheduleLocation()
+	now := time.Now().In(location)
+	startDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location).AddDate(0, 0, -(days - 1))
+	dailyIndex := map[string]int{}
+	daily := make([]JobDailyTrend, days)
+	for i := 0; i < days; i++ {
+		date := startDay.AddDate(0, 0, i).Format("2006-01-02")
+		daily[i] = JobDailyTrend{Date: date}
+		dailyIndex[date] = i
+	}
+	statusCounts := map[string]int{}
+	failures := map[string]*JobFailureStat{}
+	summary := JobAnalyticsSummary{}
+	durationTotal := time.Duration(0)
+	durationCount := 0
+	for _, job := range s.Jobs() {
+		if scheduledOnly && job.Operator != "scheduler" {
+			continue
+		}
+		started, err := parseJobStartedAt(job.StartedAt)
+		if err != nil || started.Before(startDay) {
+			continue
+		}
+		summary.Total++
+		statusCounts[job.Status]++
+		date := started.In(location).Format("2006-01-02")
+		if index, ok := dailyIndex[date]; ok {
+			daily[index].Total++
+			if job.Status == "success" {
+				daily[index].Success++
+			}
+			if job.Status == "failed" {
+				daily[index].Failed++
+			}
+		}
+		switch job.Status {
+		case "success":
+			summary.Success++
+		case "failed":
+			summary.Failed++
+		case "running":
+			summary.Running++
+		case "awaiting_approval":
+			summary.AwaitingApproval++
+		}
+		if duration, parseErr := time.ParseDuration(job.Duration); parseErr == nil && duration > 0 {
+			durationTotal += duration
+			durationCount++
+		}
+		stat := failures[job.Name]
+		if stat == nil {
+			stat = &JobFailureStat{Name: job.Name}
+			failures[job.Name] = stat
+		}
+		stat.Total++
+		if job.Status == "failed" {
+			stat.Failed++
+		}
+	}
+	if summary.Total > 0 {
+		summary.SuccessRate = roundRate(summary.Success, summary.Total)
+	}
+	if durationCount > 0 {
+		summary.AverageDurationSec = int((durationTotal / time.Duration(durationCount)).Seconds())
+	}
+	for i := range daily {
+		if daily[i].Total > 0 {
+			daily[i].SuccessRate = roundRate(daily[i].Success, daily[i].Total)
+		}
+	}
+	statusDistribution := make([]JobStatusCount, 0, len(statusCounts))
+	for status, count := range statusCounts {
+		statusDistribution = append(statusDistribution, JobStatusCount{Status: status, Count: count})
+	}
+	sort.Slice(statusDistribution, func(i, j int) bool { return statusDistribution[i].Count > statusDistribution[j].Count })
+	topFailures := make([]JobFailureStat, 0, len(failures))
+	for _, item := range failures {
+		if item.Failed == 0 {
+			continue
+		}
+		item.FailRate = roundRate(item.Failed, item.Total)
+		topFailures = append(topFailures, *item)
+	}
+	sort.Slice(topFailures, func(i, j int) bool {
+		if topFailures[i].Failed == topFailures[j].Failed {
+			return topFailures[i].Total > topFailures[j].Total
+		}
+		return topFailures[i].Failed > topFailures[j].Failed
+	})
+	if len(topFailures) > 10 {
+		topFailures = topFailures[:10]
+	}
+	return JobAnalytics{Days: days, ScheduledOnly: scheduledOnly, Summary: summary, Daily: daily, StatusDistribution: statusDistribution, TopFailures: topFailures}
+}
+func parseJobStartedAt(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid job started at %q", value)
+}
+
+func roundRate(numerator, denominator int) float64 {
+	if denominator <= 0 {
+		return 0
+	}
+	return float64(int((float64(numerator)/float64(denominator))*1000+0.5)) / 10
+}
 func (s *Service) DownloadArtifact(ctx context.Context, key string) (io.ReadCloser, error) {
 	if executor, ok := s.executor.(*httpExecutor); ok {
 		return executor.DownloadArtifact(ctx, key)

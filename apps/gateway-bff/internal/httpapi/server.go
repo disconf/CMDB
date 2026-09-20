@@ -2190,6 +2190,13 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, summary)
 	})
+	mux.HandleFunc("GET /api/v1/jobs/analytics", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+		writeJSON(w, 200, jobsService.Analytics(days, r.URL.Query().Get("scheduled") == "true"))
+	})
 	mux.HandleFunc("GET /api/v1/jobs/executor", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
 			return

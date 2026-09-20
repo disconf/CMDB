@@ -3,6 +3,7 @@ package jobs
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestCreateRunAndRetry(t *testing.T) {
@@ -128,5 +129,23 @@ func TestRetryTargetsRejectsUnknownTarget(t *testing.T) {
 	job, err = s.RetryTargets(job.ID, []string{"host-1"})
 	if err != nil || job.Status != "running" {
 		t.Fatalf("partial retry: %#v %v", job, err)
+	}
+}
+
+func TestAnalyticsSummarizesTrendAndFailures(t *testing.T) {
+	s := NewService()
+	now := time.Now().Format("2006-01-02 15:04:05")
+	s.jobs = []Job{
+		{ID: "job-a", Name: "health", Status: "success", Operator: "scheduler", StartedAt: now, Duration: "2s"},
+		{ID: "job-b", Name: "health", Status: "failed", Operator: "admin", StartedAt: now, Duration: "4s"},
+		{ID: "job-c", Name: "patch", Status: "success", Operator: "admin", StartedAt: now, Duration: "3s"},
+	}
+	all := s.Analytics(7, false)
+	if all.Summary.Total != 3 || all.Summary.Success != 2 || all.Summary.Failed != 1 || len(all.TopFailures) != 1 {
+		t.Fatalf("unexpected analytics: %+v", all)
+	}
+	scheduled := s.Analytics(7, true)
+	if scheduled.Summary.Total != 1 || scheduled.Summary.Success != 1 {
+		t.Fatalf("unexpected scheduled analytics: %+v", scheduled)
 	}
 }

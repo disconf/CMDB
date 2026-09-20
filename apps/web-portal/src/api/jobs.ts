@@ -18,6 +18,7 @@ export type JobTargetOptions={projectGroups:string[];tags:string[]}
 export type JobTargetResolve={targets:string[];assets:AssetPage['data']}
 export type ApprovalDecision='approve'|'reject'|'return'
 export type JobFilters={q?:string;status?:string;projectGroup?:string;tag?:string;from?:string;to?:string}
+export type JobAnalytics={days:number;scheduledOnly:boolean;summary:{total:number;success:number;failed:number;running:number;awaitingApproval:number;successRate:number;averageDurationSeconds:number};daily:{date:string;total:number;success:number;failed:number;successRate:number}[];statusDistribution:{status:string;count:number}[];topFailures:{name:string;total:number;failed:number;failRate:number}[]}
 
 async function request<T>(path:string,token:string,init?:RequestInit):Promise<T>{const response=await fetch(path,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init?.headers||{})}});const data=await response.json().catch(()=>({message:'请求失败'}));if(!response.ok)throw new Error((data as {message?:string}).message||`请求失败 (${response.status})`);return data as T}
 export async function exportJobExecutions(token:string,filters:JobFilters={}):Promise<Blob>{const params=new URLSearchParams();Object.entries(filters).forEach(([key,value])=>{if(value?.trim())params.set(key,value.trim())});const suffix=params.toString()?`?${params.toString()}`:'';const response=await fetch('/api/v1/jobs/executions/export'+suffix,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(`导出失败 (${response.status})`);return response.blob()}
@@ -45,6 +46,7 @@ export const runSchedule=(token:string,id:string)=>request<Job>(`/api/v1/jobs/sc
 export const previewSchedule=(token:string,input:{cron:string;timezone:string;count?:number})=>request<{nextRuns:string[]}>('/api/v1/jobs/schedules/preview',token,{method:'POST',body:JSON.stringify(input)})
 export const deleteSchedule=(token:string,id:string)=>request<void>(`/api/v1/jobs/schedules/${id}`,token,{method:'DELETE'})
 export const fetchRunnerOverview=(token:string)=>request<RunnerOverview>('/api/v1/jobs/runner',token)
+export const fetchJobAnalytics=(token:string,days=14,scheduled=false)=>request<JobAnalytics>(`/api/v1/jobs/analytics?days=${days}&scheduled=${scheduled}`,token)
 export async function fetchJobArtifact(token:string,id:string,index:number):Promise<Blob>{const response=await fetch(`/api/v1/jobs/executions/${id}/artifacts/${index}`,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok){const data=await response.json().catch(()=>({message:'归档下载失败'}));throw new Error((data as {message?:string}).message||`归档下载失败 (${response.status})`)}return response.blob()}
 export const fetchJobTargetOptions=(token:string)=>request<JobTargetOptions>('/api/v1/jobs/target-options',token)
 export const resolveJobTargets=(token:string,input:{projectGroups:string[];tags:string[];assetIds:string[];ips:string[]})=>request<JobTargetResolve>('/api/v1/jobs/targets/resolve',token,{method:'POST',body:JSON.stringify(input)})
