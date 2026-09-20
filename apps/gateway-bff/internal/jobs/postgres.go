@@ -75,6 +75,10 @@ func openPostgres(url string) (*sql.DB, []Job, error) {
 		db.Close()
 		return nil, nil, err
 	}
+	if _, err = db.ExecContext(ctx, versionHistorySchema); err != nil {
+		db.Close()
+		return nil, nil, err
+	}
 	jobs, loadErr := loadJobs(ctx, db)
 	if loadErr != nil {
 		db.Close()

@@ -149,3 +149,38 @@ func TestAnalyticsSummarizesTrendAndFailures(t *testing.T) {
 		t.Fatalf("unexpected scheduled analytics: %+v", scheduled)
 	}
 }
+
+func TestTemplateVersionHistoryAndDiff(t *testing.T) {
+	s := NewService()
+	tpl, err := s.CreateTemplate(TemplateInput{Name: "巡检A", Category: "巡检", Command: "health-check", Risk: "low"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdateTemplate(tpl.ID, TemplateInput{Name: "巡检B", Category: "巡检", Command: "health-check --full", Risk: "medium"}); err != nil {
+		t.Fatal(err)
+	}
+	versions, err := s.TemplateVersions(tpl.ID)
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("versions %#v err=%v", versions, err)
+	}
+	diff, err := s.TemplateVersionDiff(tpl.ID, 1, 2)
+	if err != nil || len(diff.Changes) == 0 {
+		t.Fatalf("diff %#v err=%v", diff, err)
+	}
+}
+
+func TestPlaybookVersionHistoryAndDiff(t *testing.T) {
+	s := NewService()
+	enabled := true
+	pb, err := s.CreatePlaybook(PlaybookInput{Name: "部署A", Content: "echo old", Constants: map[string]string{}, Variables: map[string]string{}, Enabled: &enabled}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdatePlaybook(pb.ID, PlaybookInput{Name: "部署B", Content: "echo new", Constants: map[string]string{}, Variables: map[string]string{}, Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := s.PlaybookVersionDiff(pb.ID, 1, 2)
+	if err != nil || len(diff.Changes) == 0 {
+		t.Fatalf("diff %#v err=%v", diff, err)
+	}
+}

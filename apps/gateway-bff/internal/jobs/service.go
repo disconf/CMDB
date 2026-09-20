@@ -219,6 +219,29 @@ type JobFailureStat struct {
 	Failed   int     `json:"failed"`
 	FailRate float64 `json:"failRate"`
 }
+type TemplateVersion struct {
+	Version   int      `json:"version"`
+	CreatedBy string   `json:"createdBy"`
+	CreatedAt string   `json:"createdAt"`
+	Template  Template `json:"template"`
+}
+type PlaybookVersion struct {
+	Version   int      `json:"version"`
+	CreatedBy string   `json:"createdBy"`
+	CreatedAt string   `json:"createdAt"`
+	Playbook  Playbook `json:"playbook"`
+}
+type VersionFieldDiff struct {
+	Field  string `json:"field"`
+	Before string `json:"before"`
+	After  string `json:"after"`
+}
+type VersionDiff struct {
+	ID          string             `json:"id"`
+	FromVersion int                `json:"fromVersion"`
+	ToVersion   int                `json:"toVersion"`
+	Changes     []VersionFieldDiff `json:"changes"`
+}
 type JobAnalytics struct {
 	Days               int                 `json:"days"`
 	ScheduledOnly      bool                `json:"scheduledOnly"`
@@ -229,16 +252,18 @@ type JobAnalytics struct {
 }
 
 type Service struct {
-	mu        sync.RWMutex
-	templates []Template
-	playbooks []Playbook
-	jobs      []Job
-	schedules []Schedule
-	next      int
-	db        *sql.DB
-	cancels   map[string]context.CancelFunc
-	executor  Executor
-	location  *time.Location
+	mu               sync.RWMutex
+	templates        []Template
+	playbooks        []Playbook
+	jobs             []Job
+	schedules        []Schedule
+	next             int
+	db               *sql.DB
+	cancels          map[string]context.CancelFunc
+	executor         Executor
+	location         *time.Location
+	templateVersions map[string][]TemplateVersion
+	playbookVersions map[string][]PlaybookVersion
 }
 
 func NewService() *Service {
@@ -249,7 +274,7 @@ func NewService() *Service {
 		{ID: "tpl-clean", Name: "日志空间清理", Category: "维护", Description: "清理超过保留周期的归档日志", Command: "log-cleanup --days 14", Version: 1, Risk: "low", LastRun: "--", Enabled: true},
 		{ID: "tpl-patch", Name: "安全补丁安装", Category: "安全", Description: "安装已审批的系统安全更新", Command: "patch-install --approved", Version: 1, Risk: "high", LastRun: "--", Enabled: true},
 	}
-	s := &Service{playbooks: []Playbook{}, templates: defaultTemplates, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation()}
+	s := &Service{playbooks: []Playbook{}, templates: defaultTemplates, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation(), templateVersions: map[string][]TemplateVersion{}, playbookVersions: map[string][]PlaybookVersion{}}
 	if !demo.Enabled() {
 		s.schedules = []Schedule{}
 	}
@@ -294,6 +319,7 @@ func NewService() *Service {
 			_ = upsertTemplate(context.Background(), s.db, defaultItem)
 		}
 	}
+	s.backfillVersionHistory()
 	return s
 }
 
@@ -327,6 +353,7 @@ func (s *Service) CreateTemplate(in TemplateInput) (Template, error) {
 	if s.db != nil {
 		_ = upsertTemplate(context.Background(), s.db, t)
 	}
+	s.recordTemplateVersionLocked(t, t.UpdatedBy)
 	return t, nil
 }
 func (s *Service) UpdateTemplate(id string, in TemplateInput) (Template, error) {
@@ -351,6 +378,7 @@ func (s *Service) UpdateTemplate(id string, in TemplateInput) (Template, error) 
 		if s.db != nil {
 			_ = upsertTemplate(context.Background(), s.db, s.templates[i])
 		}
+		s.recordTemplateVersionLocked(s.templates[i], s.templates[i].UpdatedBy)
 		return s.templates[i], nil
 	}
 	return Template{}, ErrNotFound
@@ -399,6 +427,7 @@ func (s *Service) DuplicateTemplate(id string, operator string) (Template, error
 	if s.db != nil {
 		_ = upsertTemplate(context.Background(), s.db, source)
 	}
+	s.recordTemplateVersionLocked(source, source.UpdatedBy)
 	s.mu.Unlock()
 	return source, nil
 }

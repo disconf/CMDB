@@ -2215,6 +2215,34 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, jobsService.Templates())
 	})
+	mux.HandleFunc("GET /api/v1/jobs/playbooks/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		items, err := jobsService.PlaybookVersions(r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "PLAYBOOK_NOT_FOUND"})
+			return
+		}
+		writeJSON(w, 200, items)
+	})
+	mux.HandleFunc("GET /api/v1/jobs/playbooks/{id}/versions/diff", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		from, fromErr := strconv.Atoi(r.URL.Query().Get("from"))
+		to, toErr := strconv.Atoi(r.URL.Query().Get("to"))
+		if fromErr != nil || toErr != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := jobsService.PlaybookVersionDiff(r.PathValue("id"), from, to)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "VERSION_NOT_FOUND"})
+			return
+		}
+		writeJSON(w, 200, item)
+	})
 	mux.HandleFunc("GET /api/v1/jobs/playbooks", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:view") {
 			return
@@ -2288,6 +2316,34 @@ func NewServer() *Server {
 		user, _ := authService.CurrentUser(bearerToken(r))
 		auditService.Record(user.Username, "job.playbook.delete", r.PathValue("id"), "")
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/jobs/templates/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		items, err := jobsService.TemplateVersions(r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "TEMPLATE_NOT_FOUND"})
+			return
+		}
+		writeJSON(w, 200, items)
+	})
+	mux.HandleFunc("GET /api/v1/jobs/templates/{id}/versions/diff", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "job:view") {
+			return
+		}
+		from, fromErr := strconv.Atoi(r.URL.Query().Get("from"))
+		to, toErr := strconv.Atoi(r.URL.Query().Get("to"))
+		if fromErr != nil || toErr != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := jobsService.TemplateVersionDiff(r.PathValue("id"), from, to)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "VERSION_NOT_FOUND"})
+			return
+		}
+		writeJSON(w, 200, item)
 	})
 	mux.HandleFunc("POST /api/v1/jobs/templates", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "job:manage") {

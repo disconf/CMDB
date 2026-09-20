@@ -109,6 +109,7 @@ func (s *Service) CreatePlaybook(input PlaybookInput, createdBy string) (Playboo
 			return Playbook{}, err
 		}
 	}
+	s.recordPlaybookVersionLocked(item, createdBy)
 	return clonePlaybook(item), nil
 }
 
@@ -132,6 +133,7 @@ func (s *Service) UpdatePlaybook(id string, input PlaybookInput) (Playbook, erro
 			if s.db != nil {
 				_ = upsertPlaybook(context.Background(), s.db, s.playbooks[i])
 			}
+			s.recordPlaybookVersionLocked(s.playbooks[i], s.playbooks[i].CreatedBy)
 			return clonePlaybook(s.playbooks[i]), nil
 		}
 	}
@@ -147,6 +149,7 @@ func (s *Service) TogglePlaybook(id string) (Playbook, error) {
 			if s.db != nil {
 				_ = upsertPlaybook(context.Background(), s.db, s.playbooks[i])
 			}
+			s.recordPlaybookVersionLocked(s.playbooks[i], s.playbooks[i].CreatedBy)
 			return clonePlaybook(s.playbooks[i]), nil
 		}
 	}
