@@ -19,6 +19,7 @@ rules:
   - pods
   - services
   - persistentvolumeclaims
+  - events
   - persistentvolumes
   verbs:
   - get
@@ -55,6 +56,12 @@ rules:
   verbs:
   - get
   - list
+- apiGroups:
+  - ''
+  resources:
+  - pods/log
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -89,7 +89,13 @@ func NewServer() *Server {
 	})
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
+	toolboxService.SetCredentialResolver(func(id string) (toolbox.Credential, error) {
+		m, err := credentialsService.Resolve(id)
+		return toolbox.Credential{Username: m.Username, Secret: m.Secret}, err
+	})
 	k8sService := k8s.NewService(cmdbService)
+	toolboxService.SetKubernetesDiagnoser(k8sService)
+	toolboxService.SetTopologyGraphProvider(topologyService)
 	auditService := audit.NewService()
 	cicdService := cicd.NewService()
 	argoSyncCoordinator := newArgoSyncCoordinator(cicdService, cmdbService, releasesService, monitorService, ticketsService, auditService)
@@ -3224,19 +3230,35 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "toolbox:use") {
 			return
 		}
-		writeJSON(w, 200, toolboxService.Summary())
+		summary, err := toolboxService.Summary(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TOOLBOX_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
 	})
 	mux.HandleFunc("GET /api/v1/toolbox/tools", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "toolbox:use") {
 			return
 		}
-		writeJSON(w, 200, toolboxService.Tools())
+		writeJSON(w, http.StatusOK, toolboxService.Tools())
 	})
 	mux.HandleFunc("GET /api/v1/toolbox/history", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "toolbox:use") {
 			return
 		}
-		writeJSON(w, 200, toolboxService.History())
+		limit := 50
+		if value := strings.TrimSpace(r.URL.Query().Get("limit")); value != "" {
+			if parsed, err := strconv.Atoi(value); err == nil {
+				limit = parsed
+			}
+		}
+		history, err := toolboxService.History(r.Context(), limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TOOLBOX_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, history)
 	})
 	mux.HandleFunc("POST /api/v1/toolbox/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "toolbox:use") {
@@ -3244,17 +3266,25 @@ func NewServer() *Server {
 		}
 		var in toolbox.RunInput
 		if decodeJSON(r, &in) != nil {
-			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
 		in.Operator = u.Username
-		x, err := toolboxService.Run(in)
+		x, err := toolboxService.Run(r.Context(), in)
 		if errors.Is(err, toolbox.ErrValidation) {
-			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
 			return
 		}
-		writeJSON(w, 201, x)
+		if errors.Is(err, toolbox.ErrNotConfigured) || errors.Is(err, toolbox.ErrUnavailable) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "TOOL_NOT_CONFIGURED", "message": "诊断工具尚未配置或当前不可用"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "TOOLBOX_EXECUTION_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, x)
 	})
 	mux.HandleFunc("GET /api/v1/aiops/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
