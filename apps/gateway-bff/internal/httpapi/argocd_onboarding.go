@@ -3,13 +3,17 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"cmdb/gateway-bff/internal/audit"
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cicd"
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/releases"
 )
 
 type argoApplicationView struct {
@@ -25,22 +29,88 @@ type argoApplicationView struct {
 }
 
 type argoSyncResult struct {
-	Total   int `json:"total"`
-	Created int `json:"created"`
-	Updated int `json:"updated"`
-	Linked  int `json:"linked"`
+	Total      int      `json:"total"`
+	Created    int      `json:"created"`
+	Updated    int      `json:"updated"`
+	Linked     int      `json:"linked"`
+	Relations  int      `json:"relations"`
+	Releases   int      `json:"releases"`
+	ReleaseIDs []string `json:"releaseIds,omitempty"`
 }
 
-func registerArgoCDOnboardingRoutes(mux *http.ServeMux, authService *auth.Service, auditService *audit.Service, cicdService *cicd.Service, cmdbService *cmdb.Service) {
+type argoSyncStatus struct {
+	Running       bool     `json:"running"`
+	LastRunAt     string   `json:"lastRunAt,omitempty"`
+	LastSuccessAt string   `json:"lastSuccessAt,omitempty"`
+	Status        string   `json:"status"`
+	Message       string   `json:"message"`
+	Total         int      `json:"total"`
+	Created       int      `json:"created"`
+	Updated       int      `json:"updated"`
+	Linked        int      `json:"linked"`
+	Relations     int      `json:"relations"`
+	Releases      int      `json:"releases"`
+	ReleaseIDs    []string `json:"releaseIds,omitempty"`
+	DurationMS    int64    `json:"durationMs"`
+}
+
+type argoSyncCoordinator struct {
+	mu             sync.Mutex
+	status         argoSyncStatus
+	cicdService    *cicd.Service
+	cmdbService    *cmdb.Service
+	releaseService *releases.Service
+}
+
+func newArgoSyncCoordinator(cicdService *cicd.Service, cmdbService *cmdb.Service, releaseService *releases.Service) *argoSyncCoordinator {
+	return &argoSyncCoordinator{status: argoSyncStatus{Status: "idle", Message: "等待首次同步"}, cicdService: cicdService, cmdbService: cmdbService, releaseService: releaseService}
+}
+
+func (c *argoSyncCoordinator) Status() argoSyncStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
+}
+
+func (c *argoSyncCoordinator) Sync(ctx context.Context, operator string) argoSyncResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	started := time.Now()
+	c.status.Running = true
+	c.status.Status = "running"
+	c.status.Message = "正在同步 Argo CD Application"
+	result := syncArgoApplications(ctx, c.cicdService, c.cmdbService, c.releaseService, c.cmdbService.InventoryAssets(), operator)
+	c.status = argoSyncStatus{Running: false, LastRunAt: time.Now().Format(time.RFC3339), LastSuccessAt: time.Now().Format(time.RFC3339), Status: "success", Message: "Argo CD Application 同步完成", Total: result.Total, Created: result.Created, Updated: result.Updated, Linked: result.Linked, Relations: result.Relations, Releases: result.Releases, ReleaseIDs: result.ReleaseIDs, DurationMS: time.Since(started).Milliseconds()}
+	return result
+}
+
+func (c *argoSyncCoordinator) Run(ctx context.Context, interval time.Duration) {
+	if interval < time.Minute {
+		interval = 10 * time.Minute
+	}
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			c.Sync(ctx, "argocd-sync")
+			timer.Reset(interval)
+		}
+	}
+}
+
+func registerArgoCDOnboardingRoutes(mux *http.ServeMux, authService *auth.Service, auditService *audit.Service, coordinator *argoSyncCoordinator) {
 	mux.HandleFunc("GET /api/v1/cicd/argocd/applications", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:view") {
 			return
 		}
-		overview := cicdService.Resources(r.Context(), false)
+		overview := coordinator.cicdService.Resources(r.Context(), false)
 		result := make([]argoApplicationView, 0, len(overview.ArgoCD.Items))
 		for _, app := range overview.ArgoCD.Items {
 			assetID := argoApplicationAssetID(app.Namespace, app.Name)
-			_, err := cmdbService.GetAsset(assetID)
+			_, err := coordinator.cmdbService.GetAsset(assetID)
 			result = append(result, argoApplicationView{Name: app.Name, Namespace: app.Namespace, Project: app.Project, Destination: app.Destination, SyncStatus: app.SyncStatus, HealthStatus: app.HealthStatus, Revision: app.Revision, AssetID: assetID, Onboarded: err == nil})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"available": overview.ArgoCD.Available, "applications": result})
@@ -51,17 +121,29 @@ func registerArgoCDOnboardingRoutes(mux *http.ServeMux, authService *auth.Servic
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		scope := assetScopeForUser(user)
-		assets := cmdbService.InventoryAssetsFor(scope)
-		result := syncArgoApplications(r.Context(), cicdService, cmdbService, assets, user.Username)
+		result := coordinator.Sync(r.Context(), user.Username)
 		auditService.Record(user.Username, "cicd.argocd.applications.sync", "argocd-applications", "total="+strconv.Itoa(result.Total)+",created="+strconv.Itoa(result.Created)+",updated="+strconv.Itoa(result.Updated))
 		writeJSON(w, http.StatusOK, result)
 	})
+	mux.HandleFunc("GET /api/v1/cicd/argocd/sync/status", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, coordinator.Status())
+	})
 }
 
-func syncArgoApplications(ctx context.Context, cicdService *cicd.Service, cmdbService *cmdb.Service, assets []cmdb.Asset, operator string) argoSyncResult {
+func syncArgoApplications(ctx context.Context, cicdService *cicd.Service, cmdbService *cmdb.Service, releaseService *releases.Service, assets []cmdb.Asset, operator string) argoSyncResult {
 	overview := cicdService.Resources(ctx, true)
 	result := argoSyncResult{Total: len(overview.ArgoCD.Items)}
+	releasesByApplication := make(map[string][]string)
+	if releaseService != nil {
+		if items, err := releaseService.List(); err == nil {
+			for _, item := range items {
+				releasesByApplication[item.Application] = append(releasesByApplication[item.Application], item.ID)
+			}
+		}
+	}
 	for _, app := range overview.ArgoCD.Items {
 		assetID := argoApplicationAssetID(app.Namespace, app.Name)
 		existing, err := cmdbService.GetAsset(assetID)
@@ -80,12 +162,21 @@ func syncArgoApplications(ctx context.Context, cicdService *cicd.Service, cmdbSe
 		if _, err := cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			continue
 		}
+		if _, err := cicdService.CreateRelation(ctx, cicd.RelationInput{ResourceType: "argocd-application", ResourceID: strings.Trim(app.Namespace+"/"+app.Name, "/"), ResourceName: app.Name, AssetID: assetID, AssetName: app.Name, AssetType: "cicd-application", RelationType: "deployed-to", Source: "auto"}, operator); err == nil {
+			result.Relations++
+		}
+		for _, releaseID := range releasesByApplication[app.Name] {
+			if !containsStringValue(result.ReleaseIDs, releaseID) {
+				result.ReleaseIDs = append(result.ReleaseIDs, releaseID)
+			}
+		}
 		if created {
 			result.Created++
 		} else {
 			result.Updated++
 		}
 	}
+	result.Releases = len(result.ReleaseIDs)
 	return result
 }
 
@@ -175,4 +266,25 @@ func argoApplicationAssetStatus(health, sync string) string {
 		return "online"
 	}
 	return "unknown"
+}
+
+func containsStringValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func argoSyncInterval() time.Duration {
+	value := strings.TrimSpace(os.Getenv("CICD_ARGOCD_SYNC_INTERVAL"))
+	if value == "" {
+		return 10 * time.Minute
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < time.Minute {
+		return 10 * time.Minute
+	}
+	return duration
 }
