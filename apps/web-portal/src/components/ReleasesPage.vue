@@ -11,6 +11,8 @@ type Artifact = { id:string; application:string; version:string; commit:string; 
 type Summary = { today:number; running:number; success:number; failed:number; successRate:number }
 type Executor = { mode:string; ready:boolean; endpoint?:string }
 type ApprovalResponse = { release:Release; authorizationToken:string; expiresAt:string }
+type GateCheck = { id:string; name:string; status:string; message:string }
+type GateResult = { allowed:boolean; decision:string; checkedAt:string; checks:GateCheck[]; blockers:string[]; warnings:string[] }
 type AutoDiscoveryItem = { resourceType:string; resourceId:string; resourceName:string; assetId?:string; assetName?:string; assetType?:string; score:number; reason?:string; action:string }
 type AutoDiscoveryResult = { scanned:number; matched:number; applied:number; updated:number; skipped:number; failed:number; items:AutoDiscoveryItem[] }
 type ImpactAnalysis = { resourceType:string; resourceId:string; directAssets:Array<{assetId:string;assetName:string;assetType:string;status:string;relationType:string;source:string}>; downstreamAssets:Array<{fromAssetId:string;fromAssetName:string;relationType:string;assetId:string;assetName:string;assetType:string;status:string}>; impactCount:number }
@@ -46,6 +48,8 @@ const error = ref('')
 const approvalComment = ref('')
 const authorizationToken = ref('')
 const executionToken = ref('')
+const gateResult = ref<GateResult>()
+const gateLoading = ref(false)
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
 const integrationSummary = computed(() => summarizeIntegrations(integrations.value))
 
@@ -277,6 +281,19 @@ async function decide(action:'approve'|'reject') {
     error.value = reason instanceof Error ? reason.message : '发布审批失败'
   } finally {
     busy.value = false
+  }
+}
+
+async function checkGate() {
+  if (!selected.value) return
+  gateLoading.value = true
+  try {
+    gateResult.value = await request<GateResult>(`/api/v1/releases/${selected.value.id}/gate-check`)
+    message.value = gateResult.value.allowed ? '发布门禁校验通过' : '发布门禁校验未通过，请处理阻断项'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '发布门禁校验失败'
+  } finally {
+    gateLoading.value = false
   }
 }
 
@@ -539,6 +556,7 @@ onMounted(load)
         <template v-else-if="selected">
           <span>RELEASE DETAIL</span><h2>{{selected.application}} {{selected.version}}</h2>
           <div class="release-gate" :data-status="selected.status"><ShieldAlert v-if="['awaiting_approval','rollback_awaiting_approval'].includes(selected.status)"/><ShieldCheck v-else/><div><strong>{{gateTitle(selected)}}</strong><span>{{gateDetail(selected)}}</span></div></div>
+          <section class="release-risk-gate" :data-status="gateResult?.allowed===false?'blocked':gateResult?.allowed===true?'passed':'idle'"><header><div><strong>发布前风险门禁</strong><span>变更窗口、活动告警、资产状态与 Argo CD 健康</span></div><button :disabled="gateLoading" @click="checkGate"><RefreshCw :class="{spin:gateLoading}"/>检查门禁</button></header><div v-if="gateResult" class="gate-checks"><article v-for="item in gateResult.checks" :key="item.id" :data-status="item.status"><i></i><span><strong>{{item.name}}</strong><small>{{item.message}}</small></span><b>{{item.status==='pass'?'通过':item.status==='warn'?'关注':'阻断'}}</b></article></div><div v-else class="gate-empty">执行发布授权前建议先运行门禁检查</div></section>
           <dl><div><dt>目标环境</dt><dd>{{selected.environment}}</dd></div><div><dt>发布策略</dt><dd>{{selected.strategy}}</dd></div><div><dt>关联工单</dt><dd>{{selected.ticketId||'—'}}</dd></div><div><dt>回滚版本</dt><dd>{{selected.previousVersion}}</dd></div><div><dt>事件来源</dt><dd>{{selected.source||'manual'}}</dd></div><div v-if="selected.externalId"><dt>外部发布 ID</dt><dd>{{selected.externalId}}</dd></div><div v-if="selected.approvedBy"><dt>审批人</dt><dd>{{selected.approvedBy}} · {{selected.approvedAt}}</dd></div><div v-if="selected.authorizationExpiresAt"><dt>授权有效期</dt><dd>{{selected.authorizationExpiresAt}}</dd></div></dl>
           <h3>阶段日志</h3><div class="stage-logs"><article v-for="stage in selected.stages" :key="stage.id" :data-status="stage.status"><i></i><div><strong>{{stage.name}}</strong><span>{{stage.message}} {{stage.duration}}</span></div></article></div>
           <section v-if="selected.status==='awaiting_approval' || selected.status==='rollback_awaiting_approval'" class="release-approval">

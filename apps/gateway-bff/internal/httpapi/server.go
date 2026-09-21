@@ -97,8 +97,9 @@ func NewServer() *Server {
 	registerCICDDiscoveryRoutes(mux, authService, auditService, cicdService, cmdbService)
 	registerCICDTopologyRoutes(mux, authService, cicdService, cmdbService)
 	registerCICDMonitoringRoutes(mux, authService, cicdService, cmdbService, discoveryService)
-	registerCICDHealthEventRoutes(mux, auditService, monitorService, ticketsService, cmdbService)
+	registerCICDHealthEventRoutes(mux, auditService, monitorService, ticketsService, cmdbService, releasesService)
 	registerCICDProviderEventRoutes(mux, authService, auditService, releasesService)
+	registerReleaseGateRoutes(mux, authService, releasesService, cmdbService, monitorService, cicdService)
 	registerRancherRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
@@ -3133,6 +3134,17 @@ func NewServer() *Server {
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
+		releaseItem, gateErr := releasesService.Get(r.PathValue("id"))
+		if gateErr != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RELEASE_NOT_FOUND"})
+			return
+		}
+		gate := evaluateReleaseGate(r.Context(), releaseItem, u, cmdbService, monitorService, cicdService)
+		if !gate.Allowed {
+			auditService.Record(u.Username, "release.gate.blocked", releaseItem.ID, strings.Join(gate.Blockers, ";"))
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "RELEASE_GATE_BLOCKED", "message": "发布门禁校验未通过", "gate": gate})
+			return
+		}
 		item, err := releasesService.AuthorizeExecution(r.PathValue("id"), in.AuthorizationToken, u.Username)
 		if errors.Is(err, releases.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RELEASE_NOT_FOUND"})

@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,6 +18,10 @@ type HealthEventInput struct {
 	AssetID      string `json:"assetId"`
 	Owner        string `json:"owner"`
 	ProjectGroup string `json:"projectGroup"`
+	Application  string `json:"application"`
+	Version      string `json:"version"`
+	Environment  string `json:"environment"`
+	AutoRollback bool   `json:"autoRollback"`
 }
 
 func BuildHealthEventPayload(input HealthEventInput) (string, WebhookPayload) {
@@ -57,6 +62,10 @@ func BuildHealthEventPayload(input HealthEventInput) (string, WebhookPayload) {
 		"severity":      severity,
 		"owner":         strings.TrimSpace(input.Owner),
 		"project_group": strings.TrimSpace(input.ProjectGroup),
+		"application":   strings.TrimSpace(input.Application),
+		"version":       strings.TrimSpace(input.Version),
+		"environment":   strings.TrimSpace(input.Environment),
+		"auto_rollback": strconv.FormatBool(input.AutoRollback),
 		"instance":      firstNonEmpty(input.AssetID, resourceID, resourceName),
 	}
 	if assetID := strings.TrimSpace(input.AssetID); assetID != "" {

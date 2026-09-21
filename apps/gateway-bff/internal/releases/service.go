@@ -473,13 +473,53 @@ func hashAuthorization(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+func (s *Service) Get(id string) (Release, error) {
+	items, err := s.List()
+	if err != nil {
+		return Release{}, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return Release{}, ErrNotFound
+}
+
 func (s *Service) Rollback(id, operator string) (Release, error) {
+	return s.requestRollback(id, operator, false, "")
+}
+
+func (s *Service) AutoRequestRollback(application, environment, version, reason string) (Release, error) {
+	items, err := s.List()
+	if err != nil {
+		return Release{}, err
+	}
+	for _, item := range items {
+		if item.Application != application || item.Environment != environment {
+			continue
+		}
+		if version != "" && item.Version != version {
+			continue
+		}
+		if item.Status == StatusRollbackAwaitingApproval || item.Status == StatusRollbackApproved || item.Status == StatusRollingBack {
+			return item, nil
+		}
+		if item.Status == StatusRunning || item.Status == StatusSuccess || item.Status == StatusFailed {
+			return s.requestRollback(item.ID, "cicd-health", true, reason)
+		}
+	}
+	return Release{}, ErrNotFound
+}
+
+func (s *Service) requestRollback(id, operator string, allowRunning bool, reason string) (Release, error) {
 	operator = strings.TrimSpace(operator)
 	if operator == "" {
 		return Release{}, ErrValidation
 	}
 	return s.mutateRelease(id, func(current *Release, now time.Time) error {
-		if current.Status != StatusSuccess && current.Status != StatusFailed {
+		allowed := current.Status == StatusSuccess || current.Status == StatusFailed || (allowRunning && current.Status == StatusRunning)
+		if !allowed {
 			return ErrInvalidState
 		}
 		current.Status = StatusRollbackAwaitingApproval
@@ -489,7 +529,11 @@ func (s *Service) Rollback(id, operator string) (Release, error) {
 		current.ApprovalRequester = operator
 		current.ApprovedBy = ""
 		current.ApprovedAt = ""
-		current.ApprovalComment = ""
+		if strings.TrimSpace(reason) != "" {
+			current.ApprovalComment = strings.TrimSpace(reason)
+		} else {
+			current.ApprovalComment = ""
+		}
 		current.approvedAt = time.Time{}
 		current.authorizationHash = ""
 		current.authorizationExpiresAt = time.Time{}
@@ -501,6 +545,7 @@ func (s *Service) Rollback(id, operator string) (Release, error) {
 		return nil
 	})
 }
+
 func (s *Service) ApplyEvent(in EventInput) (Release, error) {
 	normalizeEventInput(&in)
 	if in.Application == "" || in.Version == "" || in.Environment == "" || in.Source == "" {
