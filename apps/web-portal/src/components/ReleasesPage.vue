@@ -533,6 +533,7 @@ onMounted(load)
           <div class="integration-guide"><Rocket/><div><strong>Argo CD</strong><span>读取应用同步状态，并把部署结果回写到发布流水线。</span></div></div>
           <div class="integration-guide"><GitCommit/><div><strong>GitLab</strong><span>关联提交、分支和 Pipeline，形成代码到发布的完整链路。</span></div></div>
           <div class="integration-principle"><ShieldCheck/><span>连接检测只验证地址、认证和读取权限，不会修改外部系统。凭据仅保存在 Gateway Secret 中，前端不返回敏感信息。</span></div>
+          <div class="integration-guide"><Rocket/><div><strong>发布 Webhook</strong><span>POST /api/v1/cicd/events/&#123;harbor|argocd|gitlab&#125;，可使用 X-Release-ID 和 X-CI-* 头关联同一条发布流水线。</span></div></div>
         </template>
 
         <template v-else-if="selected">
