@@ -466,6 +466,7 @@ onMounted(load)
             <div><strong>CI/CD 监控联动</strong><span>将资源关系关联的 CMDB 资产转换为 Prometheus 监控目标，并保留 CI/CD 资源标签。</span></div>
             <button :disabled="monitorLoading" @click="loadMonitorTargets"><RefreshCw :class="{spin:monitorLoading}"/>刷新目标</button>
           </div>
+          <div class="integration-principle"><ShieldAlert/><span>外部 CI/CD 系统可通过 <code>POST /api/v1/cicd/health-events</code> 上报异常和恢复事件，事件会自动进入告警中心并创建或关闭工单。</span></div>
           <div class="monitor-link-grid">
             <article v-for="item in monitorTargets" :key="`${item.resourceType}|${item.resourceId}|${item.assetId}`" class="monitor-link-card" :data-status="item.status">
               <header><i><Box/></i><div><small>{{relationResourceTypeLabel(item.resourceType)}}</small><h3>{{item.resourceName}}</h3></div><em>{{item.status==='missing'?'缺少采集器':item.status}}</em></header>

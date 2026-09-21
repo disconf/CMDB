@@ -15,6 +15,14 @@ groups:
         annotations:
           summary: "CMDB 纳管主机不可用"
           description: "资产 {{ $labels.cmdb_asset_id }}（{{ $labels.instance }}）已不可用超过 2 分钟。"
+      - alert: CICDTargetDown
+        expr: up{job="cmdb-cicd-linked"} == 0
+        for: 5m
+        labels: {severity: warning, category: cicd}
+        annotations:
+          summary: "CI/CD 关联资产监控目标不可达"
+          description: "CI/CD 资源 {{ $labels.cicd_resource_type }}/{{ $labels.cicd_resource_id }} 关联资产 {{ $labels.instance }} 已不可达超过 5 分钟。"
+
       - alert: HostCPUHigh
         expr: 100 - avg by(instance,cmdb_asset_id,asset_name,environment,project_group) (rate(node_cpu_seconds_total{job="cmdb-node-exporter",mode="idle"}[5m])) * 100 > 85
         for: 10m

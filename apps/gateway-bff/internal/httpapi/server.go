@@ -97,6 +97,7 @@ func NewServer() *Server {
 	registerCICDDiscoveryRoutes(mux, authService, auditService, cicdService, cmdbService)
 	registerCICDTopologyRoutes(mux, authService, cicdService, cmdbService)
 	registerCICDMonitoringRoutes(mux, authService, cicdService, cmdbService, discoveryService)
+	registerCICDHealthEventRoutes(mux, auditService, monitorService, ticketsService, cmdbService)
 	registerRancherRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
