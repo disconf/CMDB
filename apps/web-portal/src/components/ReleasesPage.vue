@@ -13,6 +13,7 @@ type Executor = { mode:string; ready:boolean; endpoint?:string }
 type ApprovalResponse = { release:Release; authorizationToken:string; expiresAt:string }
 type GateCheck = { id:string; name:string; status:string; message:string }
 type GateResult = { allowed:boolean; decision:string; checkedAt:string; checks:GateCheck[]; blockers:string[]; warnings:string[] }
+type VerificationResult = { releaseId:string; decision:string; reason:string; canAutoRollback:boolean; checkedAt:string; checks:GateCheck[] }
 type AutoDiscoveryItem = { resourceType:string; resourceId:string; resourceName:string; assetId?:string; assetName?:string; assetType?:string; score:number; reason?:string; action:string }
 type AutoDiscoveryResult = { scanned:number; matched:number; applied:number; updated:number; skipped:number; failed:number; items:AutoDiscoveryItem[] }
 type ImpactAnalysis = { resourceType:string; resourceId:string; directAssets:Array<{assetId:string;assetName:string;assetType:string;status:string;relationType:string;source:string}>; downstreamAssets:Array<{fromAssetId:string;fromAssetName:string;relationType:string;assetId:string;assetName:string;assetType:string;status:string}>; impactCount:number }
@@ -50,6 +51,8 @@ const authorizationToken = ref('')
 const executionToken = ref('')
 const gateResult = ref<GateResult>()
 const gateLoading = ref(false)
+const verification = ref<VerificationResult>()
+const verificationLoading = ref(false)
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
 const integrationSummary = computed(() => summarizeIntegrations(integrations.value))
 
@@ -281,6 +284,20 @@ async function decide(action:'approve'|'reject') {
     error.value = reason instanceof Error ? reason.message : '发布审批失败'
   } finally {
     busy.value = false
+  }
+}
+
+async function runVerification(autoRollback=false) {
+  if (!selected.value) return
+  verificationLoading.value = true
+  try {
+    const response = await request<{verification:VerificationResult; rollbackReleaseId:string}>(`/api/v1/releases/${selected.value.id}/verify`, autoRollback ? { method:'POST', body:JSON.stringify({ autoRollback:true }) } : undefined)
+    verification.value = response.verification
+    message.value = response.rollbackReleaseId ? `健康验证完成，已发起回滚审批 ${response.rollbackReleaseId}` : `健康验证完成：${response.verification.reason}`
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '发布后健康验证失败'
+  } finally {
+    verificationLoading.value = false
   }
 }
 
@@ -556,7 +573,9 @@ onMounted(load)
         <template v-else-if="selected">
           <span>RELEASE DETAIL</span><h2>{{selected.application}} {{selected.version}}</h2>
           <div class="release-gate" :data-status="selected.status"><ShieldAlert v-if="['awaiting_approval','rollback_awaiting_approval'].includes(selected.status)"/><ShieldCheck v-else/><div><strong>{{gateTitle(selected)}}</strong><span>{{gateDetail(selected)}}</span></div></div>
-          <section class="release-risk-gate" :data-status="gateResult?.allowed===false?'blocked':gateResult?.allowed===true?'passed':'idle'"><header><div><strong>发布前风险门禁</strong><span>变更窗口、活动告警、资产状态与 Argo CD 健康</span></div><button :disabled="gateLoading" @click="checkGate"><RefreshCw :class="{spin:gateLoading}"/>检查门禁</button></header><div v-if="gateResult" class="gate-checks"><article v-for="item in gateResult.checks" :key="item.id" :data-status="item.status"><i></i><span><strong>{{item.name}}</strong><small>{{item.message}}</small></span><b>{{item.status==='pass'?'通过':item.status==='warn'?'关注':'阻断'}}</b></article></div><div v-else class="gate-empty">执行发布授权前建议先运行门禁检查</div></section>
+          <section class="release-risk-gate" :data-status="gateResult?.allowed===false?'blocked':gateResult?.allowed===true?'passed':'idle'">
+                    <section class="release-verification" :data-status="verification?.decision||'idle'"><header><div><strong>发布后健康验证</strong><span>Argo CD、Prometheus 关联目标和活动告警综合判定</span></div><button :disabled="verificationLoading" @click="runVerification(false)"><RefreshCw :class="{spin:verificationLoading}"/>健康验证</button></header><div v-if="verification" class="gate-checks"><article v-for="item in verification.checks" :key="item.id" :data-status="item.status"><i></i><span><strong>{{item.name}}</strong><small>{{item.message}}</small></span><b>{{item.status==='pass'?'通过':item.status==='warn'?'关注':'阻断'}}</b></article><button v-if="verification.canAutoRollback" class="verification-rollback" :disabled="verificationLoading" @click="runVerification(true)">发起自动回滚审批</button></div><div v-else class="gate-empty">点击健康验证，判定发布成功、继续观察或建议回滚</div></section>
+<header><div><strong>发布前风险门禁</strong><span>变更窗口、活动告警、资产状态与 Argo CD 健康</span></div><button :disabled="gateLoading" @click="checkGate"><RefreshCw :class="{spin:gateLoading}"/>检查门禁</button></header><div v-if="gateResult" class="gate-checks"><article v-for="item in gateResult.checks" :key="item.id" :data-status="item.status"><i></i><span><strong>{{item.name}}</strong><small>{{item.message}}</small></span><b>{{item.status==='pass'?'通过':item.status==='warn'?'关注':'阻断'}}</b></article></div><div v-else class="gate-empty">执行发布授权前建议先运行门禁检查</div></section>
           <dl><div><dt>目标环境</dt><dd>{{selected.environment}}</dd></div><div><dt>发布策略</dt><dd>{{selected.strategy}}</dd></div><div><dt>关联工单</dt><dd>{{selected.ticketId||'—'}}</dd></div><div><dt>回滚版本</dt><dd>{{selected.previousVersion}}</dd></div><div><dt>事件来源</dt><dd>{{selected.source||'manual'}}</dd></div><div v-if="selected.externalId"><dt>外部发布 ID</dt><dd>{{selected.externalId}}</dd></div><div v-if="selected.approvedBy"><dt>审批人</dt><dd>{{selected.approvedBy}} · {{selected.approvedAt}}</dd></div><div v-if="selected.authorizationExpiresAt"><dt>授权有效期</dt><dd>{{selected.authorizationExpiresAt}}</dd></div></dl>
           <h3>阶段日志</h3><div class="stage-logs"><article v-for="stage in selected.stages" :key="stage.id" :data-status="stage.status"><i></i><div><strong>{{stage.name}}</strong><span>{{stage.message}} {{stage.duration}}</span></div></article></div>
           <section v-if="selected.status==='awaiting_approval' || selected.status==='rollback_awaiting_approval'" class="release-approval">

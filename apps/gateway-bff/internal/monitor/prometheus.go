@@ -172,3 +172,42 @@ func (s *Service) prometheusMetrics() []Metric {
 	}
 	return result
 }
+
+type DeploymentSignals struct {
+	Available      bool `json:"available"`
+	TargetsUp      int  `json:"targetsUp"`
+	TargetsDown    int  `json:"targetsDown"`
+	TargetsUnknown int  `json:"targetsUnknown"`
+}
+
+func (s *Service) DeploymentSignals(assetIDs []string) DeploymentSignals {
+	if s.prometheusURL == "" {
+		return DeploymentSignals{}
+	}
+	query := `up{job=~"cmdb-node-exporter|cmdb-cicd-linked"}`
+	ids := make([]string, 0, len(assetIDs))
+	for _, assetID := range assetIDs {
+		if strings.TrimSpace(assetID) != "" {
+			ids = append(ids, strings.TrimSpace(assetID))
+		}
+	}
+	if len(ids) > 0 {
+		query += `,cmdb_asset_id=~"` + strings.ReplaceAll(strings.Join(ids, "|"), `"`, `\\"`) + `"`
+	}
+	response, err := s.queryPrometheus("/api/v1/query", url.Values{"query": {query}})
+	if err != nil {
+		return DeploymentSignals{}
+	}
+	signals := DeploymentSignals{Available: true}
+	for _, sample := range response.Data.Result {
+		value, valueErr := sampleValue(sample.Value)
+		if valueErr != nil {
+			signals.TargetsUnknown++
+		} else if value > 0 {
+			signals.TargetsUp++
+		} else {
+			signals.TargetsDown++
+		}
+	}
+	return signals
+}
