@@ -92,7 +92,7 @@ func NewServer() *Server {
 	k8sService := k8s.NewService(cmdbService)
 	auditService := audit.NewService()
 	cicdService := cicd.NewService()
-	argoSyncCoordinator := newArgoSyncCoordinator(cicdService, cmdbService, releasesService)
+	argoSyncCoordinator := newArgoSyncCoordinator(cicdService, cmdbService, releasesService, monitorService, ticketsService, auditService)
 	go argoSyncCoordinator.Run(context.Background(), argoSyncInterval())
 	registerCICDRoutes(mux, authService, auditService, cicdService)
 	registerCICDRelationRoutes(mux, authService, auditService, cicdService, cmdbService)

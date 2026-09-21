@@ -48,15 +48,22 @@ type ArgoCDResources struct {
 }
 
 type ArgoApplication struct {
-	Name          string `json:"name"`
-	Namespace     string `json:"namespace"`
-	Project       string `json:"project"`
-	Destination   string `json:"destination"`
-	SyncStatus    string `json:"syncStatus"`
-	HealthStatus  string `json:"healthStatus"`
-	Revision      string `json:"revision,omitempty"`
-	LastOperation string `json:"lastOperation,omitempty"`
-	UpdatedAt     string `json:"updatedAt,omitempty"`
+	Name           string            `json:"name"`
+	Namespace      string            `json:"namespace"`
+	Project        string            `json:"project"`
+	Destination    string            `json:"destination"`
+	SyncStatus     string            `json:"syncStatus"`
+	HealthStatus   string            `json:"healthStatus"`
+	Revision       string            `json:"revision,omitempty"`
+	TargetRevision string            `json:"targetRevision,omitempty"`
+	SourceRepo     string            `json:"sourceRepo,omitempty"`
+	SourcePath     string            `json:"sourcePath,omitempty"`
+	Automated      bool              `json:"automated"`
+	SelfHeal       bool              `json:"selfHeal"`
+	Prune          bool              `json:"prune"`
+	Annotations    map[string]string `json:"annotations,omitempty"`
+	LastOperation  string            `json:"lastOperation,omitempty"`
+	UpdatedAt      string            `json:"updatedAt,omitempty"`
 }
 
 type GitLabResources struct {
@@ -190,11 +197,23 @@ func (s *Service) fetchArgoCDResources(ctx context.Context) ArgoCDResources {
 	var payload struct {
 		Items []struct {
 			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
+				Name        string            `json:"name"`
+				Namespace   string            `json:"namespace"`
+				Annotations map[string]string `json:"annotations"`
 			} `json:"metadata"`
 			Spec struct {
-				Project     string `json:"project"`
+				Project string `json:"project"`
+				Source  struct {
+					RepoURL        string `json:"repoURL"`
+					Path           string `json:"path"`
+					TargetRevision string `json:"targetRevision"`
+				} `json:"source"`
+				SyncPolicy struct {
+					Automated *struct {
+						Prune    bool `json:"prune"`
+						SelfHeal bool `json:"selfHeal"`
+					} `json:"automated"`
+				} `json:"syncPolicy"`
 				Destination struct {
 					Server    string `json:"server"`
 					Namespace string `json:"namespace"`
@@ -237,16 +256,26 @@ func (s *Service) fetchArgoCDResources(ctx context.Context) ArgoCDResources {
 		if application.Spec.Destination.Namespace != "" {
 			destination += "/" + application.Spec.Destination.Namespace
 		}
+		automated := application.Spec.SyncPolicy.Automated != nil
+		selfHeal := automated && application.Spec.SyncPolicy.Automated.SelfHeal
+		prune := automated && application.Spec.SyncPolicy.Automated.Prune
 		result.Items = append(result.Items, ArgoApplication{
-			Name:          application.Metadata.Name,
-			Namespace:     application.Metadata.Namespace,
-			Project:       application.Spec.Project,
-			Destination:   destination,
-			SyncStatus:    syncStatus,
-			HealthStatus:  healthStatus,
-			Revision:      application.Status.Sync.Revision,
-			LastOperation: application.Status.OperationState.Phase,
-			UpdatedAt:     application.Status.OperationState.FinishedAt,
+			Name:           application.Metadata.Name,
+			Namespace:      application.Metadata.Namespace,
+			Project:        application.Spec.Project,
+			Destination:    destination,
+			SyncStatus:     syncStatus,
+			HealthStatus:   healthStatus,
+			Revision:       application.Status.Sync.Revision,
+			TargetRevision: application.Spec.Source.TargetRevision,
+			SourceRepo:     application.Spec.Source.RepoURL,
+			SourcePath:     application.Spec.Source.Path,
+			Automated:      automated,
+			SelfHeal:       selfHeal,
+			Prune:          prune,
+			Annotations:    application.Metadata.Annotations,
+			LastOperation:  application.Status.OperationState.Phase,
+			UpdatedAt:      application.Status.OperationState.FinishedAt,
 		})
 	}
 	sort.SliceStable(result.Items, func(i, j int) bool { return result.Items[i].Name < result.Items[j].Name })

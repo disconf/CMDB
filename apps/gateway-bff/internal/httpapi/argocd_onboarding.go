@@ -13,7 +13,9 @@ import (
 	"cmdb/gateway-bff/internal/auth"
 	"cmdb/gateway-bff/internal/cicd"
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/releases"
+	"cmdb/gateway-bff/internal/tickets"
 )
 
 type argoApplicationView struct {
@@ -29,29 +31,35 @@ type argoApplicationView struct {
 }
 
 type argoSyncResult struct {
-	Total      int      `json:"total"`
-	Created    int      `json:"created"`
-	Updated    int      `json:"updated"`
-	Linked     int      `json:"linked"`
-	Relations  int      `json:"relations"`
-	Releases   int      `json:"releases"`
-	ReleaseIDs []string `json:"releaseIds,omitempty"`
+	Total             int      `json:"total"`
+	Created           int      `json:"created"`
+	Updated           int      `json:"updated"`
+	Linked            int      `json:"linked"`
+	Relations         int      `json:"relations"`
+	Releases          int      `json:"releases"`
+	ReleaseIDs        []string `json:"releaseIds,omitempty"`
+	Drifted           int      `json:"drifted"`
+	Remediated        int      `json:"remediated"`
+	RemediationFailed int      `json:"remediationFailed"`
 }
 
 type argoSyncStatus struct {
-	Running       bool     `json:"running"`
-	LastRunAt     string   `json:"lastRunAt,omitempty"`
-	LastSuccessAt string   `json:"lastSuccessAt,omitempty"`
-	Status        string   `json:"status"`
-	Message       string   `json:"message"`
-	Total         int      `json:"total"`
-	Created       int      `json:"created"`
-	Updated       int      `json:"updated"`
-	Linked        int      `json:"linked"`
-	Relations     int      `json:"relations"`
-	Releases      int      `json:"releases"`
-	ReleaseIDs    []string `json:"releaseIds,omitempty"`
-	DurationMS    int64    `json:"durationMs"`
+	Running           bool     `json:"running"`
+	LastRunAt         string   `json:"lastRunAt,omitempty"`
+	LastSuccessAt     string   `json:"lastSuccessAt,omitempty"`
+	Status            string   `json:"status"`
+	Message           string   `json:"message"`
+	Total             int      `json:"total"`
+	Created           int      `json:"created"`
+	Updated           int      `json:"updated"`
+	Linked            int      `json:"linked"`
+	Relations         int      `json:"relations"`
+	Releases          int      `json:"releases"`
+	ReleaseIDs        []string `json:"releaseIds,omitempty"`
+	Drifted           int      `json:"drifted"`
+	Remediated        int      `json:"remediated"`
+	RemediationFailed int      `json:"remediationFailed"`
+	DurationMS        int64    `json:"durationMs"`
 }
 
 type argoSyncCoordinator struct {
@@ -60,10 +68,14 @@ type argoSyncCoordinator struct {
 	cicdService    *cicd.Service
 	cmdbService    *cmdb.Service
 	releaseService *releases.Service
+	monitorService *monitor.Service
+	ticketService  *tickets.Service
+	auditService   *audit.Service
+	drifted        map[string]bool
 }
 
-func newArgoSyncCoordinator(cicdService *cicd.Service, cmdbService *cmdb.Service, releaseService *releases.Service) *argoSyncCoordinator {
-	return &argoSyncCoordinator{status: argoSyncStatus{Status: "idle", Message: "等待首次同步"}, cicdService: cicdService, cmdbService: cmdbService, releaseService: releaseService}
+func newArgoSyncCoordinator(cicdService *cicd.Service, cmdbService *cmdb.Service, releaseService *releases.Service, monitorService *monitor.Service, ticketService *tickets.Service, auditService *audit.Service) *argoSyncCoordinator {
+	return &argoSyncCoordinator{status: argoSyncStatus{Status: "idle", Message: "等待首次同步"}, cicdService: cicdService, cmdbService: cmdbService, releaseService: releaseService, monitorService: monitorService, ticketService: ticketService, auditService: auditService, drifted: make(map[string]bool)}
 }
 
 func (c *argoSyncCoordinator) Status() argoSyncStatus {
@@ -79,8 +91,22 @@ func (c *argoSyncCoordinator) Sync(ctx context.Context, operator string) argoSyn
 	c.status.Running = true
 	c.status.Status = "running"
 	c.status.Message = "正在同步 Argo CD Application"
-	result := syncArgoApplications(ctx, c.cicdService, c.cmdbService, c.releaseService, c.cmdbService.InventoryAssets(), operator)
-	c.status = argoSyncStatus{Running: false, LastRunAt: time.Now().Format(time.RFC3339), LastSuccessAt: time.Now().Format(time.RFC3339), Status: "success", Message: "Argo CD Application 同步完成", Total: result.Total, Created: result.Created, Updated: result.Updated, Linked: result.Linked, Relations: result.Relations, Releases: result.Releases, ReleaseIDs: result.ReleaseIDs, DurationMS: time.Since(started).Milliseconds()}
+	var result argoSyncResult
+	acquired, lockErr := c.cicdService.WithAdvisoryLock(ctx, 741852963, func() error {
+		result = syncArgoApplications(ctx, c.cicdService, c.cmdbService, c.releaseService, c.cmdbService.InventoryAssets(), operator)
+		c.detectDrift(ctx, &result)
+		return nil
+	})
+	now := time.Now().Format(time.RFC3339)
+	if lockErr != nil {
+		c.status = argoSyncStatus{Running: false, LastRunAt: now, Status: "error", Message: lockErr.Error(), DurationMS: time.Since(started).Milliseconds()}
+		return result
+	}
+	if !acquired {
+		c.status = argoSyncStatus{Running: false, LastRunAt: now, Status: "skipped", Message: "其他 Gateway 副本正在执行 Argo CD 同步", DurationMS: time.Since(started).Milliseconds()}
+		return result
+	}
+	c.status = argoSyncStatus{Running: false, LastRunAt: now, LastSuccessAt: now, Status: "success", Message: "Argo CD Application 同步完成", Total: result.Total, Created: result.Created, Updated: result.Updated, Linked: result.Linked, Relations: result.Relations, Releases: result.Releases, ReleaseIDs: result.ReleaseIDs, Drifted: result.Drifted, Remediated: result.Remediated, RemediationFailed: result.RemediationFailed, DurationMS: time.Since(started).Milliseconds()}
 	return result
 }
 
@@ -124,6 +150,24 @@ func registerArgoCDOnboardingRoutes(mux *http.ServeMux, authService *auth.Servic
 		result := coordinator.Sync(r.Context(), user.Username)
 		auditService.Record(user.Username, "cicd.argocd.applications.sync", "argocd-applications", "total="+strconv.Itoa(result.Total)+",created="+strconv.Itoa(result.Created)+",updated="+strconv.Itoa(result.Updated))
 		writeJSON(w, http.StatusOK, result)
+	})
+	mux.HandleFunc("POST /api/v1/cicd/argocd/applications/{name}/sync", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "release:manage") {
+			return
+		}
+		var input struct {
+			Namespace string `json:"namespace"`
+			Prune     bool   `json:"prune"`
+			DryRun    bool   `json:"dryRun"`
+		}
+		_ = decodeJSON(r, &input)
+		if err := coordinator.cicdService.SyncArgoApplication(r.Context(), input.Namespace, r.PathValue("name"), input.Prune, input.DryRun); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "ARGOCD_SYNC_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "cicd.argocd.application.sync", r.PathValue("name"), "prune="+strconv.FormatBool(input.Prune))
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "submitted", "name": r.PathValue("name")})
 	})
 	mux.HandleFunc("GET /api/v1/cicd/argocd/sync/status", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "release:view") {
@@ -287,4 +331,71 @@ func argoSyncInterval() time.Duration {
 		return 10 * time.Minute
 	}
 	return duration
+}
+
+func (c *argoSyncCoordinator) detectDrift(ctx context.Context, result *argoSyncResult) {
+	overview := c.cicdService.Resources(ctx, false)
+	observed := make(map[string]bool)
+	for _, app := range overview.ArgoCD.Items {
+		key := strings.Trim(app.Namespace+"/"+app.Name, "/")
+		observed[key] = true
+		if strings.EqualFold(app.SyncStatus, "Synced") {
+			if c.drifted[key] {
+				c.resolveDrift(ctx, app)
+			}
+			continue
+		}
+		result.Drifted++
+		first := !c.drifted[key]
+		c.drifted[key] = true
+		c.raiseDrift(ctx, app)
+		if first && argoAutoSyncEnabled(app) {
+			if err := c.cicdService.SyncArgoApplication(ctx, app.Namespace, app.Name, app.Prune, false); err != nil {
+				result.RemediationFailed++
+				c.auditService.Record("argocd-sync", "cicd.argocd.drift.remediation_failed", key, err.Error())
+			} else {
+				result.Remediated++
+				c.auditService.Record("argocd-sync", "cicd.argocd.drift.remediated", key, "Sync 请求已提交")
+			}
+		}
+	}
+	for key := range c.drifted {
+		if !observed[key] {
+			c.resolveDrift(ctx, cicd.ArgoApplication{Name: key, Namespace: ""})
+		}
+	}
+}
+
+func (c *argoSyncCoordinator) raiseDrift(ctx context.Context, app cicd.ArgoApplication) {
+	key := strings.Trim(app.Namespace+"/"+app.Name, "/")
+	severity := "warning"
+	if strings.EqualFold(app.HealthStatus, "Degraded") {
+		severity = "critical"
+	}
+	input := monitor.HealthEventInput{Source: "argocd", ResourceType: "argocd-application", ResourceID: key, ResourceName: app.Name, Status: "firing", Severity: severity, Summary: "Argo CD 应用发生配置漂移", Description: "应用 " + app.Name + " 当前同步状态为 " + app.SyncStatus + "，健康状态为 " + app.HealthStatus, AssetID: argoApplicationAssetID(app.Namespace, app.Name), Application: app.Name, Environment: app.Namespace}
+	_, payload := monitor.BuildHealthEventPayload(input)
+	if _, err := c.monitorService.ReceiveWebhook(payload); err != nil {
+		return
+	}
+	syncAssetHealthFromAlerts(c.cmdbService, c.monitorService, payload)
+	syncTicketsFromAlerts(c.ticketService, c.auditService, payload)
+}
+
+func (c *argoSyncCoordinator) resolveDrift(ctx context.Context, app cicd.ArgoApplication) {
+	key := strings.Trim(app.Namespace+"/"+app.Name, "/")
+	input := monitor.HealthEventInput{Source: "argocd", ResourceType: "argocd-application", ResourceID: key, ResourceName: app.Name, Status: "resolved", Severity: "info", Summary: "Argo CD 应用漂移已恢复", Description: "应用 " + app.Name + " 已恢复同步", AssetID: argoApplicationAssetID(app.Namespace, app.Name), Application: app.Name, Environment: app.Namespace}
+	_, payload := monitor.BuildHealthEventPayload(input)
+	if _, err := c.monitorService.ReceiveWebhook(payload); err != nil {
+		return
+	}
+	syncAssetHealthFromAlerts(c.cmdbService, c.monitorService, payload)
+	syncTicketsFromAlerts(c.ticketService, c.auditService, payload)
+	delete(c.drifted, key)
+}
+
+func argoAutoSyncEnabled(app cicd.ArgoApplication) bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CICD_ARGOCD_AUTO_SYNC")), "true") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(app.Annotations["cmdb.jzq.com/auto-sync"]), "true")
 }

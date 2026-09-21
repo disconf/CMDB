@@ -19,7 +19,7 @@ type AutoDiscoveryResult = { scanned:number; matched:number; applied:number; upd
 type ImpactAnalysis = { resourceType:string; resourceId:string; directAssets:Array<{assetId:string;assetName:string;assetType:string;status:string;relationType:string;source:string}>; downstreamAssets:Array<{fromAssetId:string;fromAssetName:string;relationType:string;assetId:string;assetName:string;assetType:string;status:string}>; impactCount:number }
 type CICDMonitorTarget = { resourceType:string; resourceId:string; resourceName:string; relationType:string; assetId:string; assetName:string; assetType:string; target:string; port:string; exporter:string; status:string; source:string; lastSeenAt:string }
 type CICDMonitorSummary = { total:number; configured:number; missing:number }
-type ArgoSyncStatus = { running:boolean; lastRunAt:string; lastSuccessAt:string; status:string; message:string; total:number; created:number; updated:number; linked:number; relations:number; releases:number; durationMs:number }
+type ArgoSyncStatus = { running:boolean; lastRunAt:string; lastSuccessAt:string; status:string; message:string; total:number; created:number; updated:number; linked:number; relations:number; releases:number; drifted:number; remediated:number; remediationFailed:number; durationMs:number }
 type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources' | 'relations' | 'monitoring'
 
 const auth = useAuthStore()
@@ -447,7 +447,7 @@ onMounted(load)
 
         <template v-else-if="tab==='resources'">
           <div class="integration-toolbar">
-            <div><strong>CI/CD 资源总览</strong><span>展示 Harbor 仓库、Argo CD 应用同步状态和 GitLab 项目链路，数据缓存 30 秒。</span><span>Argo 自动同步：{{argoSyncStatus?.message||"等待首次同步"}} · {{formatCheckedAt(argoSyncStatus?.lastSuccessAt)}}</span></div>
+            <div><strong>CI/CD 资源总览</strong><span>展示 Harbor 仓库、Argo CD 应用同步状态和 GitLab 项目链路，数据缓存 30 秒。</span><span>Argo 自动同步：{{argoSyncStatus?.message||"等待首次同步"}} · 漂移 {{argoSyncStatus?.drifted||0}} · 自动修复 {{argoSyncStatus?.remediated||0}} · {{formatCheckedAt(argoSyncStatus?.lastSuccessAt)}}</span></div>
             <div class="resource-actions"><button :disabled="argoSyncing" @click="syncArgoApplications"><Rocket/>纳管 Argo 应用</button><button :disabled="resourcesLoading" @click="loadResources(true)"><RefreshCw :class="{spin:resourcesLoading}"/>刷新资源</button></div>
           </div>
           <div v-if="resources" class="resource-grid">
