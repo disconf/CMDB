@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Cable, Camera, Clock3, GitBranch, Maximize2, Network, RefreshCw, RotateCcw, Search, Server, Waypoints, X } from 'lucide-vue-next'
+import { Cable, Camera, Clock3, GitBranch, Maximize2, Network, RefreshCw, RotateCcw, Rocket, Search, Server, Waypoints, X } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { captureTopologySnapshot, fetchPhysicalTopology, fetchTopologySnapshot, fetchTopologySnapshots, fetchVLANInventory } from '@/api/cmdb'
 import { healthLabel, impactCount } from '@/features/topology/topologyModel'
@@ -10,7 +10,7 @@ type Edge = { id:string; source:string; target:string; relation:string; linkKind
 type Graph = { nodes:Node[]; edges:Edge[]; updatedAt:string }
 type ImpactNode = Node & { distance:number; direction:'upstream'|'downstream'|string; path:string[] }
 type Impact = { root:Node; affected:ImpactNode[]; paths:string[][]; summary:{ total:number; healthy:number; warning:number; critical:number } }
-type Mode = 'business'|'physical'|'vlan'
+type Mode = 'business'|'physical'|'vlan'|'cicd'
 type Snapshot = { id:string;kind:string;environment:string;nodeCount:number;edgeCount:number;operator:string;createdAt:string;payload?:unknown }
 
 const auth = useAuthStore()
@@ -45,14 +45,16 @@ const nodeNameByID = computed(() => Object.fromEntries(graph.value.nodes.map(nod
 const nodeByID = computed(() => Object.fromEntries(graph.value.nodes.map(node => [node.id, node])))
 function isNetworkNode(id:string) { const type=nodeByID.value[id]?.assetType; return type==='network-device'||type==='load-balancer' }
 function edgeLinkKind(edge:Edge) { if (edge.linkKind) return edge.linkKind; return isNetworkNode(edge.source)&&isNetworkNode(edge.target)?'switch-interconnect':((isNetworkNode(edge.source)!==isNetworkNode(edge.target))?'host-access':'physical') }
-function edgeKindLabel(edge:Edge) { return ({'host-access':'服务器接入','switch-interconnect':'交换机互联',physical:'物理链路'} as Record<string,string>)[edgeLinkKind(edge)]||'物理链路' }
-function edgePortLabel(edge:Edge) { const source=edge.sourceInterface?.trim()||'端口未发现'; const target=edge.targetPort?.trim()||'端口未发现'; return `${source} ↔ ${target}` }
+function edgeKindLabel(edge:Edge) { if (mode.value==='cicd') return 'CI/CD 关联'; return ({'host-access':'服务器接入','switch-interconnect':'交换机互联',physical:'物理链路'} as Record<string,string>)[edgeLinkKind(edge)]||'物理链路' }
+function edgePortLabel(edge:Edge) { if (mode.value==='cicd') return edge.relation; const source=edge.sourceInterface?.trim()||'端口未发现'; const target=edge.targetPort?.trim()||'端口未发现'; return `${source} ↔ ${target}` }
 function edgeMetaLabel(edge:Edge) { return `${edgeKindLabel(edge)} · ${edge.relation}` }
 const selectedEdges = computed(() => selected.value ? graph.value.edges.filter(edge => edge.source === selected.value?.id || edge.target === selected.value?.id) : [])
 const physicalNodeCount = computed(() => graph.value.nodes.filter(node => ['physical-server','virtual-machine','k8s-node'].includes(node.assetType || '')).length)
 const physicalSwitchCount = computed(() => graph.value.nodes.filter(node => ['network-device','load-balancer'].includes(node.assetType || '')).length)
 const vlanCount = computed(() => mode.value === 'vlan' ? graph.value.nodes.filter(node => node.kind === 'VLAN').length : 0)
 const vlanMemberCount = computed(() => mode.value === 'vlan' ? graph.value.nodes.filter(node => node.kind !== 'VLAN').length : 0)
+const cicdResourceCount = computed(() => graph.value.nodes.filter(node => node.id.startsWith('cicd|')).length)
+const cicdAssetCount = computed(() => graph.value.nodes.filter(node => node.id.startsWith('asset|')).length)
 
 async function buildVLANGraph() {
   const items = await fetchVLANInventory(auth.token)
@@ -100,7 +102,13 @@ function endpointLabel(edge:Edge, side:'source'|'target') { const id = side === 
 async function load() {
   loading.value = true
   try {
-    if (mode.value === 'vlan') {
+    if (mode.value === 'cicd') {
+      const response = await fetch('/api/v1/topology/cicd', { headers: headers.value })
+      graph.value = await response.json()
+      selected.value = graph.value.nodes[0]
+      impact.value = undefined
+      snapshotView.value = false
+    } else if (mode.value === 'vlan') {
       graph.value = await buildVLANGraph()
       selected.value = graph.value.nodes[0]
       impact.value = undefined
@@ -120,6 +128,7 @@ async function switchMode(value:Mode) { mode.value = value; selected.value = und
 async function toggleUnlinked() { if (mode.value === 'physical') await load() }
 async function select(node:Node) {
   selected.value = node
+  if (mode.value === 'cicd') { impact.value = undefined; return }
   if (mode.value !== 'business') { impact.value = undefined; return }
   const response = await fetch(`/api/v1/topology/nodes/${encodeURIComponent(node.id)}/impact`, { headers: headers.value })
   impact.value = await response.json()
@@ -130,23 +139,29 @@ onMounted(load)
 <template>
   <section class="topology-page">
     <header class="topology-heading">
-      <div><span>RELATIONSHIP &amp; IMPACT MAP</span><h1>{{ mode === 'physical' ? '物理网络拓扑' : mode === 'vlan' ? 'VLAN 端口拓扑' : '资产拓扑中心' }}</h1><p>{{ mode === 'physical' ? '服务器网卡 → 交换机端口 → LLDP 邻居关系' : mode === 'vlan' ? 'VLAN → 成员端口 → 资产与 ARP 证据' : '项目 → 应用 → 服务 → 实例 → 基础设施' }}</p></div>
+      <div><span>RELATIONSHIP &amp; IMPACT MAP</span><h1>{{ mode === 'physical' ? '物理网络拓扑' : mode === 'vlan' ? 'VLAN 端口拓扑' : mode === 'cicd' ? 'CI/CD 资源拓扑' : '资产拓扑中心' }}</h1><p>{{ mode === 'physical' ? '服务器网卡 → 交换机端口 → LLDP 邻居关系' : mode === 'vlan' ? 'VLAN → 成员端口 → 资产与 ARP 证据' : mode === 'cicd' ? 'Harbor / Argo CD / GitLab → CMDB 资产 → 下游影响' : '项目 → 应用 → 服务 → 实例 → 基础设施' }}</p></div>
       <div><label><Search/><input v-model="query" placeholder="搜索拓扑节点"></label><button @click="load"><RefreshCw :class="{spin:loading}"/>刷新</button><button><Maximize2/>全屏画布</button></div>
     </header>
-    <nav class="topology-mode-tabs"><button :class="{active:mode==='business'}" @click="switchMode('business')"><GitBranch/>业务关系拓扑</button><button :class="{active:mode==='physical'}" @click="switchMode('physical')"><Cable/>物理网络拓扑</button><button :class="{active:mode==='vlan'}" @click="switchMode('vlan')"><Network/>VLAN 视图</button></nav>
-    <div class="topology-stats"><span>{{ mode==='physical' && !showUnlinked ? '已关联节点' : '节点' }} <b>{{graph.nodes.length}}</b></span><span>关系 <b>{{graph.edges.length}}</b></span><template v-if="mode==='physical'"><span>服务器 <b>{{physicalNodeCount}}</b></span><span>网络设备 <b>{{physicalSwitchCount}}</b></span></template><template v-else-if="mode==='vlan'"><span>VLAN <b>{{vlanCount}}</b></span><span>成员端口 <b>{{vlanMemberCount}}</b></span></template><span v-else>异常 <b>{{graph.nodes.filter(n=>n.status!=='healthy').length}}</b></span><span>更新时间 <b>{{graph.updatedAt}}</b></span></div>
+    <nav class="topology-mode-tabs"><button :class="{active:mode==='business'}" @click="switchMode('business')"><GitBranch/>业务关系拓扑</button><button :class="{active:mode==='physical'}" @click="switchMode('physical')"><Cable/>物理网络拓扑</button><button :class="{active:mode==='vlan'}" @click="switchMode('vlan')"><Network/>VLAN 视图</button><button :class="{active:mode==='cicd'}" @click="switchMode('cicd')"><Rocket/>CI/CD 资源拓扑</button></nav>
+    <div class="topology-stats"><span>{{ mode==='physical' && !showUnlinked ? '已关联节点' : '节点' }} <b>{{graph.nodes.length}}</b></span><span>关系 <b>{{graph.edges.length}}</b></span><template v-if="mode==='physical'"><span>服务器 <b>{{physicalNodeCount}}</b></span><span>网络设备 <b>{{physicalSwitchCount}}</b></span></template><template v-else-if="mode==='vlan'"><span>VLAN <b>{{vlanCount}}</b></span><span>成员端口 <b>{{vlanMemberCount}}</b></span></template><template v-else-if="mode==='cicd'"><span>CI/CD 资源 <b>{{cicdResourceCount}}</b></span><span>关联资产 <b>{{cicdAssetCount}}</b></span></template><span v-else>异常 <b>{{graph.nodes.filter(n=>n.status!=='healthy').length}}</b></span><span>更新时间 <b>{{graph.updatedAt}}</b></span></div>
     <div v-if="mode==='physical'" class="snapshot-strip"><button class="primary" @click="captureSnapshot"><Camera/>保存当前快照</button><label class="topology-switch" title="默认只显示存在物理链路关系的设备"><input v-model="showUnlinked" type="checkbox" @change="toggleUnlinked"><span>显示未关联设备</span></label><button v-if="snapshotView" @click="returnLive"><RotateCcw/>返回实时拓扑</button><span v-for="snapshot in snapshots.slice(0,6)" :key="snapshot.id" class="snapshot-item"><Clock3/><button @click="viewSnapshot(snapshot.id)"><strong>{{ snapshot.createdAt }}</strong><small>{{ snapshot.nodeCount }} 节点 · {{ snapshot.edgeCount }} 链路 · {{ snapshot.operator }}</small></button></span></div>
     <div class="topology-workspace">
       <main class="graph-canvas" :class="{physical:mode==='physical'}">
-        <div class="layer-labels"><span v-for="(name,i) in mode==='physical' ? ['服务器侧','接入交换机','汇聚/核心交换机'] : mode==='vlan' ? ['VLAN','成员端口/资产'] : ['项目','应用','服务','实例','基础设施']" :key="name" :style="{left:(45+(mode==='physical'?i*450:i*220))+'px'}">{{name}}</span></div>
+        <div class="layer-labels"><span v-for="(name,i) in mode==='physical' ? ['服务器侧','接入交换机','汇聚/核心交换机'] : mode==='vlan' ? ['VLAN','成员端口/资产'] : mode==='cicd' ? ['CI/CD 资源','CMDB 资产','下游影响'] : ['项目','应用','服务','实例','基础设施']" :key="name" :style="{left:(45+(mode==='physical'?i*450:i*220))+'px'}">{{name}}</span></div>
         <svg :viewBox="mode==='physical' ? '0 0 1200 620' : '0 0 1100 440'" preserveAspectRatio="xMinYMin meet"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z"/></marker></defs><g class="edges"><path v-for="edge in graph.edges" :key="edge.id" :class="edgeLinkKind(edge)" :d="`M ${positions[edge.source]?.x+65} ${positions[edge.source]?.y} C ${positions[edge.source]?.x+120} ${positions[edge.source]?.y}, ${positions[edge.target]?.x-120} ${positions[edge.target]?.y}, ${positions[edge.target]?.x-65} ${positions[edge.target]?.y}`"/><text class="edge-port-label" v-for="edge in graph.edges" :key="'p'+edge.id" :x="(positions[edge.source]?.x+positions[edge.target]?.x)/2" :y="(positions[edge.source]?.y+positions[edge.target]?.y)/2-12">{{edgePortLabel(edge)}}</text><text class="edge-meta-label" v-for="edge in graph.edges" :key="'t'+edge.id" :x="(positions[edge.source]?.x+positions[edge.target]?.x)/2" :y="(positions[edge.source]?.y+positions[edge.target]?.y)/2+1">{{edgeMetaLabel(edge)}}</text></g></svg>
-        <button v-for="node in visibleNodes" :key="node.id" class="graph-node" :class="{selected:selected?.id===node.id}" :data-status="node.status" :style="{left:(positions[node.id]?.x-65)+'px',top:(positions[node.id]?.y-34)+'px'}" @click="select(node)"><Network v-if="(mode==='physical'&&node.assetType==='network-device')||(mode==='vlan'&&node.kind==='VLAN')"/><Server v-else/><span><strong>{{node.name}}</strong><small>{{node.role||node.kind}}<template v-if="node.ip"> · {{node.ip}}</template></small><em v-if="mode==='physical'&&node.portCount">{{node.upPortCount}} / {{node.portCount}} 端口</em></span><i></i></button>
-        <div v-if="mode==='physical'&&!loading&&!graph.nodes.length" class="topology-empty"><Cable/><strong>当前没有已关联的物理链路</strong><span>请先在服务器详情中关联交换机端口，或打开上方开关查看未关联设备。</span></div>
+        <button v-for="node in visibleNodes" :key="node.id" class="graph-node" :class="{selected:selected?.id===node.id}" :data-status="node.status" :style="{left:(positions[node.id]?.x-65)+'px',top:(positions[node.id]?.y-34)+'px'}" @click="select(node)"><Network v-if="(mode==='physical'&&node.assetType==='network-device')||(mode==='vlan'&&node.kind==='VLAN')"/><Rocket v-else-if="mode==='cicd'&&node.id.startsWith('cicd|')"/><Server v-else/><span><strong>{{node.name}}</strong><small>{{node.role||node.kind}}<template v-if="node.ip"> · {{node.ip}}</template></small><em v-if="mode==='physical'&&node.portCount">{{node.upPortCount}} / {{node.portCount}} 端口</em></span><i></i></button>
+        <div v-if="mode==='physical'&&!loading&&!graph.nodes.length" class="topology-empty"><Cable/><strong>当前没有已关联的物理链路</strong><span>请先在服务器详情中关联交换机端口，或打开上方开关查看未关联设备。</span></div><div v-if="mode==='cicd'&&!loading&&!graph.nodes.length" class="topology-empty"><Rocket/><strong>当前没有 CI/CD 资源图谱</strong><span>请先在“资源关系”中执行自动发现或手工关联资源。</span></div>
         <div class="graph-legend"><span v-for="s in ['healthy','warning','critical']" :key="s"><i :data-status="s"></i>{{healthLabel(s)}}</span><span v-if="mode==='physical'" class="edge-legend-item"><i class="edge-line host-access"></i>服务器接入</span><span v-if="mode==='physical'" class="edge-legend-item"><i class="edge-line switch-interconnect"></i>交换机互联</span></div>
       </main>
       <aside v-if="selected" class="impact-panel">
-        <header><div><span>{{ mode==='physical' ? 'PHYSICAL LINK DETAIL' : mode==='vlan' ? 'VLAN MEMBERS' : 'IMPACT ANALYSIS' }}</span><h2>{{selected.name}}</h2></div><button @click="selected=undefined;impact=undefined"><X/></button></header>
-        <template v-if="mode==='physical'">
+        <header><div><span>{{ mode==='physical' ? 'PHYSICAL LINK DETAIL' : mode==='vlan' ? 'VLAN MEMBERS' : mode==='cicd' ? 'CI/CD RESOURCE DETAIL' : 'IMPACT ANALYSIS' }}</span><h2>{{selected.name}}</h2></div><button @click="selected=undefined;impact=undefined"><X/></button></header>
+        <template v-if="mode==='cicd'">
+          <div class="impact-score"><Rocket/><div><strong>{{ selectedEdges.length }}</strong><span>关联关系</span></div></div>
+          <dl><div><dt>节点类型</dt><dd>{{selected.kind}}</dd></div><div><dt>状态</dt><dd :data-status="selected.status">{{healthLabel(selected.status)}}</dd></div><div><dt>负责人</dt><dd>{{selected.owner||'—'}}</dd></div><div><dt>IP 地址</dt><dd>{{selected.ip||'—'}}</dd></div></dl>
+          <h3>关联资源 <small>CI/CD 资源与 CMDB 资产关系</small></h3>
+          <div class="affected-list physical-links"><div v-for="edge in selectedEdges" :key="edge.id"><Network/><span><strong>{{ endpointLabel(edge, edge.source===selected.id?'target':'source') }}</strong><small>{{ edge.relation }}</small></span><b>{{edge.relation}}</b></div><div v-if="!selectedEdges.length" class="rule-empty">当前资源没有已关联资产</div></div>
+        </template>
+        <template v-else-if="mode==='physical'">
           <div class="impact-score"><Waypoints/><div><strong>{{ selectedEdges.length }}</strong><span>关联物理链路</span></div></div>
           <dl><div><dt>设备角色</dt><dd>{{selected.role||selected.kind}}</dd></div><div><dt>节点类型</dt><dd>{{ selected.kind }}</dd></div><div><dt>健康状态</dt><dd :data-status="selected.status">{{healthLabel(selected.status)}}</dd></div><div><dt>IP 地址</dt><dd>{{selected.ip||'—'}}</dd></div><div><dt>位置</dt><dd>{{selected.location||'—'}}</dd></div><div><dt>端口摘要</dt><dd>{{selected.portCount ? `${selected.upPortCount} / ${selected.portCount} 在线` : '—'}}</dd></div></dl>
           <h3>物理链路 <small>基于人工绑定和 LLDP 自动发现</small></h3>
