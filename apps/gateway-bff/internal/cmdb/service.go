@@ -61,7 +61,7 @@ func NewService() *Service {
 			asset("lb-prod-01", "public-api-lb", "load-balancer", "负载均衡", "online", "10.20.0.10", "生产", "基础设施组", "孙磊", "上海一号机房 / 网络区", "API", []string{"入口", "HAProxy"}),
 		}
 	}
-	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "virtualization-cluster", Name: "虚拟化集群", Category: "计算", Icon: "Boxes", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "storage-device", Name: "存储设备", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "security-device", Name: "安全设备", Category: "安全", Icon: "ShieldCheck", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
+	models := []Model{{Code: "physical-server", Name: "物理服务器", Category: "计算", Icon: "Server", Enabled: true}, {Code: "virtual-machine", Name: "虚拟机", Category: "计算", Icon: "Box", Enabled: true}, {Code: "virtualization-cluster", Name: "虚拟化集群", Category: "计算", Icon: "Boxes", Enabled: true}, {Code: "cloud-host", Name: "云主机", Category: "计算", Icon: "Cloud", Enabled: true}, {Code: "k8s-node", Name: "K8s 节点", Category: "容器", Icon: "Container", Enabled: true}, {Code: "k8s-cluster", Name: "K8s 集群", Category: "容器", Icon: "Boxes", Enabled: true}, {Code: "k8s-namespace", Name: "K8s 命名空间", Category: "容器", Icon: "FolderTree", Enabled: true}, {Code: "k8s-workload", Name: "K8s 工作负载", Category: "容器", Icon: "Layers", Enabled: true}, {Code: "cicd-application", Name: "CI/CD 应用", Category: "交付", Icon: "Rocket", Enabled: true}, {Code: "k8s-pod", Name: "K8s Pod", Category: "容器", Icon: "Box", Enabled: true}, {Code: "k8s-service", Name: "K8s Service", Category: "容器", Icon: "Network", Enabled: true}, {Code: "k8s-ingress", Name: "K8s Ingress", Category: "容器", Icon: "GitFork", Enabled: true}, {Code: "k8s-pvc", Name: "K8s PVC", Category: "存储", Icon: "Database", Enabled: true}, {Code: "k8s-pv", Name: "K8s 持久卷", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "k8s-storageclass", Name: "K8s 存储类", Category: "存储", Icon: "Layers", Enabled: true}, {Code: "network-device", Name: "网络设备", Category: "网络", Icon: "Network", Enabled: true}, {Code: "storage-device", Name: "存储设备", Category: "存储", Icon: "HardDrive", Enabled: true}, {Code: "security-device", Name: "安全设备", Category: "安全", Icon: "ShieldCheck", Enabled: true}, {Code: "database", Name: "数据库", Category: "数据", Icon: "Database", Enabled: true}, {Code: "middleware", Name: "中间件", Category: "数据", Icon: "Layers", Enabled: true}, {Code: "load-balancer", Name: "负载均衡", Category: "网络", Icon: "GitFork", Enabled: true}}
 	models = applyModelFieldPresets(models)
 	service := &Service{assets: assets, models: models, history: make(map[string][]HistoryEntry), snapshots: []TopologySnapshot{}, anomalyStates: map[string]NetworkAnomalyState{}, integrations: map[string]IntegrationConfig{}}
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
@@ -291,6 +291,22 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "snmp_status", Label: "SNMP采集状态", Type: "text"},
 		{Name: "port_count", Label: "端口数量", Type: "text"},
 		{Name: "vlan_count", Label: "VLAN数量", Type: "text"},
+	},
+	"cicd-application": {
+		{Name: "application_name", Label: "应用名称", Type: "text", Required: true},
+		{Name: "source_type", Label: "来源类型", Type: "select", Options: []string{"Argo CD", "GitLab", "Harbor"}},
+		{Name: "project", Label: "Argo Project", Type: "text"},
+		{Name: "namespace", Label: "目标命名空间", Type: "text"},
+		{Name: "destination", Label: "目标集群", Type: "text"},
+		{Name: "sync_status", Label: "同步状态", Type: "text"},
+		{Name: "health_status", Label: "健康状态", Type: "text"},
+		{Name: "revision", Label: "当前版本", Type: "text"},
+		{Name: "source_repo", Label: "源码仓库", Type: "text"},
+		{Name: "source_path", Label: "Manifest 路径", Type: "text"},
+		{Name: "image", Label: "镜像", Type: "text"},
+		{Name: "argocd_url", Label: "Argo CD 地址", Type: "text"},
+		{Name: "last_operation", Label: "最近操作", Type: "text"},
+		{Name: "updated_at", Label: "同步时间", Type: "text"},
 	},
 	"middleware": {
 		{Name: "middleware_type", Label: "中间件类型", Type: "text"},

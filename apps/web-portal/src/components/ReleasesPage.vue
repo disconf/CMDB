@@ -40,6 +40,7 @@ const loading = ref(false)
 const busy = ref(false)
 const integrationTesting = ref('')
 const resourcesLoading = ref(false)
+const argoSyncing = ref(false)
 const relationLoading = ref(false)
 const relationSaving = ref(false)
 const monitorLoading = ref(false)
@@ -124,6 +125,21 @@ async function testAllIntegrations() {
     error.value = reason instanceof Error ? reason.message : '批量连接检测失败'
   } finally {
     integrationTesting.value = ''
+  }
+}
+
+async function syncArgoApplications() {
+  argoSyncing.value = true
+  error.value = ''
+  try {
+    const result = await request<{total:number;created:number;updated:number;linked:number}>('/api/v1/cicd/argocd/applications/sync', { method:'POST' })
+    message.value = `Argo CD 应用纳管完成：共 ${result.total} 个，新增 ${result.created}，更新 ${result.updated}，关联集群 ${result.linked}`
+    resources.value = undefined
+    await loadResources(true)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'Argo CD 应用纳管失败'
+  } finally {
+    argoSyncing.value = false
   }
 }
 
@@ -427,7 +443,7 @@ onMounted(load)
         <template v-else-if="tab==='resources'">
           <div class="integration-toolbar">
             <div><strong>CI/CD 资源总览</strong><span>展示 Harbor 仓库、Argo CD 应用同步状态和 GitLab 项目链路，数据缓存 30 秒。</span></div>
-            <button :disabled="resourcesLoading" @click="loadResources(true)"><RefreshCw :class="{spin:resourcesLoading}"/>刷新资源</button>
+            <div class="resource-actions"><button :disabled="argoSyncing" @click="syncArgoApplications"><Rocket/>纳管 Argo 应用</button><button :disabled="resourcesLoading" @click="loadResources(true)"><RefreshCw :class="{spin:resourcesLoading}"/>刷新资源</button></div>
           </div>
           <div v-if="resources" class="resource-grid">
             <article class="resource-card">
