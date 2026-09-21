@@ -42,7 +42,6 @@ func (s *Service) runKubernetesPod(ctx context.Context, in RunInput) ([]Line, st
 		level := "info"
 		if strings.EqualFold(event.Type, "Warning") {
 			level = "warning"
-			status = "warning"
 		}
 		lines = append(lines, outputLine(level, fmt.Sprintf("事件 [%s] %s：%s", event.Type, event.Reason, event.Message)))
 	}
