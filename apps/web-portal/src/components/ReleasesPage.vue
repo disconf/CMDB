@@ -14,7 +14,9 @@ type ApprovalResponse = { release:Release; authorizationToken:string; expiresAt:
 type AutoDiscoveryItem = { resourceType:string; resourceId:string; resourceName:string; assetId?:string; assetName?:string; assetType?:string; score:number; reason?:string; action:string }
 type AutoDiscoveryResult = { scanned:number; matched:number; applied:number; updated:number; skipped:number; failed:number; items:AutoDiscoveryItem[] }
 type ImpactAnalysis = { resourceType:string; resourceId:string; directAssets:Array<{assetId:string;assetName:string;assetType:string;status:string;relationType:string;source:string}>; downstreamAssets:Array<{fromAssetId:string;fromAssetName:string;relationType:string;assetId:string;assetName:string;assetType:string;status:string}>; impactCount:number }
-type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources' | 'relations'
+type CICDMonitorTarget = { resourceType:string; resourceId:string; resourceName:string; relationType:string; assetId:string; assetName:string; assetType:string; target:string; port:string; exporter:string; status:string; source:string; lastSeenAt:string }
+type CICDMonitorSummary = { total:number; configured:number; missing:number }
+type Tab = 'releases' | 'artifacts' | 'integrations' | 'resources' | 'relations' | 'monitoring'
 
 const auth = useAuthStore()
 const releases = ref<Release[]>([])
@@ -25,6 +27,8 @@ const relations = ref<ResourceRelation[]>([])
 const relationSuggestions = ref<RelationSuggestion[]>([])
 const autoDiscovery = ref<AutoDiscoveryResult>()
 const impact = ref<ImpactAnalysis>()
+const monitorTargets = ref<CICDMonitorTarget[]>([])
+const monitorSummary = ref<CICDMonitorSummary>({ total:0, configured:0, missing:0 })
 const summary = ref<Summary>()
 const executor = ref<Executor>()
 const selected = ref<Release>()
@@ -35,6 +39,7 @@ const integrationTesting = ref('')
 const resourcesLoading = ref(false)
 const relationLoading = ref(false)
 const relationSaving = ref(false)
+const monitorLoading = ref(false)
 const relationForm = ref({ resourceType:'harbor-repository', resourceId:'', resourceName:'', assetId:'', assetName:'', assetType:'', relationType:'deployed-to' })
 const message = ref('')
 const error = ref('')
@@ -134,6 +139,7 @@ function openTab(next:Tab) {
   tab.value = next
   if (next === 'resources' && !resources.value) void loadResources()
   if (next === 'relations' && !relations.value.length) void loadRelations()
+  if (next === 'monitoring') void loadMonitorTargets()
 }
 
 async function autoDiscoverRelations(apply=false) {
@@ -159,6 +165,19 @@ async function loadImpact(item:ResourceRelation) {
     error.value = reason instanceof Error ? reason.message : '影响分析加载失败'
   } finally {
     relationLoading.value = false
+  }
+}
+
+async function loadMonitorTargets() {
+  monitorLoading.value = true
+  try {
+    const response = await request<{summary:CICDMonitorSummary;targets:CICDMonitorTarget[]}>('/api/v1/cicd/monitor-targets')
+    monitorSummary.value = response.summary
+    monitorTargets.value = response.targets
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'CI/CD 监控目标加载失败'
+  } finally {
+    monitorLoading.value = false
   }
 }
 
@@ -331,6 +350,13 @@ onMounted(load)
       <article><GitCommit/><span>GitLab<strong>{{relations.filter(item=>item.resourceType==='gitlab-project').length}}</strong></span></article>
       <article><ShieldCheck/><span>自动匹配<strong>{{relations.filter(item=>item.source==='auto').length}}</strong></span></article>
     </div>
+    <div v-else-if="tab==='monitoring'" class="release-summary">
+      <article><BellRing/><span>监控目标<strong>{{monitorSummary.total}}</strong></span></article>
+      <article><Check/><span>已配置<strong>{{monitorSummary.configured}}</strong></span></article>
+      <article><ShieldAlert/><span>缺少采集器<strong>{{monitorSummary.missing}}</strong></span></article>
+      <article><Box/><span>CI/CD 资源<strong>{{new Set(monitorTargets.map(item=>`${item.resourceType}|${item.resourceId}`)).size}}</strong></span></article>
+      <article><Network/><span>CMDB 资产<strong>{{new Set(monitorTargets.map(item=>item.assetId)).size}}</strong></span></article>
+    </div>
     <div v-else-if="tab==='resources'" class="release-summary">
       <article><Box/><span>镜像仓库<strong>{{resources?.harbor.repositories||0}}</strong></span></article>
       <article><Check/><span>Argo 应用<strong>{{resources?.argoCD.applications||0}}</strong></span></article>
@@ -348,7 +374,7 @@ onMounted(load)
 
     <div class="release-workspace">
       <main>
-        <nav><button :class="{active:tab==='releases'}" @click="openTab('releases')">发布流水线</button><button :class="{active:tab==='artifacts'}" @click="openTab('artifacts')">制品仓库</button><button :class="{active:tab==='integrations'}" @click="openTab('integrations')">CI/CD 集成</button><button :class="{active:tab==='resources'}" @click="openTab('resources')">资源总览</button><button :class="{active:tab==='relations'}" @click="openTab('relations')">资源关系</button></nav>
+        <nav><button :class="{active:tab==='releases'}" @click="openTab('releases')">发布流水线</button><button :class="{active:tab==='artifacts'}" @click="openTab('artifacts')">制品仓库</button><button :class="{active:tab==='integrations'}" @click="openTab('integrations')">CI/CD 集成</button><button :class="{active:tab==='resources'}" @click="openTab('resources')">资源总览</button><button :class="{active:tab==='relations'}" @click="openTab('relations')">资源关系</button><button :class="{active:tab==='monitoring'}" @click="openTab('monitoring')">监控联动</button></nav>
 
         <template v-if="tab==='releases'">
           <article v-for="item in releases" :key="item.id" class="release-card" :class="{selected:selected?.id===item.id}" @click="selected=item">
@@ -435,6 +461,21 @@ onMounted(load)
           </div>
         </template>
 
+        <template v-else-if="tab==='monitoring'">
+          <div class="integration-toolbar">
+            <div><strong>CI/CD 监控联动</strong><span>将资源关系关联的 CMDB 资产转换为 Prometheus 监控目标，并保留 CI/CD 资源标签。</span></div>
+            <button :disabled="monitorLoading" @click="loadMonitorTargets"><RefreshCw :class="{spin:monitorLoading}"/>刷新目标</button>
+          </div>
+          <div class="monitor-link-grid">
+            <article v-for="item in monitorTargets" :key="`${item.resourceType}|${item.resourceId}|${item.assetId}`" class="monitor-link-card" :data-status="item.status">
+              <header><i><Box/></i><div><small>{{relationResourceTypeLabel(item.resourceType)}}</small><h3>{{item.resourceName}}</h3></div><em>{{item.status==='missing'?'缺少采集器':item.status}}</em></header>
+              <div class="monitor-link-arrow"><span>{{relationTypeLabel(item.relationType)}}</span><b>→</b><strong>{{item.assetName}}</strong></div>
+              <dl><div><dt>资产类型</dt><dd>{{item.assetType}}</dd></div><div><dt>Exporter</dt><dd>{{item.exporter||'未配置'}}</dd></div><div><dt>目标地址</dt><dd>{{item.target||'待配置'}}</dd></div><div><dt>数据来源</dt><dd>{{item.source||'—'}}</dd></div></dl>
+            </article>
+          </div>
+          <div v-if="!monitorTargets.length" class="empty-release"><BellRing/><strong>暂无可监控的关联资产</strong><span>请先在“资源关系”中关联 CI/CD 资源与 CMDB 资产。</span></div>
+        </template>
+
         <template v-else-if="tab==='integrations'">
           <div class="integration-toolbar">
             <div><strong>CI/CD 工具链接</strong><span>统一检测 Harbor、Argo CD、GitLab 的连接与认证状态</span></div>
@@ -475,6 +516,14 @@ onMounted(load)
           <div class="integration-guide"><Box/><div><strong>制品关联</strong><span>把 Harbor 仓库关联到中间件、数据库或宿主机，形成构建到运行的关系。</span></div></div>
           <div class="integration-guide"><GitCommit/><div><strong>代码关联</strong><span>把 GitLab 项目关联到服务资产，串联提交、Pipeline 和发布记录。</span></div></div>
           <div class="integration-principle"><ShieldCheck/><span>关联关系只保存在运维平台内，不会修改外部 CI/CD 系统或 CMDB 基础资产。</span></div>
+        </template>
+
+        <template v-else-if="tab==='monitoring'">
+          <span>MONITORING LINKAGE</span><h2>监控联动说明</h2>
+          <p class="resource-aside-note">只有已经关联到 CMDB 资产、并且资产配置了 Exporter 地址和端口的资源，才会成为 Prometheus 目标。</p>
+          <div class="integration-guide"><BellRing/><div><strong>目标生成</strong><span>Prometheus 通过 CMDB HTTP-SD 自动发现 CI/CD 关联资产。</span></div></div>
+          <div class="integration-guide"><Box/><div><strong>资源标签</strong><span>指标会带上资源类型、资源 ID、关联类型和 CMDB 资产 ID。</span></div></div>
+          <div class="integration-guide"><ShieldAlert/><div><strong>缺失提示</strong><span>缺少 Exporter 的资产会标记为“缺少采集器”，可回到 CMDB 补充。</span></div></div>
         </template>
 
         <template v-else-if="tab==='integrations'">

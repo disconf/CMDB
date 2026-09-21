@@ -9,7 +9,7 @@ metadata: {name: prometheus-data, namespace: monitoring}
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn
-  resources: {requests: {storage: 20Gi}}
+  resources: {requests: {storage: 50Gi}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -34,9 +34,10 @@ spec:
         - {name: rules, mountPath: /etc/prometheus/rules}
         - {name: agent-token, mountPath: /etc/prometheus/token}
         - {name: data, mountPath: /prometheus}
+        startupProbe: {httpGet: {path: /-/ready, port: 9090}, failureThreshold: 60, periodSeconds: 10, timeoutSeconds: 3}
         readinessProbe: {httpGet: {path: /-/ready, port: 9090}, initialDelaySeconds: 10, periodSeconds: 10}
-        livenessProbe: {httpGet: {path: /-/healthy, port: 9090}, initialDelaySeconds: 20, periodSeconds: 15}
-        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 1, memory: 1Gi}}
+        livenessProbe: {httpGet: {path: /-/healthy, port: 9090}, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6}
+        resources: {requests: {cpu: 200m, memory: 1Gi}, limits: {cpu: 2, memory: 4Gi}}
       volumes:
       - {name: config, configMap: {name: prometheus-config}}
       - {name: rules, configMap: {name: prometheus-rules}}

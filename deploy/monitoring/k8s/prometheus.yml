@@ -65,6 +65,27 @@ scrape_configs:
         target_label: asset_type
       - source_labels: [exporter]
         target_label: exporter
+  - job_name: cmdb-cicd-linked
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/cicd
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance
+      - source_labels: [asset_type]
+        target_label: asset_type
+      - source_labels: [exporter]
+        target_label: exporter
+      - source_labels: [cicd_resource_type]
+        target_label: cicd_resource_type
+      - source_labels: [cicd_resource_id]
+        target_label: cicd_resource_id
+      - source_labels: [cicd_relation]
+        target_label: cicd_relation
+
   - job_name: cmdb-snmp
     metrics_path: /snmp
     params:
