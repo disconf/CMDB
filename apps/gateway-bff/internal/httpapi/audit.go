@@ -237,6 +237,8 @@ func auditAction(method, path string) string {
 		return "release.rollback"
 	case method == http.MethodPost && path == "/api/v1/toolbox/executions":
 		return "toolbox.execution.create"
+	case method == http.MethodPost && path == "/api/v1/aiops/analyses/generate":
+		return "aiops.analysis.generate"
 	case method == http.MethodPost && strings.HasSuffix(path, "/execute") && strings.HasPrefix(path, "/api/v1/aiops/analyses/"):
 		return "aiops.analysis.execute"
 	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/system/users/"):

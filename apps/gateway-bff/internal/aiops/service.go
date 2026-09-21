@@ -1,132 +1,224 @@
 package aiops
 
 import (
-	"cmdb/gateway-bff/internal/demo"
+	"context"
 	"errors"
+	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"cmdb/gateway-bff/internal/monitor"
+	"cmdb/gateway-bff/internal/tickets"
 )
 
-var ErrNotFound = errors.New("not found")
-var ErrValidation = errors.New("validation")
+var (
+	ErrNotFound   = errors.New("analysis not found")
+	ErrValidation = errors.New("validation")
+	ErrNotReady   = errors.New("analysis dependencies not ready")
+)
 
-type Evidence struct {
-	Type   string `json:"type"`
-	Title  string `json:"title"`
-	Detail string `json:"detail"`
-	Weight int    `json:"weight"`
-}
-type Recommendation struct {
-	RunbookID string   `json:"runbookId"`
-	Title     string   `json:"title"`
-	Risk      string   `json:"risk"`
-	Impact    string   `json:"impact"`
-	Duration  string   `json:"duration"`
-	Steps     []string `json:"steps"`
-}
-type Analysis struct {
-	ID              string           `json:"id"`
-	AlertID         string           `json:"alertId"`
-	Title           string           `json:"title"`
-	Status          string           `json:"status"`
-	Severity        string           `json:"severity"`
-	Target          string           `json:"target"`
-	RootCause       string           `json:"rootCause"`
-	Confidence      int              `json:"confidence"`
-	Summary         string           `json:"summary"`
-	CreatedAt       string           `json:"createdAt"`
-	Evidence        []Evidence       `json:"evidence"`
-	Recommendations []Recommendation `json:"recommendations"`
-}
-type Knowledge struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Category string   `json:"category"`
-	Summary  string   `json:"summary"`
-	Tags     []string `json:"tags"`
-	Helpful  int      `json:"helpful"`
-}
-type Execution struct {
-	ID               string `json:"id"`
-	AnalysisID       string `json:"analysisId"`
-	RunbookID        string `json:"runbookId"`
-	Status           string `json:"status"`
-	RequestedBy      string `json:"requestedBy"`
-	RequestedAt      string `json:"requestedAt"`
-	ApprovalRequired bool   `json:"approvalRequired"`
-}
-type Summary struct {
-	OpenAnomalies  int     `json:"openAnomalies"`
-	AnalyzedToday  int     `json:"analyzedToday"`
-	Accuracy       float64 `json:"accuracy"`
-	KnowledgeCount int     `json:"knowledgeCount"`
-	PendingActions int     `json:"pendingActions"`
-}
 type Service struct {
 	mu         sync.RWMutex
-	analyses   []Analysis
+	repo       repository
 	knowledge  []Knowledge
+	analyses   []Analysis
 	executions []Execution
+	alerts     AlertProvider
+	assets     AssetProvider
+	impact     ImpactProvider
+	tickets    TicketProvider
+	releases   ReleaseProvider
 }
 
 func NewService() *Service {
-	if !demo.Enabled() {
-		return &Service{analyses: []Analysis{}, knowledge: []Knowledge{{ID: "kb-001", Title: "Java 服务 OOM 排查手册", Category: "故障处理", Summary: "从堆转储、GC 日志和容器限制定位内存异常", Tags: []string{"OOM", "Java", "内存"}, Helpful: 48}, {ID: "kb-002", Title: "数据库连接池耗尽处理", Category: "数据库", Summary: "识别慢查询与连接泄漏并安全恢复", Tags: []string{"MySQL", "连接池", "延迟"}, Helpful: 36}, {ID: "kb-003", Title: "Kubernetes Pod 重启诊断", Category: "Kubernetes", Summary: "分析 OOMKilled、探针失败和节点驱逐", Tags: []string{"Pod", "OOM", "K8s"}, Helpful: 29}}, executions: []Execution{}}
+	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}}
+	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
+		repo, err := openPostgres(databaseURL)
+		if err != nil {
+			panic(fmt.Sprintf("initialize aiops repository: %v", err))
+		}
+		s.repo = repo
 	}
-	rec := Recommendation{"rb-memory-relief", "支付网关内存缓解", "medium", "滚动重启单个实例，流量自动摘除", "约 4 分钟", []string{"确认当前实例连接数", "从负载均衡摘除目标实例", "生成堆转储并归档", "滚动重启并执行健康检查", "恢复流量并观察 5 分钟"}}
-	return &Service{analyses: []Analysis{{"ana-001", "alert-001", "支付网关内存异常分析", "completed", "critical", "payment-gateway-vm", "应用缓存对象未及时释放", 92, "内存增长与 v4.1.0 发布高度相关，未发现宿主机资源竞争。", "14:28", []Evidence{{"metric", "内存趋势突增", "发布后 18 分钟由 62% 上升至 91.8%", 35}, {"change", "近期版本变更", "支付网关 v4.1.0 于 12:35 发布", 30}, {"topology", "影响范围", "仅 payment-gateway-vm 异常，同集群节点正常", 20}, {"log", "日志特征", "重复出现 cache allocation slow 警告", 15}}, []Recommendation{rec}}, {"ana-002", "alert-002", "订单接口延迟归因", "completed", "warning", "service-order", "数据库连接池等待时间增加", 86, "慢查询导致连接占用时间延长，接口 P95 随之升高。", "14:31", []Evidence{{"metric", "连接池使用率", "当前 84%，高于历史基线", 40}, {"log", "慢查询日志", "近 15 分钟出现 12 条超过 2 秒查询", 35}}, []Recommendation{{"rb-db-slow-query", "数据库慢查询缓解", "low", "终止异常查询并刷新统计信息", "约 3 分钟", []string{"导出慢查询列表", "确认业务影响", "终止异常查询", "刷新统计信息"}}}}}, knowledge: []Knowledge{{"kb-001", "Java 服务 OOM 排查手册", "故障处理", "从堆转储、GC 日志和容器限制定位内存异常", []string{"OOM", "Java", "内存"}, 48}, {"kb-002", "数据库连接池耗尽处理", "数据库", "识别慢查询与连接泄漏并安全恢复", []string{"MySQL", "连接池", "延迟"}, 36}, {"kb-003", "Kubernetes Pod 重启诊断", "Kubernetes", "分析 OOMKilled、探针失败和节点驱逐", []string{"Pod", "OOM", "K8s"}, 29}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if analyses, err := s.repo.LoadAnalyses(ctx); err == nil {
+		s.analyses = analyses
+	}
+	if executions, err := s.repo.LoadExecutions(ctx); err == nil {
+		s.executions = executions
+	}
+	return s
 }
+
+func (s *Service) SetAlertProvider(provider AlertProvider)     { s.alerts = provider }
+func (s *Service) SetAssetProvider(provider AssetProvider)     { s.assets = provider }
+func (s *Service) SetImpactProvider(provider ImpactProvider)   { s.impact = provider }
+func (s *Service) SetTicketProvider(provider TicketProvider)   { s.tickets = provider }
+func (s *Service) SetReleaseProvider(provider ReleaseProvider) { s.releases = provider }
+
+func (s *Service) ready() error {
+	if s.alerts == nil || s.assets == nil {
+		return ErrNotReady
+	}
+	return nil
+}
+
 func (s *Service) Summary() Summary {
-	if !demo.Enabled() {
-		return Summary{KnowledgeCount: len(s.knowledge)}
+	summary := Summary{KnowledgeCount: len(s.knowledge)}
+	if s.alerts != nil {
+		summary.OpenAnomalies = s.alerts.ActiveCount()
 	}
-	return Summary{2, 2, 91.6, len(s.knowledge), len(s.executions)}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	today := time.Now().Format("2006-01-02")
+	totalConfidence := 0
+	for _, item := range s.analyses {
+		if strings.HasPrefix(item.CreatedAt, today) {
+			summary.AnalyzedToday++
+		}
+		totalConfidence += item.Confidence
+	}
+	if len(s.analyses) > 0 {
+		summary.AverageConfidence = float64(totalConfidence) / float64(len(s.analyses))
+	}
+	summary.Accuracy = summary.AverageConfidence
+	for _, item := range s.executions {
+		if item.Status == "pending-approval" {
+			summary.PendingActions++
+		}
+	}
+	return summary
 }
-func (s *Service) Analyses() []Analysis { return append([]Analysis(nil), s.analyses...) }
-func (s *Service) Analyze(alertID string) (Analysis, error) {
-	for _, a := range s.analyses {
-		if a.AlertID == alertID {
-			return a, nil
+
+func (s *Service) Analyses() []Analysis {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := append([]Analysis(nil), s.analyses...)
+	sort.SliceStable(result, func(i, j int) bool { return result[i].CreatedAt > result[j].CreatedAt })
+	return result
+}
+
+func (s *Service) Get(id string) (Analysis, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.analyses {
+		if item.ID == id {
+			return item, nil
 		}
 	}
 	return Analysis{}, ErrNotFound
 }
-func (s *Service) Knowledge() []Knowledge { return append([]Knowledge(nil), s.knowledge...) }
-func (s *Service) SearchKnowledge(q string) []Knowledge {
-	q = strings.ToLower(q)
-	var out []Knowledge
-	for _, k := range s.knowledge {
-		hay := strings.ToLower(k.Title + " " + k.Summary + " " + strings.Join(k.Tags, " "))
-		if q == "" || strings.Contains(hay, q) {
-			out = append(out, k)
+func (s *Service) Alerts() []monitor.Alert {
+	if s.alerts == nil {
+		return []monitor.Alert{}
+	}
+	items := s.alerts.Alerts()
+	result := make([]monitor.Alert, 0, len(items))
+	for _, item := range items {
+		if strings.ToLower(item.Status) != "resolved" {
+			result = append(result, item)
 		}
 	}
-	return out
+	return result
 }
+
+func (s *Service) AnalyzeActive(ctx context.Context) ([]Analysis, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	items := s.Alerts()
+	if len(items) > 50 {
+		items = items[:50]
+	}
+	result := make([]Analysis, 0, len(items))
+	for _, alert := range items {
+		item, err := s.Analyze(ctx, alert.ID)
+		if err != nil {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (s *Service) Execute(ctx context.Context, analysisID, runbookID, user string) (Execution, error) {
+	if strings.TrimSpace(analysisID) == "" || strings.TrimSpace(runbookID) == "" || strings.TrimSpace(user) == "" {
+		return Execution{}, ErrValidation
+	}
+	analysis, err := s.Get(analysisID)
+	if err != nil {
+		return Execution{}, err
+	}
+	var selected *Recommendation
+	for i := range analysis.Recommendations {
+		if analysis.Recommendations[i].RunbookID == runbookID {
+			selected = &analysis.Recommendations[i]
+			break
+		}
+	}
+	if selected == nil {
+		return Execution{}, ErrValidation
+	}
+	if s.tickets == nil {
+		return Execution{}, ErrNotReady
+	}
+	priority := "medium"
+	if strings.EqualFold(analysis.Severity, "critical") {
+		priority = "critical"
+	} else if strings.EqualFold(analysis.Severity, "warning") {
+		priority = "high"
+	}
+	assetID, projectGroup := "", ""
+	if len(analysis.RelatedAssets) > 0 {
+		assetID = analysis.RelatedAssets[0].ID
+		projectGroup = analysis.RelatedAssets[0].ProjectGroup
+	}
+	ticket, err := s.tickets.Create(tickets.CreateInput{
+		Title:              "AIOps Runbook 执行审批：" + selected.Title,
+		Type:               "change",
+		Priority:           priority,
+		Applicant:          user,
+		Description:        "AIOps 分析 " + analysis.ID + " 建议执行 Runbook " + selected.RunbookID + "。平台只创建审批工单，不直接执行服务器操作。",
+		RelatedAsset:       assetID,
+		RelatedAlert:       analysis.AlertID,
+		ProjectGroup:       projectGroup,
+		AutomationTemplate: selected.RunbookID,
+	})
+	if err != nil {
+		return Execution{}, err
+	}
+	item := Execution{ID: newID("aiexec"), AnalysisID: analysis.ID, RunbookID: selected.RunbookID, RunbookTitle: selected.Title, Status: "pending-approval", RequestedBy: user, RequestedAt: time.Now().Format("2006-01-02 15:04:05"), ApprovalRequired: true, TicketID: ticket.ID}
+	if err = s.repo.SaveExecution(ctx, item); err != nil {
+		return Execution{}, err
+	}
+	s.mu.Lock()
+	s.executions = append([]Execution{item}, s.executions...)
+	s.mu.Unlock()
+	return item, nil
+}
+
 func (s *Service) Executions() []Execution {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]Execution(nil), s.executions...)
 }
-func (s *Service) Execute(analysisID, runbookID, user string) (Execution, error) {
-	if analysisID == "" || runbookID == "" {
-		return Execution{}, ErrValidation
+
+func (s *Service) Knowledge() []Knowledge { return append([]Knowledge(nil), s.knowledge...) }
+
+func (s *Service) SearchKnowledge(q string) []Knowledge {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return s.Knowledge()
 	}
-	if _, err := s.find(analysisID); err != nil {
-		return Execution{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	x := Execution{"exec-" + time.Now().Format("150405"), analysisID, runbookID, "pending-approval", user, time.Now().Format("15:04"), true}
-	s.executions = append([]Execution{x}, s.executions...)
-	return x, nil
-}
-func (s *Service) find(id string) (Analysis, error) {
-	for _, a := range s.analyses {
-		if a.ID == id {
-			return a, nil
+	result := []Knowledge{}
+	for _, item := range s.knowledge {
+		haystack := strings.ToLower(item.Title + " " + item.Summary + " " + strings.Join(item.Tags, " "))
+		if strings.Contains(haystack, q) {
+			result = append(result, item)
 		}
 	}
-	return Analysis{}, ErrNotFound
+	return result
 }

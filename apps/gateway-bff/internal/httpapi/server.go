@@ -75,6 +75,11 @@ func NewServer() *Server {
 	systemService := system.NewService()
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
+	aiopsService.SetAlertProvider(monitorService)
+	aiopsService.SetAssetProvider(cmdbService)
+	aiopsService.SetImpactProvider(topologyService)
+	aiopsService.SetTicketProvider(ticketsService)
+	aiopsService.SetReleaseProvider(releasesService)
 	networkAutomationService := networkautomation.NewService(cmdbService, ticketsService, monitorService, jobsService)
 	go networkAutomationService.Run(context.Background(), time.Minute)
 	assetGovernanceService := assetgovernance.NewService(cmdbService, ticketsService, monitorService)
@@ -3290,25 +3295,79 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
-		writeJSON(w, 200, aiopsService.Summary())
+		writeJSON(w, http.StatusOK, aiopsService.Summary())
+	})
+	mux.HandleFunc("GET /api/v1/aiops/alerts", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, aiopsService.Alerts())
 	})
 	mux.HandleFunc("GET /api/v1/aiops/analyses", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
-		writeJSON(w, 200, aiopsService.Analyses())
+		writeJSON(w, http.StatusOK, aiopsService.Analyses())
+	})
+	mux.HandleFunc("POST /api/v1/aiops/analyses/generate", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		var in aiops.AnalyzeInput
+		if decodeJSONLenient(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		if strings.TrimSpace(in.AlertID) != "" {
+			item, err := aiopsService.Analyze(r.Context(), in.AlertID)
+			if errors.Is(err, aiops.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"code": "ALERT_NOT_FOUND"})
+				return
+			}
+			if err != nil {
+				writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "ANALYSIS_FAILED", "message": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusCreated, item)
+			return
+		}
+		items, err := aiopsService.AnalyzeActive(r.Context())
+		if errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "AIOPS_DEPENDENCIES_NOT_READY"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ANALYSIS_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, items)
+	})
+	mux.HandleFunc("GET /api/v1/aiops/analyses/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		item, err := aiopsService.Get(r.PathValue("id"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ANALYSIS_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
 	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
-		writeJSON(w, 200, aiopsService.SearchKnowledge(r.URL.Query().Get("q")))
+		writeJSON(w, http.StatusOK, aiopsService.SearchKnowledge(r.URL.Query().Get("q")))
 	})
 	mux.HandleFunc("GET /api/v1/aiops/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
-		writeJSON(w, 200, aiopsService.Executions())
+		writeJSON(w, http.StatusOK, aiopsService.Executions())
 	})
 	mux.HandleFunc("POST /api/v1/aiops/analyses/{id}/execute", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:execute") {
@@ -3318,16 +3377,28 @@ func NewServer() *Server {
 			RunbookID string `json:"runbookId"`
 		}
 		if decodeJSON(r, &in) != nil {
-			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
-		x, err := aiopsService.Execute(r.PathValue("id"), in.RunbookID, u.Username)
+		x, err := aiopsService.Execute(r.Context(), r.PathValue("id"), in.RunbookID, u.Username)
 		if errors.Is(err, aiops.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
 			return
 		}
-		writeJSON(w, 202, x)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "AIOPS_TICKET_SERVICE_NOT_READY"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "APPROVAL_TICKET_CREATE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, x)
 	})
 	mux.HandleFunc("GET /api/v1/system/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
