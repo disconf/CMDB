@@ -124,6 +124,7 @@ func NewServer() *Server {
 	registerReleaseVerificationRoutes(mux, authService, releasesService, cmdbService, monitorService, cicdService)
 	registerArgoCDOnboardingRoutes(mux, authService, auditService, argoSyncCoordinator)
 	registerRancherRoutes(mux, authService, auditService, cmdbService, credentialsService)
+	registerVMwareRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
 	registerAssetGovernanceRoutes(mux, authService, assetGovernanceService)

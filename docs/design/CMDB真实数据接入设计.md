@@ -201,3 +201,12 @@ manual(人工) > csv > ssh > agent > node-exporter > snmp
 | u_position | U位 | 手工 | 否 |
 | owner | 负责人 | 手工（已为固定列） | 否 |
 | os/kernel/cpu/mem/disk/mac | 运行时 | agent/ssh/node_exporter | 是 |
+
+## VMware vCenter 资源同步
+
+- 新增 vCenter 配置、连接测试、资源预览和一键同步接口。
+- 支持 vSphere Automation API：集群、ESXi 主机和虚拟机。
+- vCenter 密码保存在 Vault，CMDB 只保存 credentialId。
+- 同步写入虚拟化集群、ESXi 物理主机和虚拟机资产，并标记来源 `vCenter`。
+- 前端 CMDB 新增“虚拟化平台”一级入口。
+
