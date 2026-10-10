@@ -127,6 +127,7 @@ func NewServer() *Server {
 	registerVMwareRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerCloudRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerTencentCloudRoutes(mux, authService, auditService, cmdbService, credentialsService)
+	registerAWSCloudRoutes(mux, authService, auditService, cmdbService, credentialsService)
 	registerPhysicalNetworkRoutes(mux, authService, cmdbService, topologyService, monitorService, ticketsService)
 	registerNetworkAutomationRoutes(mux, authService, networkAutomationService)
 	registerAssetGovernanceRoutes(mux, authService, assetGovernanceService)

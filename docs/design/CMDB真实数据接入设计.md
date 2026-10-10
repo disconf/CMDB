@@ -225,3 +225,11 @@ manual(人工) > csv > ssh > agent > node-exporter > snmp
 - 使用腾讯云 TC3-HMAC-SHA256 签名调用 CVM `DescribeInstances`。
 - SecretId 存配置，SecretKey 保存到 Vault。
 - 同步写入 `cloud-host` 资产并保留地域、可用区、实例规格、操作系统、CPU、内存和电源状态。
+
+## AWS EC2 云资源同步
+
+- 新增 `/api/v1/cmdb/cloud-aws/*` 配置、测试、库存预览和同步接口。
+- 使用 AWS Signature Version 4 签名调用 EC2 `DescribeInstances`，支持 `NextToken` 分页。
+- AccessKey ID 保存在集成配置，SecretAccessKey 单独保存到 Vault。
+- 默认按地域生成 EC2 接入点，兼容标准区域和中国区 `amazonaws.com.cn` 域名，也允许填写自定义端点。
+- 同步写入 `cloud-host` 资产，保留地域、可用区、实例规格、操作系统和电源状态。
