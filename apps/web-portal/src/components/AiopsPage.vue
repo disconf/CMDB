@@ -273,6 +273,45 @@ async function enrichEvidence() {
   }
 }
 
+async function exportJSON() {
+  if (!selected.value) return
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/analyses/${selected.value.id}/report`, { headers:headers.value })
+    if (!response.ok) throw new Error('JSON 报告导出失败')
+    const report = await response.json()
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type:'application/json;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${selected.value.id}-report.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'JSON 报告导出失败'
+  }
+}
+async function printReport() {
+  if (!selected.value) return
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/analyses/${selected.value.id}/report`, { headers:headers.value })
+    const report = await response.json()
+    if (!response.ok) throw new Error(report.message || 'PDF 报告生成失败')
+    const analysis = report.analysis || selected.value
+    const evidence = (analysis.evidence || []).map((item:Evidence) => `<li><b>${item.title}</b><br>${item.detail}<br><small>来源：${item.source || item.type} · 权重 ${item.weight}</small></li>`).join('')
+    const recommendations = (analysis.recommendations || []).map((item:Recommendation) => `<li><b>${item.title}</b>（${riskLabel(item.risk)}）<br>${item.impact}<ol>${(item.steps || []).map((step:string) => `<li>${step}</li>`).join('')}</ol></li>`).join('')
+    const executions = (report.executions || []).map((item:Execution) => `<li><b>${item.runbookTitle || item.runbookId}</b> · ${statusLabel(item.status)} · 验证 ${verificationLabel(item.verificationStatus)}<br>${item.resultSummary || ''}</li>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>AIOps报告-${analysis.id}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#17212b;margin:36px;line-height:1.65}h1,h2{color:#075985}small{color:#64748b}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px;background:#f1f5f9;border:1px solid #cbd5e1}.section{margin-top:22px}li{margin:8px 0}.stamp{margin-top:36px;color:#64748b;font-size:12px}</style></head><body><h1>AIOps 故障分析报告</h1><div class="meta"><span><b>分析编号：</b>${analysis.id}</span><span><b>告警：</b>${analysis.alertTitle || analysis.alertId || '—'}</span><span><b>目标：</b>${analysis.target || '—'}</span><span><b>根因：</b>${analysis.rootCause || '—'}</span><span><b>置信度：</b>${analysis.confidence}%</span><span><b>生成时间：</b>${report.generatedAt || ''}</span></div><section class="section"><h2>分析摘要</h2><p>${analysis.summary || '—'}</p></section><section class="section"><h2>证据链</h2><ul>${evidence || '<li>暂无证据</li>'}</ul></section><section class="section"><h2>Runbook 建议</h2><ul>${recommendations || '<li>暂无建议</li>'}</ul></section><section class="section"><h2>受控执行记录</h2><ul>${executions || '<li>暂无执行记录</li>'}</ul></section><div class="stamp">报告由 CMDB AIOps 平台生成 · ${new Date().toLocaleString()}</div><script>window.onload=()=>window.print()<\/script></body></html>`
+    const win = window.open('', '_blank', 'noopener,noreferrer')
+    if (!win) throw new Error('浏览器阻止了打印窗口，请允许弹出窗口')
+    win.document.write(html)
+    win.document.close()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : 'PDF 报告生成失败'
+  }
+}
+
 async function exportReport() {
   if (!selected.value) return
   error.value = ''
@@ -369,7 +408,7 @@ onMounted(load)
       <main v-if="selected" class="analysis-detail">
         <header>
           <div><span>ROOT CAUSE ANALYSIS</span><h2>{{ selected.rootCause }}</h2><p>{{ selected.summary }}</p><div class="analysis-meta"><b :data-severity="selected.severity">{{ selected.severity }}</b><span>{{ selected.alertTitle }}</span><span>{{ selected.target }}</span></div></div>
-          <div class="analysis-actions"><button :disabled="enriching" @click="enrichEvidence"><Sparkles :class="{spin:enriching}"/>补充证据</button><button @click="exportReport"><FileSearch/>导出报告</button></div><div class="confidence-ring" :style="{'--score':selected.confidence+'%'}"><strong>{{ selected.confidence }}%</strong><span>置信度</span></div>
+          <div class="analysis-actions"><button :disabled="enriching" @click="enrichEvidence"><Sparkles :class="{spin:enriching}"/>补充证据</button><button @click="exportReport"><FileSearch/>导出 Markdown</button><button @click="exportJSON"><FileSearch/>导出 JSON</button><button @click="printReport"><FileSearch/>打印 / PDF</button></div><div class="confidence-ring" :style="{'--score':selected.confidence+'%'}"><strong>{{ selected.confidence }}%</strong><span>置信度</span></div>
         </header>
 
         <section class="feedback-panel">
