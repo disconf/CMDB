@@ -241,3 +241,11 @@ manual(人工) > csv > ssh > agent > node-exporter > snmp
 - AccessKey ID 和 Project ID 保存在集成配置，SecretAccessKey 单独保存到 Vault。
 - 支持按地域生成默认接入点，也允许接入自定义 ECS API Endpoint。
 - 同步写入 `cloud-host` 资产，保留地域、项目、可用区、实例规格、操作系统和电源状态。
+
+## OpenStack 云资源同步
+
+- 新增 `/api/v1/cmdb/cloud-openstack/*` 配置、测试、库存预览和同步接口。
+- 使用 Keystone v3 密码认证获取 `X-Subject-Token`，再从服务目录定位目标 Region 的 Nova 公共或内部地址。
+- 用户名保存在集成配置，密码单独保存到 Vault；支持用户域和项目域。
+- Nova `servers/detail` 优先跟随 `servers_links.next` 分页，缺失链接时使用 marker 续页。
+- 同步写入 `cloud-host` 资产，保留地域、项目、可用区、实例规格、镜像和电源状态。
