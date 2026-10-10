@@ -130,6 +130,9 @@ func EvaluateGate(input GateInput) GateResult {
 	return result
 }
 
+func ChangeWindowAllowed(environment, policy string, now time.Time) (bool, string) {
+	return changeWindowAllowed(environment, policy, now)
+}
 func changeWindowAllowed(environment, policy string, now time.Time) (bool, string) {
 	policy = strings.TrimSpace(policy)
 	if policy == "" || policy == "*" {

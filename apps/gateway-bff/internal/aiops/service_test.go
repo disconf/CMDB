@@ -2,6 +2,7 @@ package aiops
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -68,6 +69,9 @@ type fakeJobs struct {
 	runID   string
 }
 
+func (f *fakeJobs) Templates() []jobs.Template {
+	return []jobs.Template{{ID: "tpl-health", Name: "主机健康巡检", Risk: "low"}, {ID: "tpl-clean", Name: "日志空间清理", Risk: "low"}, {ID: "tpl-restart", Name: "应用滚动重启", Risk: "medium"}, {ID: "tpl-patch", Name: "安全补丁安装", Risk: "high"}}
+}
 func (f *fakeJobs) Create(in jobs.CreateInput) (jobs.Job, error) {
 	f.created = append(f.created, in)
 	return jobs.Job{ID: "job-ai-1", Name: "主机健康巡检", Status: "pending", Targets: in.Targets}, nil
@@ -149,6 +153,24 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	}
 }
 
+func TestRunbookChangeGate(t *testing.T) {
+	s := NewService()
+	s.SetJobProvider(&fakeJobs{})
+	policy, ok := s.policyFor("rb-log-cleanup")
+	if !ok {
+		t.Fatal("missing change runbook")
+	}
+	policy.Enabled = true
+	t.Setenv("AIOPS_ALLOW_CHANGE_RUNBOOKS", "false")
+	if _, err := s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin"); !errors.Is(err, ErrChangeDisabled) {
+		t.Fatalf("expected change gate, got %v", err)
+	}
+	t.Setenv("AIOPS_ALLOW_CHANGE_RUNBOOKS", "true")
+	updated, err := s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin")
+	if err != nil || !updated.Enabled || updated.TemplateID != "tpl-clean" {
+		t.Fatalf("update runbook: %#v %v", updated, err)
+	}
+}
 func TestKnowledgeSearch(t *testing.T) {
 	if len(NewService().SearchKnowledge("OOM")) == 0 {
 		t.Fatal("expected knowledge result")

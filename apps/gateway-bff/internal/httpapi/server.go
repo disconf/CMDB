@@ -3371,6 +3371,59 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, aiopsService.Runbooks())
 	})
+	mux.HandleFunc("PUT /api/v1/aiops/runbooks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var in aiops.RunbookPolicy
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.UpdateRunbook(r.Context(), r.PathValue("id"), in, u.Username)
+		if errors.Is(err, aiops.ErrRunbookNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RUNBOOK_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrChangeDisabled) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "CHANGE_RUNBOOKS_DISABLED", "message": "变更类 Runbook 全局开关未启用"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) || errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RUNBOOK_UPDATE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/runbooks/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.ToggleRunbook(r.Context(), r.PathValue("id"), u.Username)
+		if errors.Is(err, aiops.ErrRunbookNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RUNBOOK_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrChangeDisabled) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "CHANGE_RUNBOOKS_DISABLED", "message": "变更类 Runbook 全局开关未启用"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) || errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RUNBOOK_TOGGLE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("POST /api/v1/aiops/analyses/{id}/feedback", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

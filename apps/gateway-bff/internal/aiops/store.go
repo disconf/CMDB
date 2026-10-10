@@ -13,10 +13,11 @@ type memoryRepository struct {
 	mu         sync.RWMutex
 	analyses   []Analysis
 	executions []Execution
+	runbooks   []RunbookPolicy
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}}
+	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}}
 }
 
 func (r *memoryRepository) LoadAnalyses(context.Context) ([]Analysis, error) {
@@ -57,6 +58,24 @@ func (r *memoryRepository) SaveExecution(_ context.Context, item Execution) erro
 	return nil
 }
 
+func (r *memoryRepository) LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]RunbookPolicy(nil), r.runbooks...), nil
+}
+
+func (r *memoryRepository) SaveRunbookPolicy(_ context.Context, item RunbookPolicy) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.runbooks {
+		if r.runbooks[i].RunbookID == item.RunbookID {
+			r.runbooks[i] = item
+			return nil
+		}
+	}
+	r.runbooks = append(r.runbooks, item)
+	return nil
+}
 func newID(prefix string) string {
 	var value [8]byte
 	if _, err := rand.Read(value[:]); err == nil {

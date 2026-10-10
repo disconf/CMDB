@@ -66,7 +66,20 @@ ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS approved_at timest
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS finished_at timestamptz;
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS result_summary text NOT NULL DEFAULT '';
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS error_message text NOT NULL DEFAULT '';
-CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
+CREATE TABLE IF NOT EXISTS aiops_runbook_policies (
+  runbook_id text PRIMARY KEY,
+  title text NOT NULL,
+  template_id text NOT NULL,
+  mode text NOT NULL,
+  risk text NOT NULL,
+  approval_required boolean NOT NULL DEFAULT true,
+  enabled boolean NOT NULL DEFAULT false,
+  max_targets integer NOT NULL DEFAULT 1,
+  allowed_environments jsonb NOT NULL DEFAULT '[]',
+  change_window text NOT NULL DEFAULT '*',
+  updated_by text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
 `
 
 type postgresRepository struct {
@@ -216,4 +229,35 @@ func parseAITime(value string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("invalid aiops time %q", value)
+}
+
+func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]RunbookPolicy, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []RunbookPolicy{}
+	for rows.Next() {
+		var item RunbookPolicy
+		var environments []byte
+		var updatedAt time.Time
+		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.UpdatedBy, &updatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(environments, &item.AllowedEnvironments)
+		item.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveRunbookPolicy(ctx context.Context, item RunbookPolicy) error {
+	environments, _ := json.Marshal(item.AllowedEnvironments)
+	updatedAt, err := parseAITime(item.UpdatedAt)
+	if err != nil {
+		updatedAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.UpdatedBy, updatedAt)
+	return err
 }

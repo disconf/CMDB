@@ -156,3 +156,28 @@ GET /api/v1/aiops/feedback/stats
 ```
 
 返回整体准确率，以及按根因聚合的确认、否决、部分正确和调整值。
+## Runbook 注册中心与变更门禁
+
+Runbook 不再硬编码在代码中，而是持久化到 `aiops_runbook_policies`：
+
+- `templateId`：只允许引用任务中心已存在的模板。
+- `mode`：`read-only` 或 `change`。
+- `risk`：`low`、`medium`、`high`。
+- `enabled`：控制 Runbook 是否可用。
+- `maxTargets`：限制单次执行目标数量。
+- `allowedEnvironments`：限制允许执行的环境。
+- `changeWindow`：限制允许执行的时间窗口。
+
+默认策略：
+
+- 7 个只读 Runbook 默认启用。
+- 日志清理、滚动重启、安全补丁默认禁用。
+- 变更类 Runbook 必须同时满足：
+  - `AIOPS_ALLOW_CHANGE_RUNBOOKS=true`
+  - Runbook 已启用
+  - 工单审批通过
+  - 一次性授权校验通过
+  - 模板在任务中心存在
+  - 环境、目标数量、变更窗口全部满足限制
+
+任何一项不满足都会拒绝执行并写入 AIOps 执行失败原因。

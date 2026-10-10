@@ -3,10 +3,12 @@ package aiops
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"cmdb/gateway-bff/internal/jobs"
+	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/tickets"
 )
 
@@ -26,9 +28,17 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 	default:
 		return
 	}
-	policy, ok := policyFor(execution.RunbookID)
+	policy, ok := s.policyFor(execution.RunbookID)
 	if !ok {
 		s.failExecution(ctx, execution, "Runbook 不在白名单")
+		return
+	}
+	if !policy.Enabled {
+		s.failExecution(ctx, execution, "Runbook 已禁用")
+		return
+	}
+	if policy.Mode == "change" && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
+		s.failExecution(ctx, execution, "变更类 Runbook 全局开关未启用")
 		return
 	}
 	if s.tickets == nil || s.jobs == nil {
@@ -44,13 +54,32 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		s.failExecution(ctx, execution, "分析记录不存在")
 		return
 	}
-	if len(analysis.RelatedAssets) == 0 || strings.TrimSpace(analysis.RelatedAssets[0].ID) == "" {
-		s.failExecution(ctx, execution, "分析未关联可执行资产")
+	targets := []string{}
+	for _, asset := range analysis.RelatedAssets {
+		if strings.TrimSpace(asset.ID) != "" {
+			targets = append(targets, asset.ID)
+			break
+		}
+	}
+	if len(targets) == 0 || len(targets) > policy.MaxTargets {
+		s.failExecution(ctx, execution, "执行目标数量不符合 Runbook 限制")
+		return
+	}
+	targetEnvironment := ""
+	if len(analysis.RelatedAssets) > 0 {
+		targetEnvironment = analysis.RelatedAssets[0].Environment
+	}
+	if len(policy.AllowedEnvironments) > 0 && !containsString(policy.AllowedEnvironments, "*") && !containsString(policy.AllowedEnvironments, targetEnvironment) {
+		s.failExecution(ctx, execution, "目标环境不在 Runbook 允许范围")
+		return
+	}
+	if allowed, message := releases.ChangeWindowAllowed(targetEnvironment, policy.ChangeWindow, time.Now()); !allowed {
+		s.failExecution(ctx, execution, "当前不在变更窗口："+message)
 		return
 	}
 	job, err := s.jobs.Create(jobs.CreateInput{
 		TemplateID:  policy.TemplateID,
-		Targets:     []string{analysis.RelatedAssets[0].ID},
+		Targets:     targets,
 		Operator:    "aiops:" + ticket.Applicant,
 		TicketID:    ticket.ID,
 		Parameters:  map[string]string{"aiops_analysis_id": analysis.ID, "runbook_id": execution.RunbookID},

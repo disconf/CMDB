@@ -36,6 +36,7 @@ type TicketProvider interface {
 }
 
 type JobProvider interface {
+	Templates() []jobs.Template
 	Create(jobs.CreateInput) (jobs.Job, error)
 	Run(string) (jobs.Job, error)
 }

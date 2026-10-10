@@ -243,6 +243,10 @@ func auditAction(method, path string) string {
 		return "aiops.analysis.feedback"
 	case method == http.MethodPost && strings.HasSuffix(path, "/evidence") && strings.HasPrefix(path, "/api/v1/aiops/analyses/"):
 		return "aiops.evidence.collect"
+	case method == http.MethodPut && strings.HasPrefix(path, "/api/v1/aiops/runbooks/"):
+		return "aiops.runbook.update"
+	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/aiops/runbooks/"):
+		return "aiops.runbook.toggle"
 	case method == http.MethodPost && strings.HasSuffix(path, "/execute") && strings.HasPrefix(path, "/api/v1/aiops/analyses/"):
 		return "aiops.analysis.execute"
 	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/system/users/"):

@@ -16,10 +16,12 @@ import (
 )
 
 var (
-	ErrNotFound   = errors.New("analysis not found")
-	ErrValidation = errors.New("validation")
-	ErrNotReady   = errors.New("analysis dependencies not ready")
-	ErrNoEvidence = errors.New("no new evidence")
+	ErrNotFound        = errors.New("analysis not found")
+	ErrValidation      = errors.New("validation")
+	ErrNotReady        = errors.New("analysis dependencies not ready")
+	ErrNoEvidence      = errors.New("no new evidence")
+	ErrRunbookNotFound = errors.New("runbook not found")
+	ErrChangeDisabled  = errors.New("change runbooks disabled")
 )
 
 type Service struct {
@@ -28,6 +30,7 @@ type Service struct {
 	knowledge  []Knowledge
 	analyses   []Analysis
 	executions []Execution
+	runbooks   []RunbookPolicy
 	alerts     AlertProvider
 	assets     AssetProvider
 	impact     ImpactProvider
@@ -38,7 +41,7 @@ type Service struct {
 }
 
 func NewService() *Service {
-	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}}
+	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}}
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
 		repo, err := openPostgres(databaseURL)
 		if err != nil {
@@ -53,6 +56,14 @@ func NewService() *Service {
 	}
 	if executions, err := s.repo.LoadExecutions(ctx); err == nil {
 		s.executions = executions
+	}
+	if runbooks, err := s.repo.LoadRunbookPolicies(ctx); err == nil && len(runbooks) > 0 {
+		s.runbooks = runbooks
+	} else {
+		s.runbooks = defaultRunbookPolicies()
+		for _, item := range s.runbooks {
+			_ = s.repo.SaveRunbookPolicy(ctx, item)
+		}
 	}
 	return s
 }

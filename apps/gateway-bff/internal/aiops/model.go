@@ -146,6 +146,8 @@ type repository interface {
 	SaveAnalysis(context.Context, Analysis) error
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
+	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)
+	SaveRunbookPolicy(context.Context, RunbookPolicy) error
 }
 
 type FeedbackInput struct {
@@ -155,12 +157,18 @@ type FeedbackInput struct {
 }
 
 type RunbookPolicy struct {
-	RunbookID        string `json:"runbookId"`
-	Title            string `json:"title"`
-	TemplateID       string `json:"templateId"`
-	Mode             string `json:"mode"`
-	Risk             string `json:"risk"`
-	ApprovalRequired bool   `json:"approvalRequired"`
+	RunbookID           string   `json:"runbookId"`
+	Title               string   `json:"title"`
+	TemplateID          string   `json:"templateId"`
+	Mode                string   `json:"mode"`
+	Risk                string   `json:"risk"`
+	ApprovalRequired    bool     `json:"approvalRequired"`
+	Enabled             bool     `json:"enabled"`
+	MaxTargets          int      `json:"maxTargets"`
+	AllowedEnvironments []string `json:"allowedEnvironments"`
+	ChangeWindow        string   `json:"changeWindow"`
+	UpdatedAt           string   `json:"updatedAt,omitempty"`
+	UpdatedBy           string   `json:"updatedBy,omitempty"`
 }
 
 type EvidenceInput struct {
