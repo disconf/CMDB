@@ -77,6 +77,27 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		s.failExecution(ctx, execution, "当前不在变更窗口："+message)
 		return
 	}
+	if policy.Mode == "change" && policy.ExecutionMode == "live" {
+		if policy.RequireRollback {
+			rollback, ok := s.policyFor(policy.RollbackRunbookID)
+			if !ok || !rollback.Enabled || rollback.Mode != "change" || rollback.ExecutionMode != "live" {
+				s.failExecution(ctx, execution, "真实执行前回滚 Runbook 未就绪")
+				return
+			}
+		}
+		count, last := s.runbookLiveUsage(policy.RunbookID, time.Now())
+		if policy.LiveDailyLimit > 0 && count > policy.LiveDailyLimit {
+			s.failExecution(ctx, execution, "超过 Runbook 每日真实执行上限")
+			return
+		}
+		if policy.LiveCooldownMinutes > 0 && !last.IsZero() {
+			next := last.Add(time.Duration(policy.LiveCooldownMinutes) * time.Minute)
+			if time.Now().Before(next) {
+				s.failExecution(ctx, execution, "距离上次真实执行未满足冷却时间，可执行时间："+next.Format("2006-01-02 15:04:05"))
+				return
+			}
+		}
+	}
 	if policy.Mode == "change" && policy.ExecutionMode == "simulate" {
 		execution.Status = "success"
 		execution.Simulated = true

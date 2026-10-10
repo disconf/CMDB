@@ -3371,6 +3371,28 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, aiopsService.Runbooks())
 	})
+	mux.HandleFunc("POST /api/v1/aiops/runbooks/{id}/preflight", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		var in struct {
+			AnalysisID string `json:"analysisId"`
+		}
+		if decodeJSONLenient(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := aiopsService.RunbookPreflight(r.PathValue("id"), in.AnalysisID)
+		if errors.Is(err, aiops.ErrRunbookNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "RUNBOOK_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "RUNBOOK_PREFLIGHT_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("PUT /api/v1/aiops/runbooks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:execute") {
 			return

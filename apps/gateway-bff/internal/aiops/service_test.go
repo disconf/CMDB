@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/jobs"
@@ -70,7 +71,7 @@ type fakeJobs struct {
 }
 
 func (f *fakeJobs) Templates() []jobs.Template {
-	return []jobs.Template{{ID: "tpl-health", Name: "主机健康巡检", Risk: "low"}, {ID: "tpl-clean", Name: "日志空间清理", Risk: "low"}, {ID: "tpl-restart", Name: "应用滚动重启", Risk: "medium"}, {ID: "tpl-patch", Name: "安全补丁安装", Risk: "high"}}
+	return []jobs.Template{{ID: "tpl-health", Name: "主机健康巡检", Risk: "low", Enabled: true}, {ID: "tpl-clean", Name: "日志空间清理", Risk: "low", Enabled: true}, {ID: "tpl-restart", Name: "应用滚动重启", Risk: "medium", Enabled: true}, {ID: "tpl-patch", Name: "安全补丁安装", Risk: "high", Enabled: true}}
 }
 func (f *fakeJobs) Create(in jobs.CreateInput) (jobs.Job, error) {
 	f.created = append(f.created, in)
@@ -162,6 +163,7 @@ func TestRunbookChangeGate(t *testing.T) {
 	}
 	policy.Enabled = true
 	policy.ExecutionMode = "live"
+	policy.RequireRollback = false
 	t.Setenv("AIOPS_ALLOW_CHANGE_RUNBOOKS", "false")
 	if _, err := s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin"); !errors.Is(err, ErrChangeDisabled) {
 		t.Fatalf("expected change gate, got %v", err)
@@ -172,6 +174,54 @@ func TestRunbookChangeGate(t *testing.T) {
 		t.Fatalf("update runbook: %#v %v", updated, err)
 	}
 }
+func TestRunbookPreflightRequiresRollbackAndEnforcesThrottle(t *testing.T) {
+	t.Setenv("AIOPS_ALLOW_CHANGE_RUNBOOKS", "true")
+	s := NewService()
+	s.SetAlertProvider(fakeAlerts{})
+	s.SetAssetProvider(fakeAssets{})
+	s.SetImpactProvider(fakeImpact{})
+	s.SetTicketProvider(&fakeTickets{})
+	s.SetReleaseProvider(fakeReleases{})
+	s.SetJobProvider(&fakeJobs{})
+	s.SetToolProvider(fakeTools{})
+	analysis, err := s.Analyze(context.Background(), "alert-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackPolicy, _ := s.policyFor("rb-service-restart")
+	rollbackPolicy.Enabled = true
+	rollbackPolicy.ExecutionMode = "live"
+	rollbackPolicy.RequireRollback = false
+	if _, err = s.UpdateRunbook(context.Background(), rollbackPolicy.RunbookID, rollbackPolicy, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := s.policyFor("rb-log-cleanup")
+	policy.Enabled = true
+	policy.ExecutionMode = "live"
+	policy.RollbackRunbookID = rollbackPolicy.RunbookID
+	policy.RequireRollback = true
+	policy.LiveDailyLimit = 1
+	policy.LiveCooldownMinutes = 60
+	if _, err = s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := s.RunbookPreflight(policy.RunbookID, analysis.ID)
+	if err != nil || !preflight.Ready {
+		t.Fatalf("expected ready preflight: %#v %v", preflight, err)
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	if err = s.saveExecution(context.Background(), Execution{ID: "aiexec-live", AnalysisID: analysis.ID, RunbookID: policy.RunbookID, RunbookTitle: policy.Title, Status: "success", RequestedBy: "admin", RequestedAt: now, ApprovalRequired: true, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err = s.RunbookPreflight(policy.RunbookID, analysis.ID)
+	if err != nil || preflight.Ready {
+		t.Fatalf("expected throttled preflight: %#v %v", preflight, err)
+	}
+	if preflight.NextAllowedAt == "" {
+		t.Fatalf("next allowed time missing: %#v", preflight)
+	}
+}
+
 func TestRunbookSimulationCanEnableWithoutLiveGate(t *testing.T) {
 	s := NewService()
 	s.SetJobProvider(&fakeJobs{})

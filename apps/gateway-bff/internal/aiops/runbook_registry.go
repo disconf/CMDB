@@ -47,6 +47,12 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 	}
 	if input.Mode == "read-only" {
 		input.ExecutionMode = "live"
+		input.LiveDailyLimit = 0
+		input.LiveCooldownMinutes = 0
+		input.RequireRollback = false
+	}
+	if input.Mode == "change" && (input.LiveDailyLimit < 0 || input.LiveDailyLimit > 50 || input.LiveCooldownMinutes < 0 || input.LiveCooldownMinutes > 1440) {
+		return RunbookPolicy{}, ErrValidation
 	}
 	if input.Mode == "change" && input.ExecutionMode != "simulate" && input.ExecutionMode != "live" {
 		return RunbookPolicy{}, ErrValidation
@@ -63,6 +69,9 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 		}
 	}
 	if !found {
+		return RunbookPolicy{}, ErrValidation
+	}
+	if input.RequireRollback && input.ExecutionMode == "live" && input.Enabled && input.RollbackRunbookID == "" {
 		return RunbookPolicy{}, ErrValidation
 	}
 	if input.RollbackRunbookID != "" {

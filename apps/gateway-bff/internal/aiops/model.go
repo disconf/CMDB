@@ -172,6 +172,9 @@ type RunbookPolicy struct {
 	AllowedEnvironments []string `json:"allowedEnvironments"`
 	ChangeWindow        string   `json:"changeWindow"`
 	RollbackRunbookID   string   `json:"rollbackRunbookId,omitempty"`
+	LiveDailyLimit      int      `json:"liveDailyLimit"`
+	LiveCooldownMinutes int      `json:"liveCooldownMinutes"`
+	RequireRollback     bool     `json:"requireRollback"`
 	UpdatedAt           string   `json:"updatedAt,omitempty"`
 	UpdatedBy           string   `json:"updatedBy,omitempty"`
 }
@@ -186,6 +189,22 @@ type RunbookExecutionStat struct {
 	Failed       int     `json:"failed"`
 	InProgress   int     `json:"inProgress"`
 	SuccessRate  float64 `json:"successRate"`
+}
+
+type RunbookPreflightCheck struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+type RunbookPreflight struct {
+	RunbookID     string                  `json:"runbookId"`
+	AnalysisID    string                  `json:"analysisId,omitempty"`
+	Ready         bool                    `json:"ready"`
+	Checks        []RunbookPreflightCheck `json:"checks"`
+	NextAllowedAt string                  `json:"nextAllowedAt,omitempty"`
+	GeneratedAt   string                  `json:"generatedAt"`
 }
 
 type ExecutionStats struct {

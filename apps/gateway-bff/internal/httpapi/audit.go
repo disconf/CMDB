@@ -243,6 +243,8 @@ func auditAction(method, path string) string {
 		return "aiops.analysis.feedback"
 	case method == http.MethodPost && strings.HasSuffix(path, "/evidence") && strings.HasPrefix(path, "/api/v1/aiops/analyses/"):
 		return "aiops.evidence.collect"
+	case method == http.MethodPost && strings.HasSuffix(path, "/preflight") && strings.HasPrefix(path, "/api/v1/aiops/runbooks/"):
+		return "aiops.runbook.preflight"
 	case method == http.MethodPut && strings.HasPrefix(path, "/api/v1/aiops/runbooks/"):
 		return "aiops.runbook.update"
 	case method == http.MethodPost && strings.HasSuffix(path, "/toggle") && strings.HasPrefix(path, "/api/v1/aiops/runbooks/"):
@@ -270,7 +272,7 @@ func auditTarget(path string) string {
 	verbs := map[string]bool{
 		"toggle": true, "run": true, "reconcile": true, "approve": true,
 		"reject": true, "retry": true, "cancel": true, "rollback": true, "assign": true, "confirm": true, "retire": true,
-		"execute": true, "permissions": true,
+		"execute": true, "permissions": true, "preflight": true,
 	}
 	if verbs[last] && len(parts) >= 2 {
 		return parts[len(parts)-2]

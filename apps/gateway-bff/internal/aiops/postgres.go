@@ -85,11 +85,17 @@ CREATE TABLE IF NOT EXISTS aiops_runbook_policies (
   allowed_environments jsonb NOT NULL DEFAULT '[]',
   change_window text NOT NULL DEFAULT '*',
   rollback_runbook_id text NOT NULL DEFAULT '',
+  live_daily_limit integer NOT NULL DEFAULT 1,
+  live_cooldown_minutes integer NOT NULL DEFAULT 30,
+  require_rollback boolean NOT NULL DEFAULT true,
   updated_by text NOT NULL DEFAULT '',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS execution_mode text NOT NULL DEFAULT 'simulate';
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS rollback_runbook_id text NOT NULL DEFAULT '';
+ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS live_daily_limit integer NOT NULL DEFAULT 1;
+ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS live_cooldown_minutes integer NOT NULL DEFAULT 30;
+ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS require_rollback boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
 `
 
@@ -243,7 +249,7 @@ func parseAITime(value string) (time.Time, error) {
 }
 
 func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]RunbookPolicy, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,live_daily_limit,live_cooldown_minutes,require_rollback,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +259,7 @@ func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]Runbook
 		var item RunbookPolicy
 		var environments []byte
 		var updatedAt time.Time
-		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.ExecutionMode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.RollbackRunbookID, &item.UpdatedBy, &updatedAt); err != nil {
+		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.ExecutionMode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.RollbackRunbookID, &item.LiveDailyLimit, &item.LiveCooldownMinutes, &item.RequireRollback, &item.UpdatedBy, &updatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(environments, &item.AllowedEnvironments)
@@ -269,6 +275,6 @@ func (r *postgresRepository) SaveRunbookPolicy(ctx context.Context, item Runbook
 	if err != nil {
 		updatedAt = time.Now()
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,execution_mode=excluded.execution_mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,rollback_runbook_id=excluded.rollback_runbook_id,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.ExecutionMode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.RollbackRunbookID, item.UpdatedBy, updatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,live_daily_limit,live_cooldown_minutes,require_rollback,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,execution_mode=excluded.execution_mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,rollback_runbook_id=excluded.rollback_runbook_id,live_daily_limit=excluded.live_daily_limit,live_cooldown_minutes=excluded.live_cooldown_minutes,require_rollback=excluded.require_rollback,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.ExecutionMode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.RollbackRunbookID, item.LiveDailyLimit, item.LiveCooldownMinutes, item.RequireRollback, item.UpdatedBy, updatedAt)
 	return err
 }

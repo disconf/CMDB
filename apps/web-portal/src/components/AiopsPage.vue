@@ -16,12 +16,14 @@ type Feedback = { status:string; correctedRootCause?:string; note?:string; revie
 type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
 type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string; simulated:boolean; rollback:boolean; parentExecutionId?:string }
-type Runbook = { runbookId:string; title:string; templateId:string; mode:string; executionMode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; rollbackRunbookId?:string; updatedAt?:string; updatedBy?:string }
+type Runbook = { runbookId:string; title:string; templateId:string; mode:string; executionMode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; rollbackRunbookId?:string; liveDailyLimit:number; liveCooldownMinutes:number; requireRollback:boolean; updatedAt?:string; updatedBy?:string }
 type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number; feedbackCount:number; confirmedFeedback:number; rejectedFeedback:number }
 type RootCauseFeedbackStat = { rootCause:string; confirmed:number; rejected:number; partial:number; accuracy:number; adjustment:number }
 type FeedbackStats = { total:number; confirmed:number; rejected:number; partial:number; accuracy:number; byRootCause:RootCauseFeedbackStat[] }
 type RunbookExecutionStat = { runbookId:string; runbookTitle:string; total:number; simulated:number; live:number; success:number; failed:number; inProgress:number; successRate:number }
 type ExecutionStats = { total:number; simulated:number; live:number; pendingApproval:number; running:number; success:number; failed:number; rejected:number; successRate:number; byRunbook:RunbookExecutionStat[] }
+type PreflightCheck = { key:string; label:string; status:'pass'|'warn'|'fail'; detail:string }
+type RunbookPreflight = { runbookId:string; analysisId?:string; ready:boolean; checks:PreflightCheck[]; nextAllowedAt?:string; generatedAt:string }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
@@ -34,6 +36,8 @@ const executions = ref<Execution[]>([])
 const rollbackPendingID = ref('')
 const runbooks = ref<Runbook[]>([])
 const selectedRunbook = ref<Runbook>()
+const runbookPreflight = ref<RunbookPreflight>()
+const preflightLoading = ref(false)
 const selected = ref<Analysis>()
 const query = ref('')
 const tab = ref<'analysis'|'knowledge'|'runbooks'>('analysis')
@@ -124,6 +128,24 @@ async function saveRunbook() {
     await load()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Runbook 保存失败'
+  }
+}
+
+async function runPreflight() {
+  if (!selectedRunbook.value) return
+  preflightLoading.value = true
+  message.value = ''
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/runbooks/${selectedRunbook.value.runbookId}/preflight`, { method:'POST', headers:headers.value, body:JSON.stringify({ analysisId:selected.value?.id || '' }) })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.message || '执行预检失败')
+    runbookPreflight.value = payload
+    message.value = payload.ready ? '执行预检通过，可以进入审批流程' : '执行预检未通过，请处理失败项'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '执行预检失败'
+  } finally {
+    preflightLoading.value = false
   }
 }
 
@@ -312,9 +334,9 @@ onMounted(load)
     </div>
 
     <div v-else-if="tab==='runbooks'" class="runbook-page">
-      <aside class="runbook-list"><header><h3>Runbook 注册中心</h3><p>变更类默认禁用，启用需要平台全局开关。</p></header><button v-for="item in runbooks" :key="item.runbookId" :class="{active:selectedRunbook?.runbookId===item.runbookId}" @click="selectedRunbook=item"><div><strong>{{ item.title }}</strong><span>{{ item.templateId }} · {{ item.mode }} · {{ item.risk }}</span></div><b :data-enabled="item.enabled">{{ item.enabled ? '已启用' : '已禁用' }}</b></button></aside>
+      <aside class="runbook-list"><header><h3>Runbook 注册中心</h3><p>变更类默认禁用，启用需要平台全局开关。</p></header><button v-for="item in runbooks" :key="item.runbookId" :class="{active:selectedRunbook?.runbookId===item.runbookId}" @click="selectedRunbook=item;runbookPreflight=undefined"><div><strong>{{ item.title }}</strong><span>{{ item.templateId }} · {{ item.mode }} · {{ item.risk }}</span></div><b :data-enabled="item.enabled">{{ item.enabled ? '已启用' : '已禁用' }}</b></button></aside>
       <main v-if="selectedRunbook" class="runbook-editor">
-        <header><div><span>RUNBOOK POLICY</span><h2>{{ selectedRunbook.title }}</h2><p>{{ selectedRunbook.runbookId }}</p></div><button class="primary" @click="saveRunbook">保存策略</button></header>
+        <header><div><span>RUNBOOK POLICY</span><h2>{{ selectedRunbook.title }}</h2><p>{{ selectedRunbook.runbookId }}</p></div><div class="runbook-header-actions"><button :disabled="preflightLoading" @click="runPreflight"><RefreshCw :class="{spin:preflightLoading}"/>执行预检</button><button class="primary" @click="saveRunbook">保存策略</button></div></header>
         <form @submit.prevent="saveRunbook">
           <label>标题<input v-model="selectedRunbook.title" /></label>
           <label>任务模板<input v-model="selectedRunbook.templateId" /></label>
@@ -323,9 +345,17 @@ onMounted(load)
           <label>最大目标数<input v-model.number="selectedRunbook.maxTargets" type="number" min="1" max="10" /></label>
           <label>变更窗口<input v-model="selectedRunbook.changeWindow" placeholder="qa=*;production=Sat-Sun" /></label>
           <label v-if="selectedRunbook.mode==='change'">失败回滚 Runbook<select v-model="selectedRunbook.rollbackRunbookId"><option value="">未配置</option><option v-for="item in runbooks.filter(value => value.mode==='change' && value.runbookId!==selectedRunbook?.runbookId)" :key="item.runbookId" :value="item.runbookId">{{ item.title }} · {{ item.enabled ? '已启用' : '未启用' }}</option></select></label>
+          <label v-if="selectedRunbook.mode==='change'">每日真实执行上限<input v-model.number="selectedRunbook.liveDailyLimit" type="number" min="0" max="50" /><span class="field-hint">0 表示不限制，建议 QA 先设为 1</span></label>
+          <label v-if="selectedRunbook.mode==='change'">执行冷却分钟<input v-model.number="selectedRunbook.liveCooldownMinutes" type="number" min="0" max="1440" /><span class="field-hint">两次真实执行之间的最短间隔</span></label>
+          <label v-if="selectedRunbook.mode==='change'" class="checkbox-field"><input v-model="selectedRunbook.requireRollback" type="checkbox" /> <span>真实执行必须配置回滚 Runbook</span></label>
           <label class="wide">允许环境<input :value="selectedRunbook.allowedEnvironments.join(',')" disabled /></label>
         </form>
-        <footer><span><ShieldCheck/>当前阶段所有变更类 Runbook 默认关闭，必须显式开启全局开关。</span><button :class="{danger:selectedRunbook.enabled}" @click="toggleRunbook(selectedRunbook)">{{ selectedRunbook.enabled ? '禁用 Runbook' : '启用 Runbook' }}</button></footer>
+        <section v-if="runbookPreflight" class="preflight-panel">
+          <header><div><h3><ShieldCheck/>执行预检结果</h3><p>{{ runbookPreflight.generatedAt }} · {{ selectedRunbook.title }}</p></div><b :data-ready="runbookPreflight.ready">{{ runbookPreflight.ready ? '可以审批执行' : '暂不可执行' }}</b></header>
+          <div><article v-for="check in runbookPreflight.checks" :key="check.key" :data-status="check.status"><i></i><div><strong>{{ check.label }}</strong><span>{{ check.detail }}</span></div><b>{{ check.status==='pass' ? '通过' : check.status==='warn' ? '提示' : '失败' }}</b></article></div>
+          <p v-if="runbookPreflight.nextAllowedAt">建议最早执行时间：{{ runbookPreflight.nextAllowedAt }}</p>
+        </section>
+        <footer><span><ShieldCheck/>变更类 Runbook 默认关闭；真实执行必须满足全局开关、预检、每日额度、冷却和回滚就绪。</span><button :class="{danger:selectedRunbook.enabled}" @click="toggleRunbook(selectedRunbook)">{{ selectedRunbook.enabled ? '禁用 Runbook' : '启用 Runbook' }}</button></footer>
       </main>
     </div>
     <div v-else class="knowledge-page">
