@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS cmdb_integration_configs (
   enabled boolean NOT NULL DEFAULT true,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS auto_sync_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS sync_interval_minutes integer NOT NULL DEFAULT 60;
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS next_sync_at timestamptz;
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS last_sync_at timestamptz;
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS last_sync_status text NOT NULL DEFAULT '';
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS last_sync_message text NOT NULL DEFAULT '';
+ALTER TABLE cmdb_integration_configs ADD COLUMN IF NOT EXISTS last_sync_count integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS cmdb_network_anomaly_states (
   anomaly_id text PRIMARY KEY,
   status text NOT NULL,

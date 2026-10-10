@@ -171,23 +171,36 @@ type BatchUpdateAssetResult struct {
 	Items     []BatchUpdateAssetItem `json:"items"`
 }
 type IntegrationConfig struct {
-	Provider     string `json:"provider"`
-	URL          string `json:"url"`
-	Username     string `json:"username"`
-	CredentialID string `json:"credentialId"`
-	AuthType     string `json:"authType"`
-	Insecure     bool   `json:"insecure"`
-	Enabled      bool   `json:"enabled"`
-	UpdatedAt    string `json:"updatedAt"`
+	Provider            string `json:"provider"`
+	URL                 string `json:"url"`
+	Username            string `json:"username"`
+	CredentialID        string `json:"credentialId"`
+	AuthType            string `json:"authType"`
+	Insecure            bool   `json:"insecure"`
+	Enabled             bool   `json:"enabled"`
+	AutoSyncEnabled     bool   `json:"autoSyncEnabled"`
+	SyncIntervalMinutes int    `json:"syncIntervalMinutes"`
+	NextSyncAt          string `json:"nextSyncAt"`
+	LastSyncAt          string `json:"lastSyncAt"`
+	LastSyncStatus      string `json:"lastSyncStatus"`
+	LastSyncMessage     string `json:"lastSyncMessage"`
+	LastSyncCount       int    `json:"lastSyncCount"`
+	UpdatedAt           string `json:"updatedAt"`
 }
 type IntegrationConfigInput struct {
-	Provider     string `json:"provider"`
-	URL          string `json:"url"`
-	Username     string `json:"username"`
-	CredentialID string `json:"credentialId"`
-	AuthType     string `json:"authType"`
-	Insecure     bool   `json:"insecure"`
-	Enabled      bool   `json:"enabled"`
+	Provider            string `json:"provider"`
+	URL                 string `json:"url"`
+	Username            string `json:"username"`
+	CredentialID        string `json:"credentialId"`
+	AuthType            string `json:"authType"`
+	Insecure            bool   `json:"insecure"`
+	Enabled             bool   `json:"enabled"`
+	AutoSyncEnabled     bool   `json:"autoSyncEnabled"`
+	SyncIntervalMinutes int    `json:"syncIntervalMinutes"`
+}
+type IntegrationScheduleInput struct {
+	Enabled         bool `json:"enabled"`
+	IntervalMinutes int  `json:"intervalMinutes"`
 }
 type Change struct {
 	Field  string `json:"field"`
