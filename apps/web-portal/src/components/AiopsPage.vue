@@ -12,10 +12,11 @@ type Impact = { total:number; healthy:number; warning:number; critical:number; i
 type Timeline = { time:string; type:string; source:string; message:string }
 type RelatedTicket = { id:string; title:string; status:string; assignee:string }
 type RelatedRelease = { id:string; application:string; version:string; status:string; startedAt:string }
-type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[] }
+type Feedback = { status:string; correctedRootCause?:string; note?:string; reviewer:string; reviewedAt:string }
+type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
-type Execution = { id:string; status:string; ticketId?:string; requestedAt:string; runbookTitle?:string }
-type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number }
+type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string }
+type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number; feedbackCount:number; confirmedFeedback:number; rejectedFeedback:number }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
@@ -31,7 +32,11 @@ const error = ref('')
 const loading = ref(false)
 const generating = ref(false)
 const selectedAlertID = ref('')
+const feedbackStatus = ref('confirmed')
+const correctedRootCause = ref('')
+const feedbackNote = ref('')
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
+const selectedExecutions = computed(() => executions.value.filter(item => item.analysisId === selected.value?.id))
 
 async function load() {
   loading.value = true
@@ -92,6 +97,27 @@ async function execute(rec:Recommendation) {
   }
 }
 
+async function submitFeedback(status:'confirmed'|'rejected'|'partial') {
+  if (!selected.value) return
+  message.value = ''
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/analyses/${selected.value.id}/feedback`, {
+      method:'POST',
+      headers:headers.value,
+      body:JSON.stringify({ status, correctedRootCause:correctedRootCause.value, note:feedbackNote.value }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.message || '分析反馈提交失败')
+    selected.value = payload
+    message.value = status === 'confirmed' ? '根因已确认，反馈已计入准确率' : '分析反馈已保存'
+    correctedRootCause.value = ''
+    feedbackNote.value = ''
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '分析反馈提交失败'
+  }
+}
 function statusLabel(value:string) { return ({ firing:'触发中', acknowledged:'已确认', pending:'待审批', approved:'已通过', completed:'已完成', failed:'失败', success:'成功', running:'运行中' } as Record<string,string>)[value] || value }
 onMounted(load)
 </script>
@@ -136,6 +162,16 @@ onMounted(load)
           <div class="confidence-ring" :style="{'--score':selected.confidence+'%'}"><strong>{{ selected.confidence }}%</strong><span>置信度</span></div>
         </header>
 
+        <section class="feedback-panel">
+          <header><div><h3><ShieldCheck/>根因反馈</h3><p>确认或否定分析结论，用于计算真实准确率并优化后续归因。</p></div><b v-if="selected.feedback" :data-status="selected.feedback.status">{{ statusLabel(selected.feedback.status) }} · {{ selected.feedback.reviewer }} · {{ selected.feedback.reviewedAt }}</b></header>
+          <div v-if="selected.feedback" class="feedback-result"><span>{{ selected.feedback.note || '无补充说明' }}</span><em v-if="selected.feedback.correctedRootCause">修正根因：{{ selected.feedback.correctedRootCause }}</em></div>
+          <form v-else class="feedback-form" @submit.prevent="submitFeedback(feedbackStatus as 'confirmed')">
+            <select v-model="feedbackStatus"><option value="confirmed">确认根因</option><option value="partial">部分正确</option><option value="rejected">否定根因</option></select>
+            <input v-model="correctedRootCause" placeholder="修正后的根因（可选）" />
+            <input v-model="feedbackNote" placeholder="反馈说明（可选）" />
+            <button class="primary" @click.prevent="submitFeedback(feedbackStatus as 'confirmed'|'partial'|'rejected')"><CheckCircle2/>提交反馈</button>
+          </form>
+        </section>
         <section class="context-grid">
           <article><h3><GitBranch/>关联资产</h3><div v-if="selected.relatedAssets.length" class="asset-chips"><span v-for="asset in selected.relatedAssets" :key="asset.id"><b>{{ asset.name }}</b><small>{{ asset.type }} · {{ asset.environment }} · {{ asset.relation }}</small></span></div><p v-else>未匹配到 CMDB 资产</p></article>
           <article><h3><BrainCircuit/>拓扑影响</h3><div class="impact-summary"><span data-status="critical">严重 {{ selected.impact.critical }}</span><span data-status="warning">关注 {{ selected.impact.warning }}</span><span data-status="healthy">健康 {{ selected.impact.healthy }}</span></div><small>共 {{ selected.impact.total }} 个关联节点</small><ul><li v-for="item in selected.impact.items.slice(0,5)" :key="item">{{ item }}</li></ul></article>
@@ -154,6 +190,18 @@ onMounted(load)
           <ol><li v-for="step in rec.steps" :key="step">{{ step }}</li></ol>
           <footer><span><ShieldCheck/>只创建审批工单，不直接执行服务器操作</span><button class="primary" @click="execute(rec)"><Play/>申请审批</button></footer>
         </article>
+
+        <section class="execution-panel">
+          <header><h3><TicketCheck/>受控执行闭环</h3><p>工单审批通过后，平台只按白名单模板创建任务，并把任务状态回写到 AIOps。</p></header>
+          <div v-if="selectedExecutions.length" class="execution-list">
+            <article v-for="item in selectedExecutions" :key="item.id">
+              <header><b>{{ item.runbookTitle || item.runbookId }}</b><span :data-status="item.status">{{ statusLabel(item.status) }}</span></header>
+              <dl><div><dt>审批工单</dt><dd>{{ item.ticketId || '—' }}</dd></div><div><dt>任务 ID</dt><dd>{{ item.jobId || '—' }}</dd></div><div><dt>审批人</dt><dd>{{ item.approvedBy || '—' }}</dd></div><div><dt>完成时间</dt><dd>{{ item.finishedAt || '—' }}</dd></div></dl>
+              <p>{{ item.resultSummary || '等待工单审批' }}</p><em v-if="item.error">{{ item.error }}</em>
+            </article>
+          </div>
+          <div v-else class="execution-empty">尚未提交受控执行申请</div>
+        </section>
       </main>
       <main v-else class="analysis-empty detail"><Bot/><strong>选择左侧分析查看证据链</strong><span>也可以先选择一条未恢复告警生成分析</span></main>
     </div>

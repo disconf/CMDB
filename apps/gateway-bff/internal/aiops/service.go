@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -31,6 +32,7 @@ type Service struct {
 	impact     ImpactProvider
 	tickets    TicketProvider
 	releases   ReleaseProvider
+	jobs       JobProvider
 }
 
 func NewService() *Service {
@@ -58,6 +60,7 @@ func (s *Service) SetAssetProvider(provider AssetProvider)     { s.assets = prov
 func (s *Service) SetImpactProvider(provider ImpactProvider)   { s.impact = provider }
 func (s *Service) SetTicketProvider(provider TicketProvider)   { s.tickets = provider }
 func (s *Service) SetReleaseProvider(provider ReleaseProvider) { s.releases = provider }
+func (s *Service) SetJobProvider(provider JobProvider)         { s.jobs = provider }
 
 func (s *Service) ready() error {
 	if s.alerts == nil || s.assets == nil {
@@ -80,11 +83,23 @@ func (s *Service) Summary() Summary {
 			summary.AnalyzedToday++
 		}
 		totalConfidence += item.Confidence
+		if item.Feedback == nil {
+			continue
+		}
+		summary.FeedbackCount++
+		switch item.Feedback.Status {
+		case "confirmed":
+			summary.ConfirmedFeedback++
+		case "rejected":
+			summary.RejectedFeedback++
+		}
 	}
 	if len(s.analyses) > 0 {
 		summary.AverageConfidence = float64(totalConfidence) / float64(len(s.analyses))
 	}
-	summary.Accuracy = summary.AverageConfidence
+	if summary.FeedbackCount > 0 {
+		summary.Accuracy = math.Round(float64(summary.ConfirmedFeedback)/float64(summary.FeedbackCount)*10000) / 100
+	}
 	for _, item := range s.executions {
 		if item.Status == "pending-approval" {
 			summary.PendingActions++
@@ -206,6 +221,38 @@ func (s *Service) Executions() []Execution {
 	return append([]Execution(nil), s.executions...)
 }
 
+func (s *Service) SetFeedback(ctx context.Context, analysisID string, in FeedbackInput, reviewer string) (Analysis, error) {
+	status := strings.ToLower(strings.TrimSpace(in.Status))
+	if status != "confirmed" && status != "rejected" && status != "partial" {
+		return Analysis{}, ErrValidation
+	}
+	note := strings.TrimSpace(in.Note)
+	if len(note) > 1000 {
+		return Analysis{}, ErrValidation
+	}
+	item, err := s.Get(analysisID)
+	if err != nil {
+		return Analysis{}, err
+	}
+	corrected := strings.TrimSpace(in.CorrectedRootCause)
+	item.Feedback = &Feedback{Status: status, CorrectedRootCause: corrected, Note: note, Reviewer: strings.TrimSpace(reviewer), ReviewedAt: time.Now().Format("2006-01-02 15:04:05")}
+	if corrected != "" {
+		item.RootCause = corrected
+	}
+	item.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+	if err = s.repo.SaveAnalysis(ctx, item); err != nil {
+		return Analysis{}, err
+	}
+	s.mu.Lock()
+	for i := range s.analyses {
+		if s.analyses[i].ID == item.ID {
+			s.analyses[i] = item
+			break
+		}
+	}
+	s.mu.Unlock()
+	return item, nil
+}
 func (s *Service) Knowledge() []Knowledge { return append([]Knowledge(nil), s.knowledge...) }
 
 func (s *Service) SearchKnowledge(q string) []Knowledge {

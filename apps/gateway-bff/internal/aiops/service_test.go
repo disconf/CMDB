@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cmdb/gateway-bff/internal/cmdb"
+	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/tickets"
@@ -56,6 +57,25 @@ func (f *fakeTickets) Create(in tickets.CreateInput) (tickets.Ticket, error) {
 	return tickets.Ticket{ID: "TKT-AI-1", Title: in.Title, Status: "pending"}, nil
 }
 
+func (f *fakeTickets) ConsumeTaskAuthorization(ticketID, token, resourceID string) (tickets.Ticket, error) {
+	return tickets.Ticket{ID: ticketID, Status: tickets.StatusApproved, AutomationTemplate: resourceID}, nil
+}
+
+type fakeJobs struct {
+	created []jobs.CreateInput
+	runID   string
+}
+
+func (f *fakeJobs) Create(in jobs.CreateInput) (jobs.Job, error) {
+	f.created = append(f.created, in)
+	return jobs.Job{ID: "job-ai-1", Name: "主机健康巡检", Status: "pending", Targets: in.Targets}, nil
+}
+
+func (f *fakeJobs) Run(id string) (jobs.Job, error) {
+	f.runID = id
+	return jobs.Job{ID: id, Name: "主机健康巡检", Status: "running", Progress: 10}, nil
+}
+
 type fakeReleases struct{}
 
 func (fakeReleases) List() ([]releases.Release, error) { return []releases.Release{}, nil }
@@ -68,6 +88,8 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	s.SetImpactProvider(fakeImpact{})
 	s.SetTicketProvider(ticketsProvider)
 	s.SetReleaseProvider(fakeReleases{})
+	jobsProvider := &fakeJobs{}
+	s.SetJobProvider(jobsProvider)
 	item, err := s.Analyze(context.Background(), "alert-1")
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +106,21 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	}
 	if execution.Status != "pending-approval" || execution.TicketID != "TKT-AI-1" || len(ticketsProvider.created) != 1 {
 		t.Fatalf("execution: %#v created=%#v", execution, ticketsProvider.created)
+	}
+	s.HandleTicketDecision(context.Background(), tickets.Ticket{ID: execution.TicketID, Applicant: "admin", AutomationTemplate: execution.RunbookID}, "test-token", "approve")
+	execution = s.Executions()[0]
+	if execution.Status != "running" || execution.JobID != "job-ai-1" || jobsProvider.runID != "job-ai-1" {
+		t.Fatalf("approved execution: %#v jobs=%#v", execution, jobsProvider.created)
+	}
+	if _, err := s.SetFeedback(context.Background(), item.ID, FeedbackInput{Status: "confirmed", Note: "验证通过"}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	s.OnJobTerminal(jobs.Job{ID: "job-ai-1", Name: "主机健康巡检", Status: "success", Progress: 100})
+	if updated := s.Executions()[0]; updated.Status != "success" || updated.FinishedAt == "" {
+		t.Fatalf("terminal callback: %#v", updated)
+	}
+	if summary := s.Summary(); summary.Accuracy != 100 || summary.ConfirmedFeedback != 1 {
+		t.Fatalf("feedback summary: %#v", summary)
 	}
 }
 

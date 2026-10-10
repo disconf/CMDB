@@ -197,9 +197,20 @@ func (s *Service) resolveAsset(alert monitor.Alert) (cmdb.Asset, bool) {
 }
 
 func relatedAsset(asset cmdb.Asset, relation string) RelatedAsset {
-	return RelatedAsset{ID: asset.ID, Name: asset.Name, Type: asset.TypeName, Status: asset.Status, IP: asset.IP, Environment: asset.Environment, ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, Location: asset.Location, Relation: relation}
+	return RelatedAsset{ID: asset.ID, Name: asset.Name, Type: asset.TypeName, Status: asset.Status, IP: asset.IP, Environment: asset.Environment, ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, Location: asset.Location, Relation: relation, CredentialID: assetCredentialID(asset)}
 }
 
+func assetCredentialID(asset cmdb.Asset) string {
+	for _, item := range asset.Attributes {
+		switch item.Name {
+		case "ssh_credential_id", "credential_id":
+			if value := strings.TrimSpace(item.Value); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
 func matchesAlertOrAsset(relatedAlert, relatedAsset, alertID, assetID string) bool {
 	if relatedAlert != "" && relatedAlert == alertID {
 		return true

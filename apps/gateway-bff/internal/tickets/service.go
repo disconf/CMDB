@@ -110,10 +110,15 @@ type Summary struct {
 }
 
 type Service struct {
-	mu      sync.RWMutex
-	tickets []Ticket
-	next    int
-	db      *sql.DB
+	mu              sync.RWMutex
+	tickets         []Ticket
+	next            int
+	db              *sql.DB
+	decisionHandler func(Ticket, string, string)
+}
+
+func (s *Service) SetDecisionHandler(handler func(Ticket, string, string)) {
+	s.decisionHandler = handler
 }
 
 func NewService() *Service {
@@ -402,6 +407,9 @@ func (s *Service) Approve(id, actor, comment string) (Ticket, error) {
 	if err == nil && token != "" {
 		item.TaskAuthorizationToken = token
 	}
+	if err == nil && s.decisionHandler != nil {
+		s.decisionHandler(item, token, "approve")
+	}
 	return item, err
 }
 
@@ -441,7 +449,7 @@ func (s *Service) ConsumeTaskAuthorization(id, token, resourceID string) (Ticket
 }
 
 func (s *Service) Reject(id, actor, comment string) (Ticket, error) {
-	return s.mutate(id, func(item *Ticket, now time.Time) error {
+	item, err := s.mutate(id, func(item *Ticket, now time.Time) error {
 		if item.Status != StatusPending {
 			return ErrInvalidState
 		}
@@ -453,6 +461,10 @@ func (s *Service) Reject(id, actor, comment string) (Ticket, error) {
 		item.Timeline = append(item.Timeline, Event{Time: now.Format("2006-01-02 15:04"), Actor: actor, Action: "驳回申请", Comment: strings.TrimSpace(comment)})
 		return nil
 	})
+	if err == nil && s.decisionHandler != nil {
+		s.decisionHandler(item, "", "reject")
+	}
+	return item, err
 }
 
 func (s *Service) Comment(id, actor, comment string) (Ticket, error) {

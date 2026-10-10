@@ -37,6 +37,7 @@ type RelatedAsset struct {
 	Owner        string `json:"owner"`
 	Location     string `json:"location"`
 	Relation     string `json:"relation,omitempty"`
+	CredentialID string `json:"credentialId,omitempty"`
 }
 
 type ImpactSummary struct {
@@ -62,6 +63,14 @@ type RelatedRelease struct {
 	StartedAt   string `json:"startedAt"`
 }
 
+type Feedback struct {
+	Status             string `json:"status"`
+	CorrectedRootCause string `json:"correctedRootCause,omitempty"`
+	Note               string `json:"note,omitempty"`
+	Reviewer           string `json:"reviewer"`
+	ReviewedAt         string `json:"reviewedAt"`
+}
+
 type Analysis struct {
 	ID              string           `json:"id"`
 	AlertID         string           `json:"alertId"`
@@ -83,6 +92,7 @@ type Analysis struct {
 	Tickets         []RelatedTicket  `json:"tickets"`
 	Releases        []RelatedRelease `json:"releases"`
 	DataSources     []string         `json:"dataSources"`
+	Feedback        *Feedback        `json:"feedback,omitempty"`
 }
 
 type Knowledge struct {
@@ -104,6 +114,12 @@ type Execution struct {
 	RequestedAt      string `json:"requestedAt"`
 	ApprovalRequired bool   `json:"approvalRequired"`
 	TicketID         string `json:"ticketId,omitempty"`
+	JobID            string `json:"jobId,omitempty"`
+	ApprovedBy       string `json:"approvedBy,omitempty"`
+	ApprovedAt       string `json:"approvedAt,omitempty"`
+	FinishedAt       string `json:"finishedAt,omitempty"`
+	ResultSummary    string `json:"resultSummary,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 type Summary struct {
@@ -113,6 +129,9 @@ type Summary struct {
 	Accuracy          float64 `json:"accuracy"`
 	KnowledgeCount    int     `json:"knowledgeCount"`
 	PendingActions    int     `json:"pendingActions"`
+	FeedbackCount     int     `json:"feedbackCount"`
+	ConfirmedFeedback int     `json:"confirmedFeedback"`
+	RejectedFeedback  int     `json:"rejectedFeedback"`
 }
 
 type AnalyzeInput struct {
@@ -124,4 +143,19 @@ type repository interface {
 	SaveAnalysis(context.Context, Analysis) error
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
+}
+
+type FeedbackInput struct {
+	Status             string `json:"status"`
+	CorrectedRootCause string `json:"correctedRootCause,omitempty"`
+	Note               string `json:"note,omitempty"`
+}
+
+type RunbookPolicy struct {
+	RunbookID        string `json:"runbookId"`
+	Title            string `json:"title"`
+	TemplateID       string `json:"templateId"`
+	Mode             string `json:"mode"`
+	Risk             string `json:"risk"`
+	ApprovalRequired bool   `json:"approvalRequired"`
 }

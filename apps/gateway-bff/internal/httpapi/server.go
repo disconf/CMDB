@@ -70,7 +70,6 @@ func NewServer() *Server {
 	go jobsService.RunScheduler(context.Background())
 	ticketsService := tickets.NewService()
 	go ticketsService.RunSLAEscalation(context.Background(), time.Minute)
-	jobsService.SetTerminalHandler(func(job jobs.Job) { handleJobTerminal(job, monitorService, ticketsService, cmdbService) })
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()
 	aiopsService := aiops.NewService()
@@ -80,6 +79,14 @@ func NewServer() *Server {
 	aiopsService.SetImpactProvider(topologyService)
 	aiopsService.SetTicketProvider(ticketsService)
 	aiopsService.SetReleaseProvider(releasesService)
+	aiopsService.SetJobProvider(jobsService)
+	ticketsService.SetDecisionHandler(func(ticket tickets.Ticket, token, decision string) {
+		aiopsService.HandleTicketDecision(context.Background(), ticket, token, decision)
+	})
+	jobsService.SetTerminalHandler(func(job jobs.Job) {
+		handleJobTerminal(job, monitorService, ticketsService, cmdbService)
+		aiopsService.OnJobTerminal(job)
+	})
 	networkAutomationService := networkautomation.NewService(cmdbService, ticketsService, monitorService, jobsService)
 	go networkAutomationService.Run(context.Background(), time.Minute)
 	assetGovernanceService := assetgovernance.NewService(cmdbService, ticketsService, monitorService)
@@ -3353,6 +3360,37 @@ func NewServer() *Server {
 		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ANALYSIS_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/aiops/runbooks", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, aiopsService.Runbooks())
+	})
+	mux.HandleFunc("POST /api/v1/aiops/analyses/{id}/feedback", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		var in aiops.FeedbackInput
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.SetFeedback(r.Context(), r.PathValue("id"), in, u.Username)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ANALYSIS_FEEDBACK_FAILED"})
 			return
 		}
 		writeJSON(w, http.StatusOK, item)

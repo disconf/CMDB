@@ -31,8 +31,10 @@ CREATE TABLE IF NOT EXISTS aiops_analyses (
   timeline jsonb NOT NULL DEFAULT '[]',
   tickets jsonb NOT NULL DEFAULT '[]',
   releases jsonb NOT NULL DEFAULT '[]',
-  data_sources jsonb NOT NULL DEFAULT '[]'
+  data_sources jsonb NOT NULL DEFAULT '[]',
+  feedback jsonb NOT NULL DEFAULT '{}'
 );
+ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS feedback jsonb NOT NULL DEFAULT '{}';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_aiops_analyses_alert_id ON aiops_analyses(alert_id);
 CREATE INDEX IF NOT EXISTS idx_aiops_analyses_created_at ON aiops_analyses(created_at DESC);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
@@ -44,8 +46,20 @@ CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   requested_by text NOT NULL DEFAULT '',
   requested_at timestamptz NOT NULL,
   approval_required boolean NOT NULL DEFAULT true,
-  ticket_id text NOT NULL DEFAULT ''
+  ticket_id text NOT NULL DEFAULT '',
+  job_id text NOT NULL DEFAULT '',
+  approved_by text NOT NULL DEFAULT '',
+  approved_at timestamptz,
+  finished_at timestamptz,
+  result_summary text NOT NULL DEFAULT '',
+  error_message text NOT NULL DEFAULT ''
 );
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS job_id text NOT NULL DEFAULT '';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS result_summary text NOT NULL DEFAULT '';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS error_message text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
 `
 
@@ -83,6 +97,7 @@ func (r *postgresRepository) SaveAnalysis(ctx context.Context, item Analysis) er
 	tickets, _ := json.Marshal(item.Tickets)
 	releases, _ := json.Marshal(item.Releases)
 	sources, _ := json.Marshal(item.DataSources)
+	feedback, _ := json.Marshal(item.Feedback)
 	created, err := parseAITime(item.CreatedAt)
 	if err != nil {
 		return err
@@ -95,15 +110,15 @@ func (r *postgresRepository) SaveAnalysis(ctx context.Context, item Analysis) er
 		}
 	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO aiops_analyses(id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-ON CONFLICT(id) DO UPDATE SET alert_title=excluded.alert_title,title=excluded.title,status=excluded.status,severity=excluded.severity,target=excluded.target,root_cause=excluded.root_cause,confidence=excluded.confidence,summary=excluded.summary,updated_at=excluded.updated_at,evidence=excluded.evidence,recommendations=excluded.recommendations,related_assets=excluded.related_assets,impact=excluded.impact,timeline=excluded.timeline,tickets=excluded.tickets,releases=excluded.releases,data_sources=excluded.data_sources`,
-		item.ID, item.AlertID, item.AlertTitle, item.Title, item.Status, item.Severity, item.Target, item.RootCause, item.Confidence, item.Summary, created, updated, evidence, recommendations, assets, impact, timeline, tickets, releases, sources)
+INSERT INTO aiops_analyses(id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+ON CONFLICT(id) DO UPDATE SET alert_title=excluded.alert_title,title=excluded.title,status=excluded.status,severity=excluded.severity,target=excluded.target,root_cause=excluded.root_cause,confidence=excluded.confidence,summary=excluded.summary,updated_at=excluded.updated_at,evidence=excluded.evidence,recommendations=excluded.recommendations,related_assets=excluded.related_assets,impact=excluded.impact,timeline=excluded.timeline,tickets=excluded.tickets,releases=excluded.releases,data_sources=excluded.data_sources,feedback=excluded.feedback`,
+		item.ID, item.AlertID, item.AlertTitle, item.Title, item.Status, item.Severity, item.Target, item.RootCause, item.Confidence, item.Summary, created, updated, evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback)
 	return err
 }
 func (r *postgresRepository) LoadAnalyses(ctx context.Context) ([]Analysis, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources
+SELECT id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback
 FROM aiops_analyses ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -113,8 +128,8 @@ FROM aiops_analyses ORDER BY created_at DESC`)
 	for rows.Next() {
 		var item Analysis
 		var created, updated time.Time
-		var evidence, recommendations, assets, impact, timeline, tickets, releases, sources []byte
-		if err = rows.Scan(&item.ID, &item.AlertID, &item.AlertTitle, &item.Title, &item.Status, &item.Severity, &item.Target, &item.RootCause, &item.Confidence, &item.Summary, &created, &updated, &evidence, &recommendations, &assets, &impact, &timeline, &tickets, &releases, &sources); err != nil {
+		var evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback []byte
+		if err = rows.Scan(&item.ID, &item.AlertID, &item.AlertTitle, &item.Title, &item.Status, &item.Severity, &item.Target, &item.RootCause, &item.Confidence, &item.Summary, &created, &updated, &evidence, &recommendations, &assets, &impact, &timeline, &tickets, &releases, &sources, &feedback); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Local().Format("2006-01-02 15:04:05")
@@ -127,6 +142,13 @@ FROM aiops_analyses ORDER BY created_at DESC`)
 		_ = json.Unmarshal(tickets, &item.Tickets)
 		_ = json.Unmarshal(releases, &item.Releases)
 		_ = json.Unmarshal(sources, &item.DataSources)
+		if string(feedback) != "" && string(feedback) != "{}" && string(feedback) != "null" {
+			var value Feedback
+			_ = json.Unmarshal(feedback, &value)
+			if value.Status != "" {
+				item.Feedback = &value
+			}
+		}
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -137,17 +159,25 @@ func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) 
 	if err != nil {
 		return err
 	}
+	var approvedAt any
+	if item.ApprovedAt != "" {
+		approvedAt, _ = parseAITime(item.ApprovedAt)
+	}
+	var finishedAt any
+	if item.FinishedAt != "" {
+		finishedAt, _ = parseAITime(item.FinishedAt)
+	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO aiops_execution_requests(id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,ticket_id)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-ON CONFLICT(id) DO UPDATE SET status=excluded.status,ticket_id=excluded.ticket_id`,
-		item.ID, item.AnalysisID, item.RunbookID, item.RunbookTitle, item.Status, item.RequestedBy, requestedAt, item.ApprovalRequired, item.TicketID)
+INSERT INTO aiops_execution_requests(id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+ON CONFLICT(id) DO UPDATE SET status=excluded.status,ticket_id=excluded.ticket_id,job_id=excluded.job_id,approved_by=excluded.approved_by,approved_at=excluded.approved_at,finished_at=excluded.finished_at,result_summary=excluded.result_summary,error_message=excluded.error_message`,
+		item.ID, item.AnalysisID, item.RunbookID, item.RunbookTitle, item.Status, item.RequestedBy, requestedAt, item.ApprovalRequired, item.TicketID, item.JobID, item.ApprovedBy, approvedAt, finishedAt, item.ResultSummary, item.Error)
 	return err
 }
 
 func (r *postgresRepository) LoadExecutions(ctx context.Context) ([]Execution, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,ticket_id
+SELECT id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message
 FROM aiops_execution_requests ORDER BY requested_at DESC`)
 	if err != nil {
 		return nil, err
@@ -157,10 +187,17 @@ FROM aiops_execution_requests ORDER BY requested_at DESC`)
 	for rows.Next() {
 		var item Execution
 		var requestedAt time.Time
-		if err = rows.Scan(&item.ID, &item.AnalysisID, &item.RunbookID, &item.RunbookTitle, &item.Status, &item.RequestedBy, &requestedAt, &item.ApprovalRequired, &item.TicketID); err != nil {
+		var approvedAt, finishedAt sql.NullTime
+		if err = rows.Scan(&item.ID, &item.AnalysisID, &item.RunbookID, &item.RunbookTitle, &item.Status, &item.RequestedBy, &requestedAt, &item.ApprovalRequired, &item.TicketID, &item.JobID, &item.ApprovedBy, &approvedAt, &finishedAt, &item.ResultSummary, &item.Error); err != nil {
 			return nil, err
 		}
 		item.RequestedAt = requestedAt.Local().Format("2006-01-02 15:04:05")
+		if approvedAt.Valid {
+			item.ApprovedAt = approvedAt.Time.Local().Format("2006-01-02 15:04:05")
+		}
+		if finishedAt.Valid {
+			item.FinishedAt = finishedAt.Time.Local().Format("2006-01-02 15:04:05")
+		}
 		result = append(result, item)
 	}
 	return result, rows.Err()
