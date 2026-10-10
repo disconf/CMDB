@@ -3365,6 +3365,40 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("GET /api/v1/aiops/canary-validations", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, aiopsService.CanaryValidations())
+	})
+	mux.HandleFunc("POST /api/v1/aiops/canary-validations", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var in struct {
+			RunbookID string `json:"runbookId"`
+			AssetID   string `json:"assetId"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.StartCanaryValidation(r.Context(), in.RunbookID, in.AssetID, u.Username)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CANARY_VALIDATION_INVALID", "message": "只允许对变更类 Runbook 和有效资产发起灰度通道验证"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "CANARY_VALIDATION_NOT_READY", "message": "任务服务或只读健康检查模板不可用"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "CANARY_VALIDATION_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, item)
+	})
 	mux.HandleFunc("GET /api/v1/aiops/change-control", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

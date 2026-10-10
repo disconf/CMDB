@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS aiops_runbook_policies (
   live_daily_limit integer NOT NULL DEFAULT 1,
   live_cooldown_minutes integer NOT NULL DEFAULT 30,
   require_rollback boolean NOT NULL DEFAULT true,
+  require_canary boolean NOT NULL DEFAULT true,
   updated_by text NOT NULL DEFAULT '',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -104,6 +105,7 @@ ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS rollback_runbook_id 
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS live_daily_limit integer NOT NULL DEFAULT 1;
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS live_cooldown_minutes integer NOT NULL DEFAULT 30;
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS require_rollback boolean NOT NULL DEFAULT true;
+ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS require_canary boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
 CREATE TABLE IF NOT EXISTS aiops_change_control (
   id text PRIMARY KEY,
@@ -115,6 +117,21 @@ CREATE TABLE IF NOT EXISTS aiops_change_control (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO aiops_change_control(id,frozen,live_enabled,reason,updated_by) VALUES('default',false,true,'','system') ON CONFLICT(id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS aiops_canary_validations (
+  id text PRIMARY KEY,
+  runbook_id text NOT NULL,
+  asset_id text NOT NULL,
+  asset_name text NOT NULL DEFAULT '',
+  status text NOT NULL,
+  job_id text NOT NULL DEFAULT '',
+  summary text NOT NULL DEFAULT '',
+  checks jsonb NOT NULL DEFAULT '[]',
+  requested_by text NOT NULL DEFAULT '',
+  started_at timestamptz NOT NULL,
+  finished_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_canary_validations_asset ON aiops_canary_validations(runbook_id,asset_id,started_at DESC);
 `
 
 type postgresRepository struct {
@@ -277,7 +294,7 @@ func parseAITime(value string) (time.Time, error) {
 }
 
 func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]RunbookPolicy, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,live_daily_limit,live_cooldown_minutes,require_rollback,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,live_daily_limit,live_cooldown_minutes,require_rollback,require_canary,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +304,7 @@ func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]Runbook
 		var item RunbookPolicy
 		var environments []byte
 		var updatedAt time.Time
-		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.ExecutionMode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.RollbackRunbookID, &item.LiveDailyLimit, &item.LiveCooldownMinutes, &item.RequireRollback, &item.UpdatedBy, &updatedAt); err != nil {
+		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.ExecutionMode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.RollbackRunbookID, &item.LiveDailyLimit, &item.LiveCooldownMinutes, &item.RequireRollback, &item.RequireCanary, &item.UpdatedBy, &updatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(environments, &item.AllowedEnvironments)
@@ -295,6 +312,45 @@ func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]Runbook
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (r *postgresRepository) LoadCanaryValidations(ctx context.Context) ([]CanaryValidation, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,runbook_id,asset_id,asset_name,status,job_id,summary,checks,requested_by,started_at,finished_at FROM aiops_canary_validations ORDER BY started_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []CanaryValidation{}
+	for rows.Next() {
+		var item CanaryValidation
+		var checks []byte
+		var startedAt time.Time
+		var finishedAt sql.NullTime
+		if err = rows.Scan(&item.ID, &item.RunbookID, &item.AssetID, &item.AssetName, &item.Status, &item.JobID, &item.Summary, &checks, &item.RequestedBy, &startedAt, &finishedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(checks, &item.Checks)
+		item.StartedAt = startedAt.Local().Format("2006-01-02 15:04:05")
+		if finishedAt.Valid {
+			item.FinishedAt = finishedAt.Time.Local().Format("2006-01-02 15:04:05")
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveCanaryValidation(ctx context.Context, item CanaryValidation) error {
+	startedAt, err := parseAITime(item.StartedAt)
+	if err != nil {
+		return err
+	}
+	var finishedAt any
+	if item.FinishedAt != "" {
+		finishedAt, _ = parseAITime(item.FinishedAt)
+	}
+	checks, _ := json.Marshal(item.Checks)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_canary_validations(id,runbook_id,asset_id,asset_name,status,job_id,summary,checks,requested_by,started_at,finished_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,job_id=excluded.job_id,summary=excluded.summary,checks=excluded.checks,finished_at=excluded.finished_at,updated_at=now()`, item.ID, item.RunbookID, item.AssetID, item.AssetName, item.Status, item.JobID, item.Summary, checks, item.RequestedBy, startedAt, finishedAt)
+	return err
 }
 
 func (r *postgresRepository) LoadChangeControl(ctx context.Context) (ChangeControl, error) {
@@ -337,6 +393,6 @@ func (r *postgresRepository) SaveRunbookPolicy(ctx context.Context, item Runbook
 	if err != nil {
 		updatedAt = time.Now()
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,live_daily_limit,live_cooldown_minutes,require_rollback,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,execution_mode=excluded.execution_mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,rollback_runbook_id=excluded.rollback_runbook_id,live_daily_limit=excluded.live_daily_limit,live_cooldown_minutes=excluded.live_cooldown_minutes,require_rollback=excluded.require_rollback,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.ExecutionMode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.RollbackRunbookID, item.LiveDailyLimit, item.LiveCooldownMinutes, item.RequireRollback, item.UpdatedBy, updatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,live_daily_limit,live_cooldown_minutes,require_rollback,require_canary,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,execution_mode=excluded.execution_mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,rollback_runbook_id=excluded.rollback_runbook_id,live_daily_limit=excluded.live_daily_limit,live_cooldown_minutes=excluded.live_cooldown_minutes,require_rollback=excluded.require_rollback,require_canary=excluded.require_canary,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.ExecutionMode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.RollbackRunbookID, item.LiveDailyLimit, item.LiveCooldownMinutes, item.RequireRollback, item.RequireCanary, item.UpdatedBy, updatedAt)
 	return err
 }

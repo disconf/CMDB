@@ -32,6 +32,7 @@ type Service struct {
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
+	canaries      []CanaryValidation
 	alerts        AlertProvider
 	assets        AssetProvider
 	impact        ImpactProvider
@@ -42,7 +43,7 @@ type Service struct {
 }
 
 func NewService() *Service {
-	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}}
+	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
 		repo, err := openPostgres(databaseURL)
 		if err != nil {
@@ -60,6 +61,9 @@ func NewService() *Service {
 	}
 	if control, err := s.repo.LoadChangeControl(ctx); err == nil {
 		s.changeControl = control
+	}
+	if canaries, err := s.repo.LoadCanaryValidations(ctx); err == nil {
+		s.canaries = canaries
 	}
 	if runbooks, err := s.repo.LoadRunbookPolicies(ctx); err == nil && len(runbooks) > 0 {
 		s.runbooks = runbooks

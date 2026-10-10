@@ -243,6 +243,8 @@ func auditAction(method, path string) string {
 		return "aiops.analysis.feedback"
 	case method == http.MethodPost && strings.HasSuffix(path, "/evidence") && strings.HasPrefix(path, "/api/v1/aiops/analyses/"):
 		return "aiops.evidence.collect"
+	case method == http.MethodPost && path == "/api/v1/aiops/canary-validations":
+		return "aiops.canary.validate"
 	case method == http.MethodPut && path == "/api/v1/aiops/change-control":
 		return "aiops.change_control.update"
 	case method == http.MethodPost && strings.HasSuffix(path, "/preflight") && strings.HasPrefix(path, "/api/v1/aiops/runbooks/"):

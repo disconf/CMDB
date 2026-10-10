@@ -27,6 +27,7 @@ type ExecutionStats = { total:number; simulated:number; live:number; pendingAppr
 type PreflightCheck = { key:string; label:string; status:'pass'|'warn'|'fail'; detail:string }
 type RunbookPreflight = { runbookId:string; analysisId?:string; ready:boolean; checks:PreflightCheck[]; nextAllowedAt?:string; generatedAt:string }
 type ChangeControl = { frozen:boolean; liveEnabled:boolean; reason?:string; freezeUntil?:string; updatedBy?:string; updatedAt?:string }
+type CanaryValidation = { id:string; runbookId:string; assetId:string; assetName:string; status:string; jobId?:string; summary:string; checks:string[]; requestedBy:string; startedAt:string; finishedAt?:string }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
@@ -43,6 +44,8 @@ const runbookPreflight = ref<RunbookPreflight>()
 const changeControl = ref<ChangeControl>()
 const preflightLoading = ref(false)
 const changeControlSaving = ref(false)
+const canaries = ref<CanaryValidation[]>([])
+const canaryPendingID = ref('')
 const selected = ref<Analysis>()
 const query = ref('')
 const tab = ref<'analysis'|'knowledge'|'runbooks'>('analysis')
@@ -63,9 +66,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','execution-stats','feedback/stats','runbooks','change-control'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
+    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','execution-stats','feedback/stats','runbooks','change-control','canary-validations'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
     if (responses.some(response => !response.ok)) throw new Error('AIOps 数据加载失败')
-    const [summaryData, alertData, analysisData, knowledgeData, executionData, executionStatsData, feedbackStatsData, runbookData, changeControlData] = await Promise.all(responses.map(response => response.json()))
+    const [summaryData, alertData, analysisData, knowledgeData, executionData, executionStatsData, feedbackStatsData, runbookData, changeControlData, canaryData] = await Promise.all(responses.map(response => response.json()))
     summary.value = summaryData
     alerts.value = alertData
     analyses.value = analysisData
@@ -75,6 +78,7 @@ async function load() {
     feedbackStats.value = feedbackStatsData
     runbooks.value = runbookData
     changeControl.value = changeControlData
+    canaries.value = canaryData
     selectedRunbook.value = runbooks.value.find(item => item.runbookId===selectedRunbook.value?.runbookId) || runbooks.value[0]
     selected.value = analyses.value.find(item => item.id === selected.value?.id) || analyses.value[0]
     if (!selectedAlertID.value && alerts.value.length) selectedAlertID.value = alerts.value[0].id
@@ -135,6 +139,29 @@ async function saveRunbook() {
     await load()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Runbook 保存失败'
+  }
+}
+
+function canaryFor(item:Execution) {
+  return canaries.value.find(value => value.runbookId === item.runbookId && value.assetId === item.changePlan?.targetAssetId)
+}
+
+async function startCanary(item:Execution) {
+  const assetId = item.changePlan?.targetAssetId
+  if (!assetId) return
+  canaryPendingID.value = item.id
+  message.value = ''
+  error.value = ''
+  try {
+    const response = await fetch('/api/v1/aiops/canary-validations', { method:'POST', headers:headers.value, body:JSON.stringify({ runbookId:item.runbookId, assetId }) })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || '灰度通道验证启动失败')
+    message.value = `只读健康检查任务已启动：${data.jobId || data.id}`
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '灰度通道验证启动失败'
+  } finally {
+    canaryPendingID.value = ''
   }
 }
 
@@ -365,6 +392,10 @@ onMounted(load)
               <dl><div><dt>审批工单</dt><dd>{{ item.ticketId || '—' }}</dd></div><div><dt>任务 ID</dt><dd>{{ item.jobId || '—' }}</dd></div><div><dt>审批人</dt><dd>{{ item.approvedBy || '—' }}</dd></div><div><dt>完成时间</dt><dd>{{ item.finishedAt || '—' }}</dd></div></dl>
               <p>{{ item.resultSummary || '等待工单审批' }}</p><em v-if="item.error">{{ item.error }}</em>
               <div class="verification-line" :data-status="item.verificationStatus"><span>执行后验证</span><b>{{ verificationLabel(item.verificationStatus) }}</b><small>{{ item.verificationSummary || '等待验证' }}</small></div>
+              <div v-if="item.changePlan?.targetAssetId" class="canary-line" :data-status="canaryFor(item)?.status">
+                <span>灰度通道</span><b>{{ canaryFor(item)?.status === 'passed' ? '验证通过' : canaryFor(item)?.status === 'running' ? '验证中' : canaryFor(item) ? '验证失败' : '未验证' }}</b><small>{{ canaryFor(item)?.summary || '真实审批前需要完成只读健康检查' }}</small>
+                <button v-if="canManageAiops && !item.simulated && canaryFor(item)?.status !== 'passed'" :disabled="canaryPendingID===item.id || canaryFor(item)?.status==='running'" @click="startCanary(item)"><ShieldCheck/>{{ canaryFor(item)?.status==='running' ? '验证中' : '发起只读验证' }}</button>
+              </div>
               <details class="change-plan">
                 <summary>查看变更计划与回滚方案</summary>
                 <div class="plan-meta"><span>目标：{{ item.changePlan?.targetAssetName || item.changePlan?.targetAssetId || '—' }}</span><span>环境：{{ item.changePlan?.environment || '—' }}</span><span>方式：{{ item.changePlan?.executionMode || '—' }}</span><span>计划时间：{{ item.changePlan?.plannedAt || item.requestedAt }}</span></div>

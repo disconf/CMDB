@@ -83,6 +83,10 @@ func (f *fakeJobs) Run(id string) (jobs.Job, error) {
 	return jobs.Job{ID: id, Name: "主机健康巡检", Status: "running", Progress: 10}, nil
 }
 
+func (f *fakeJobs) Get(id string) (jobs.Job, error) {
+	return jobs.Job{ID: id, Name: "主机健康巡检", Status: "success", Progress: 100}, nil
+}
+
 type fakeTools struct{}
 
 func (fakeTools) Tools() []toolbox.Tool {
@@ -206,6 +210,10 @@ func TestRunbookPreflightRequiresRollbackAndEnforcesThrottle(t *testing.T) {
 	policy.LiveDailyLimit = 1
 	policy.LiveCooldownMinutes = 60
 	if _, err = s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	canary := CanaryValidation{ID: "canary-passed", RunbookID: policy.RunbookID, AssetID: analysis.RelatedAssets[0].ID, AssetName: analysis.RelatedAssets[0].Name, Status: "passed", StartedAt: time.Now().Format("2006-01-02 15:04:05")}
+	if err = s.repo.SaveCanaryValidation(context.Background(), canary); err != nil {
 		t.Fatal(err)
 	}
 	preflight, err := s.RunbookPreflight(policy.RunbookID, analysis.ID)

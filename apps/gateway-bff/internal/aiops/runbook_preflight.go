@@ -116,6 +116,21 @@ func (s *Service) RunbookPreflight(runbookID, analysisID string) (RunbookPreflig
 		add("rollback", "回滚就绪", "pass", "回滚 Runbook 已就绪："+rollback.Title)
 	}
 
+	if policy.Mode == "change" && policy.ExecutionMode == "live" && policy.RequireCanary {
+		targetID := ""
+		if analysisID != "" {
+			if analysis, err := s.Get(analysisID); err == nil && len(analysis.RelatedAssets) > 0 {
+				targetID = analysis.RelatedAssets[0].ID
+			}
+		}
+		if targetID == "" {
+			add("canary", "灰度通道验证", "fail", "无法确定目标资产，不能验证 Runner、SSH 和凭据通道")
+		} else if s.hasRecentPassedCanary(policy.RunbookID, targetID, 24*time.Hour) {
+			add("canary", "灰度通道验证", "pass", "24 小时内已有通过的只读健康检查")
+		} else {
+			add("canary", "灰度通道验证", "fail", "目标资产缺少 24 小时内通过的只读健康检查")
+		}
+	}
 	if policy.Mode == "change" && policy.ExecutionMode == "live" {
 		count, last := s.runbookLiveUsage(policy.RunbookID, time.Now())
 		if policy.LiveDailyLimit > 0 {

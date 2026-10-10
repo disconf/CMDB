@@ -50,6 +50,9 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 		input.LiveDailyLimit = 0
 		input.LiveCooldownMinutes = 0
 		input.RequireRollback = false
+		input.RequireCanary = false
+	} else {
+		input.RequireCanary = true
 	}
 	if input.Mode == "change" && (input.LiveDailyLimit < 0 || input.LiveDailyLimit > 50 || input.LiveCooldownMinutes < 0 || input.LiveCooldownMinutes > 1440) {
 		return RunbookPolicy{}, ErrValidation

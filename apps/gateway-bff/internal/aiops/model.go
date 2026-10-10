@@ -182,6 +182,8 @@ type repository interface {
 	SaveRunbookPolicy(context.Context, RunbookPolicy) error
 	LoadChangeControl(context.Context) (ChangeControl, error)
 	SaveChangeControl(context.Context, ChangeControl) error
+	LoadCanaryValidations(context.Context) ([]CanaryValidation, error)
+	SaveCanaryValidation(context.Context, CanaryValidation) error
 }
 
 type FeedbackInput struct {
@@ -206,6 +208,7 @@ type RunbookPolicy struct {
 	LiveDailyLimit      int      `json:"liveDailyLimit"`
 	LiveCooldownMinutes int      `json:"liveCooldownMinutes"`
 	RequireRollback     bool     `json:"requireRollback"`
+	RequireCanary       bool     `json:"requireCanary"`
 	UpdatedAt           string   `json:"updatedAt,omitempty"`
 	UpdatedBy           string   `json:"updatedBy,omitempty"`
 }
@@ -220,6 +223,20 @@ type RunbookExecutionStat struct {
 	Failed       int     `json:"failed"`
 	InProgress   int     `json:"inProgress"`
 	SuccessRate  float64 `json:"successRate"`
+}
+
+type CanaryValidation struct {
+	ID          string   `json:"id"`
+	RunbookID   string   `json:"runbookId"`
+	AssetID     string   `json:"assetId"`
+	AssetName   string   `json:"assetName"`
+	Status      string   `json:"status"`
+	JobID       string   `json:"jobId,omitempty"`
+	Summary     string   `json:"summary"`
+	Checks      []string `json:"checks"`
+	RequestedBy string   `json:"requestedBy"`
+	StartedAt   string   `json:"startedAt"`
+	FinishedAt  string   `json:"finishedAt,omitempty"`
 }
 
 type ChangeControl struct {

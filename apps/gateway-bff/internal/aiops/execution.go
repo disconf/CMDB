@@ -84,6 +84,16 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		return
 	}
 	if policy.Mode == "change" && policy.ExecutionMode == "live" {
+		if policy.RequireCanary {
+			targetID := ""
+			if len(analysis.RelatedAssets) > 0 {
+				targetID = analysis.RelatedAssets[0].ID
+			}
+			if targetID == "" || !s.hasRecentPassedCanary(policy.RunbookID, targetID, 24*time.Hour) {
+				s.failExecution(ctx, execution, "真实执行前缺少 24 小时内通过的灰度通道验证")
+				return
+			}
+		}
 		if policy.RequireRollback {
 			rollback, ok := s.policyFor(policy.RollbackRunbookID)
 			if !ok || !rollback.Enabled || rollback.Mode != "change" || rollback.ExecutionMode != "live" {
@@ -162,6 +172,7 @@ func (s *Service) OnJobTerminal(job jobs.Job) {
 			break
 		}
 	}
+	s.completeCanaryFromJob(job)
 	s.verifyExecution(&execution, job)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

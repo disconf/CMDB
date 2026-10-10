@@ -15,10 +15,11 @@ type memoryRepository struct {
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
+	canaries      []CanaryValidation
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}}
+	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
 }
 
 func (r *memoryRepository) LoadAnalyses(context.Context) ([]Analysis, error) {
@@ -88,6 +89,25 @@ func (r *memoryRepository) SaveChangeControl(_ context.Context, item ChangeContr
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.changeControl = item
+	return nil
+}
+
+func (r *memoryRepository) LoadCanaryValidations(context.Context) ([]CanaryValidation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]CanaryValidation(nil), r.canaries...), nil
+}
+
+func (r *memoryRepository) SaveCanaryValidation(_ context.Context, item CanaryValidation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.canaries {
+		if r.canaries[i].ID == item.ID {
+			r.canaries[i] = item
+			return nil
+		}
+	}
+	r.canaries = append([]CanaryValidation{item}, r.canaries...)
 	return nil
 }
 func newID(prefix string) string {
