@@ -25,12 +25,14 @@ type vmwareCluster struct {
 type vmwareHost struct {
 	ID              string `json:"host"`
 	Name            string `json:"name"`
+	Cluster         string `json:"cluster"`
 	ConnectionState string `json:"connection_state"`
 	PowerState      string `json:"power_state"`
 }
 type vmwareVM struct {
 	ID            string `json:"vm"`
 	Name          string `json:"name"`
+	Host          string `json:"host"`
 	PowerState    string `json:"power_state"`
 	CPUCount      int    `json:"cpu_count"`
 	MemorySizeMiB int    `json:"memory_size_MiB"`
@@ -277,19 +279,30 @@ func syncVMwareInventory(ctx context.Context, cmdbService *cmdb.Service, client 
 		return vmwareSyncResult{}, err
 	}
 	result := vmwareSyncResult{}
+	clusterNames := map[string]string{}
+	hostNames := map[string]string{}
 	for _, cluster := range inventory.Clusters {
 		input := cmdb.CreateAssetInput{ID: "vmware-cluster-" + safeAssetID(cluster.ID), Name: cluster.Name, Type: "virtualization-cluster", Status: "online", Environment: "虚拟化平台", ProjectGroup: "虚拟化平台组", Owner: "VMware", Location: "vCenter / " + cluster.Name, Source: "vCenter", Tags: []string{"VMware", "vCenter", "虚拟化"}, Attributes: []cmdb.Attribute{{Name: "vmware_cluster_id", Label: "vCenter 集群 ID", Value: cluster.ID}, {Name: "drs_enabled", Label: "DRS", Value: fmt.Sprintf("%t", cluster.DRSEnabled)}, {Name: "ha_enabled", Label: "HA", Value: fmt.Sprintf("%t", cluster.HAEnabled)}}}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}
 		result.Clusters++
+		clusterNames[cluster.ID] = cluster.Name
 	}
 	for _, host := range inventory.Hosts {
 		input := cmdb.CreateAssetInput{ID: "vmware-host-" + safeAssetID(host.ID), Name: host.Name, Type: "physical-server", Status: vmwareHostStatus(host.ConnectionState), Environment: "虚拟化平台", ProjectGroup: "虚拟化平台组", Owner: "VMware", Location: "vCenter / ESXi", Source: "vCenter", Tags: []string{"VMware", "ESXi", "虚拟化宿主"}, Attributes: []cmdb.Attribute{{Name: "vmware_host_id", Label: "vCenter 主机 ID", Value: host.ID}, {Name: "connection_state", Label: "连接状态", Value: host.ConnectionState}, {Name: "power_state", Label: "电源状态", Value: host.PowerState}, {Name: "hypervisor_vendor", Label: "虚拟化厂商", Value: "VMware"}}}
+		if host.Cluster != "" {
+			targetName := clusterNames[host.Cluster]
+			if targetName == "" {
+				targetName = host.Cluster
+			}
+			input.Relations = []cmdb.Relation{{Type: "belongs-to", TargetID: "vmware-cluster-" + safeAssetID(host.Cluster), TargetName: targetName}}
+		}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}
 		result.Hosts++
+		hostNames[host.ID] = host.Name
 	}
 	for _, vm := range inventory.VMs {
 		status := "offline"
@@ -297,6 +310,13 @@ func syncVMwareInventory(ctx context.Context, cmdbService *cmdb.Service, client 
 			status = "online"
 		}
 		input := cmdb.CreateAssetInput{ID: "vmware-vm-" + safeAssetID(vm.ID), Name: vm.Name, Type: "virtual-machine", Status: status, Environment: "虚拟化平台", ProjectGroup: "虚拟化平台组", Owner: "VMware", Location: "vCenter / VM", Source: "vCenter", Tags: []string{"VMware", "vCenter", "虚拟机"}, Attributes: []cmdb.Attribute{{Name: "vmware_vm_id", Label: "vCenter 虚拟机 ID", Value: vm.ID}, {Name: "power_state", Label: "电源状态", Value: vm.PowerState}, {Name: "cpu_count", Label: "vCPU", Value: fmt.Sprintf("%d", vm.CPUCount)}, {Name: "memory_mib", Label: "内存(MiB)", Value: fmt.Sprintf("%d", vm.MemorySizeMiB)}, {Name: "virtualization_type", Label: "虚拟化类型", Value: "VMware"}}}
+		if vm.Host != "" {
+			targetName := hostNames[vm.Host]
+			if targetName == "" {
+				targetName = vm.Host
+			}
+			input.Relations = []cmdb.Relation{{Type: "runs-on", TargetID: "vmware-host-" + safeAssetID(vm.Host), TargetName: targetName}}
+		}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}

@@ -301,6 +301,10 @@ func syncAWSInventory(ctx context.Context, cmdbService *cmdb.Service, client *aw
 		return cloudSyncResult{}, err
 	}
 	result := cloudSyncResult{Provider: "aws", RegionID: client.region}
+	regionRelation, err := ensureCloudRegionRelation(ctx, cmdbService, "aws", client.region, operator)
+	if err != nil {
+		return result, err
+	}
 	for _, vm := range instances {
 		ip := vm.PublicIP
 		if ip == "" {
@@ -313,6 +317,7 @@ func syncAWSInventory(ctx context.Context, cmdbService *cmdb.Service, client *aw
 			status = "warning"
 		}
 		input := cmdb.CreateAssetInput{ID: "aws-ec2-" + safeAssetID(vm.InstanceID), Name: vm.Name, Type: "cloud-host", Status: status, IP: ip, Environment: "云平台", ProjectGroup: "云平台组", Owner: "AWS", Location: "AWS / " + client.region + " / " + vm.ZoneID, Source: "AWS", Tags: []string{"AWS", "EC2", "云主机"}, Attributes: []cmdb.Attribute{{Name: "cloud_provider", Label: "云厂商", Value: "AWS"}, {Name: "cloud_region", Label: "地域", Value: client.region}, {Name: "cloud_instance_id", Label: "实例 ID", Value: vm.InstanceID}, {Name: "cloud_instance_type", Label: "实例规格", Value: vm.InstanceType}, {Name: "cloud_os", Label: "操作系统", Value: vm.OSName}, {Name: "power_state", Label: "电源状态", Value: vm.Status}}}
+		input.Relations = []cmdb.Relation{regionRelation}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}

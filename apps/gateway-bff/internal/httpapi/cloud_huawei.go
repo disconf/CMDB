@@ -341,12 +341,17 @@ func syncHuaweiInventory(ctx context.Context, cmdbService *cmdb.Service, client 
 		return cloudSyncResult{}, err
 	}
 	result := cloudSyncResult{Provider: "huawei", RegionID: client.region}
+	regionRelation, err := ensureCloudRegionRelation(ctx, cmdbService, "huawei", client.region, operator)
+	if err != nil {
+		return result, err
+	}
 	for _, vm := range instances {
 		ip := vm.PublicIP
 		if ip == "" {
 			ip = vm.PrivateIP
 		}
 		input := cmdb.CreateAssetInput{ID: "huawei-ecs-" + safeAssetID(vm.InstanceID), Name: vm.Name, Type: "cloud-host", Status: huaweiAssetStatus(vm.Status), IP: ip, Environment: "云平台", ProjectGroup: "云平台组", Owner: "HuaweiCloud", Location: "华为云 / " + client.region + " / " + vm.ZoneID, Source: "HuaweiCloud", Tags: []string{"华为云", "ECS", "云主机"}, Attributes: []cmdb.Attribute{{Name: "cloud_provider", Label: "云厂商", Value: "HuaweiCloud"}, {Name: "cloud_region", Label: "地域", Value: client.region}, {Name: "cloud_project_id", Label: "项目 ID", Value: client.projectID}, {Name: "cloud_instance_id", Label: "实例 ID", Value: vm.InstanceID}, {Name: "cloud_instance_type", Label: "实例规格", Value: vm.InstanceType}, {Name: "cloud_os", Label: "操作系统", Value: vm.OSName}, {Name: "power_state", Label: "电源状态", Value: vm.Status}}}
+		input.Relations = []cmdb.Relation{regionRelation}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}

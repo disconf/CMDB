@@ -278,12 +278,17 @@ func syncTencentInventory(ctx context.Context, cmdbService *cmdb.Service, client
 		return cloudSyncResult{}, err
 	}
 	result := cloudSyncResult{Provider: "tencent", RegionID: client.region}
+	regionRelation, err := ensureCloudRegionRelation(ctx, cmdbService, "tencent", client.region, operator)
+	if err != nil {
+		return result, err
+	}
 	for _, vm := range instances {
 		ip := vm.PublicIP
 		if ip == "" {
 			ip = vm.PrivateIP
 		}
 		input := cmdb.CreateAssetInput{ID: "tencent-cvm-" + safeAssetID(vm.InstanceID), Name: vm.Name, Type: "cloud-host", Status: strings.ToLower(vm.Status), IP: ip, Environment: "云平台", ProjectGroup: "云平台组", Owner: "TencentCloud", Location: "腾讯云 / " + client.region + " / " + vm.ZoneID, Source: "TencentCloud", Tags: []string{"腾讯云", "CVM", "云主机"}, Attributes: []cmdb.Attribute{{Name: "cloud_provider", Label: "云厂商", Value: "TencentCloud"}, {Name: "cloud_region", Label: "地域", Value: client.region}, {Name: "cloud_instance_id", Label: "实例 ID", Value: vm.InstanceID}, {Name: "cloud_instance_type", Label: "实例规格", Value: vm.InstanceType}, {Name: "cloud_os", Label: "操作系统", Value: vm.OSName}, {Name: "cpu_count", Label: "vCPU", Value: strconv.Itoa(vm.CPU)}, {Name: "memory_mib", Label: "内存(MiB)", Value: strconv.Itoa(vm.MemoryMiB)}, {Name: "power_state", Label: "电源状态", Value: vm.Status}}}
+		input.Relations = []cmdb.Relation{regionRelation}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}

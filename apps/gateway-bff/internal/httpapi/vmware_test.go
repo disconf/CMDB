@@ -23,9 +23,9 @@ func TestVMwareClientInventory(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"cluster": "cluster-1", "name": "Cluster A", "drs_enabled": true, "ha_enabled": true}})
 		case "/api/vcenter/host":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{"host": "host-1", "name": "esxi-1", "connection_state": "CONNECTED", "power_state": "POWERED_ON"}})
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"host": "host-1", "name": "esxi-1", "cluster": "cluster-1", "connection_state": "CONNECTED", "power_state": "POWERED_ON"}})
 		case "/api/vcenter/vm":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{"vm": "vm-1", "name": "app-1", "power_state": "POWERED_ON", "cpu_count": 4, "memory_size_MiB": 8192}})
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"vm": "vm-1", "name": "app-1", "host": "host-1", "power_state": "POWERED_ON", "cpu_count": 4, "memory_size_MiB": 8192}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -39,7 +39,7 @@ func TestVMwareClientInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inventory.Clusters) != 1 || len(inventory.Hosts) != 1 || len(inventory.VMs) != 1 || inventory.VMs[0].CPUCount != 4 {
+	if len(inventory.Clusters) != 1 || len(inventory.Hosts) != 1 || len(inventory.VMs) != 1 || inventory.VMs[0].CPUCount != 4 || inventory.Hosts[0].Cluster != "cluster-1" || inventory.VMs[0].Host != "host-1" {
 		t.Fatalf("unexpected inventory: %#v", inventory)
 	}
 }

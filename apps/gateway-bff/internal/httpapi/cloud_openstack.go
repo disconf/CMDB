@@ -421,12 +421,17 @@ func syncOpenStackInventory(ctx context.Context, cmdbService *cmdb.Service, clie
 		return cloudSyncResult{}, err
 	}
 	result := cloudSyncResult{Provider: "openstack", RegionID: client.region}
+	regionRelation, err := ensureCloudRegionRelation(ctx, cmdbService, "openstack", client.region, operator)
+	if err != nil {
+		return result, err
+	}
 	for _, vm := range instances {
 		ip := vm.PublicIP
 		if ip == "" {
 			ip = vm.PrivateIP
 		}
 		input := cmdb.CreateAssetInput{ID: "openstack-server-" + safeAssetID(vm.InstanceID), Name: vm.Name, Type: "cloud-host", Status: openStackAssetStatus(vm.Status), IP: ip, Environment: "云平台", ProjectGroup: "云平台组", Owner: "OpenStack", Location: "OpenStack / " + client.region + " / " + vm.ZoneID, Source: "OpenStack", Tags: []string{"OpenStack", "Nova", "云主机"}, Attributes: []cmdb.Attribute{{Name: "cloud_provider", Label: "云厂商", Value: "OpenStack"}, {Name: "cloud_region", Label: "地域", Value: client.region}, {Name: "cloud_project", Label: "项目", Value: client.projectName}, {Name: "cloud_instance_id", Label: "实例 ID", Value: vm.InstanceID}, {Name: "cloud_instance_type", Label: "实例规格", Value: vm.InstanceType}, {Name: "cloud_os", Label: "操作系统", Value: vm.OSName}, {Name: "power_state", Label: "电源状态", Value: vm.Status}}}
+		input.Relations = []cmdb.Relation{regionRelation}
 		if _, err = cmdbService.UpsertExternalAsset(input, operator); err != nil {
 			return result, err
 		}
