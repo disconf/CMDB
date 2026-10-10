@@ -3636,7 +3636,128 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
+		if r.URL.Query().Get("all") == "1" {
+			if !authorize(w, r, authService, "aiops:execute") {
+				return
+			}
+			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeAll(r.URL.Query().Get("q")))
+			return
+		}
 		writeJSON(w, http.StatusOK, aiopsService.SearchKnowledge(r.URL.Query().Get("q")))
+	})
+	mux.HandleFunc("GET /api/v1/aiops/knowledge/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		item, err := aiopsService.GetKnowledge(r.PathValue("id"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var input aiops.KnowledgeInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.CreateKnowledge(input, user.Username)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "标题、摘要和正文不能为空"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.knowledge.create", item.ID, item.Title)
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/aiops/knowledge/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var input aiops.KnowledgeInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.UpdateKnowledge(r.PathValue("id"), input, user.Username)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "标题、摘要和正文不能为空"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_UPDATE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.knowledge.update", item.ID, item.Title)
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/aiops/knowledge/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		if err := aiopsService.DeleteKnowledge(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_DELETE_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "aiops.knowledge.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/{id}/helpful", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		item, err := aiopsService.MarkKnowledgeHelpful(r.PathValue("id"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_HELPFUL_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/synthesize", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var input struct {
+			AnalysisID string `json:"analysisId"`
+		}
+		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.AnalysisID) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.CreateKnowledgeFromAnalysis(input.AnalysisID, user.Username)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.knowledge.from_analysis", item.ID, item.SourceID)
+		writeJSON(w, http.StatusCreated, item)
 	})
 	mux.HandleFunc("GET /api/v1/aiops/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {

@@ -43,6 +43,30 @@ ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS confidence_reason text NOT N
 ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS applied_feedback_count integer NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_aiops_analyses_alert_id ON aiops_analyses(alert_id);
 CREATE INDEX IF NOT EXISTS idx_aiops_analyses_created_at ON aiops_analyses(created_at DESC);
+CREATE TABLE IF NOT EXISTS aiops_knowledge (
+  id text PRIMARY KEY,
+  title text NOT NULL,
+  category text NOT NULL DEFAULT '',
+  summary text NOT NULL DEFAULT '',
+  content text NOT NULL DEFAULT '',
+  tags jsonb NOT NULL DEFAULT '[]',
+  helpful integer NOT NULL DEFAULT 0,
+  views integer NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'published',
+  source text NOT NULL DEFAULT 'manual',
+  source_id text NOT NULL DEFAULT '',
+  author text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS content text NOT NULL DEFAULT '';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS views integer NOT NULL DEFAULT 0;
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'published';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'manual';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS source_id text NOT NULL DEFAULT '';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS author text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_updated_at ON aiops_knowledge(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_category ON aiops_knowledge(category);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   id text PRIMARY KEY,
   analysis_id text NOT NULL,
@@ -229,6 +253,48 @@ FROM aiops_analyses ORDER BY created_at DESC`)
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveKnowledge(ctx context.Context, item Knowledge) error {
+	tags, _ := json.Marshal(item.Tags)
+	createdAt, err := parseAITime(item.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	updatedAt, err := parseAITime(item.UpdatedAt)
+	if err != nil {
+		updatedAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge(id,title,category,summary,content,tags,helpful,views,status,source,source_id,author,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,summary=excluded.summary,content=excluded.content,tags=excluded.tags,helpful=excluded.helpful,views=excluded.views,status=excluded.status,source=excluded.source,source_id=excluded.source_id,author=excluded.author,updated_at=excluded.updated_at`,
+		item.ID, item.Title, item.Category, item.Summary, item.Content, tags, item.Helpful, item.Views, item.Status, item.Source, item.SourceID, item.Author, createdAt, updatedAt)
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,title,category,summary,content,tags,helpful,views,status,source,source_id,author,created_at,updated_at FROM aiops_knowledge ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Knowledge{}
+	for rows.Next() {
+		var item Knowledge
+		var tags []byte
+		var createdAt, updatedAt time.Time
+		if err = rows.Scan(&item.ID, &item.Title, &item.Category, &item.Summary, &item.Content, &tags, &item.Helpful, &item.Views, &item.Status, &item.Source, &item.SourceID, &item.Author, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(tags, &item.Tags)
+		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		item.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) DeleteKnowledge(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM aiops_knowledge WHERE id=$1`, id)
+	return err
 }
 
 func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) error {

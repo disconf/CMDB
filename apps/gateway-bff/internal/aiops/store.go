@@ -12,6 +12,7 @@ import (
 type memoryRepository struct {
 	mu            sync.RWMutex
 	analyses      []Analysis
+	knowledge     []Knowledge
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
@@ -19,7 +20,38 @@ type memoryRepository struct {
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+}
+
+func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]Knowledge(nil), r.knowledge...), nil
+}
+
+func (r *memoryRepository) SaveKnowledge(_ context.Context, item Knowledge) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.knowledge {
+		if r.knowledge[i].ID == item.ID {
+			r.knowledge[i] = item
+			return nil
+		}
+	}
+	r.knowledge = append([]Knowledge{item}, r.knowledge...)
+	return nil
+}
+
+func (r *memoryRepository) DeleteKnowledge(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.knowledge {
+		if r.knowledge[i].ID == id {
+			r.knowledge = append(r.knowledge[:i], r.knowledge[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func (r *memoryRepository) LoadAnalyses(context.Context) ([]Analysis, error) {

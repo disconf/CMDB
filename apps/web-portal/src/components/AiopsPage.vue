@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Bot, BrainCircuit, CheckCircle2, Clock3, FileSearch, GitBranch, Lightbulb, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Sparkles, TicketCheck } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { confidenceTone, riskLabel } from '@/features/aiops/aiopsModel'
+import KnowledgePanel from './KnowledgePanel.vue'
 
 type Alert = { id:string; title:string; severity:string; status:string; target:string; message:string; startedAt:string; duration:string; owner:string }
 type Evidence = { type:string; source?:string; title:string; detail:string; weight:number }
@@ -499,9 +500,6 @@ onMounted(load)
         <footer><span><ShieldCheck/>变更类 Runbook 默认关闭；真实执行必须满足全局开关、预检、每日额度、冷却和回滚就绪。</span><button :class="{danger:selectedRunbook.enabled}" @click="toggleRunbook(selectedRunbook)">{{ selectedRunbook.enabled ? '禁用 Runbook' : '启用 Runbook' }}</button></footer>
       </main>
     </div>
-    <div v-else class="knowledge-page">
-      <form @submit.prevent="search"><Search/><input v-model="query" placeholder="搜索故障现象、技术栈或关键词"><button>检索知识</button></form>
-      <div class="knowledge-grid"><article v-for="item in knowledge" :key="item.id"><b>{{ item.category }}</b><h3>{{ item.title }}</h3><p>{{ item.summary }}</p><div><span v-for="tag in item.tags" :key="tag">{{ tag }}</span></div><footer>{{ item.helpful }} 次解决问题</footer></article></div>
-    </div>
+    <KnowledgePanel v-else />
   </section>
 </template>

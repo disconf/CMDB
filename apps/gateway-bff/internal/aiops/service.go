@@ -53,6 +53,14 @@ func NewService() *Service {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	if knowledge, err := s.repo.LoadKnowledge(ctx); err == nil && len(knowledge) > 0 {
+		s.knowledge = knowledge
+	} else {
+		s.knowledge = defaultKnowledge()
+		for _, item := range s.knowledge {
+			_ = s.repo.SaveKnowledge(ctx, item)
+		}
+	}
 	if analyses, err := s.repo.LoadAnalyses(ctx); err == nil {
 		s.analyses = analyses
 	}
@@ -105,12 +113,13 @@ func (s *Service) ready() error {
 }
 
 func (s *Service) Summary() Summary {
-	summary := Summary{KnowledgeCount: len(s.knowledge)}
+	summary := Summary{}
 	if s.alerts != nil {
 		summary.OpenAnomalies = s.alerts.ActiveCount()
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	summary.KnowledgeCount = len(s.knowledge)
 	today := time.Now().Format("2006-01-02")
 	totalConfidence := 0
 	for _, item := range s.analyses {
@@ -355,19 +364,228 @@ func (s *Service) SetFeedback(ctx context.Context, analysisID string, in Feedbac
 	s.mu.Unlock()
 	return item, nil
 }
-func (s *Service) Knowledge() []Knowledge { return append([]Knowledge(nil), s.knowledge...) }
+func (s *Service) Knowledge() []Knowledge {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := append([]Knowledge(nil), s.knowledge...)
+	sort.SliceStable(result, func(i, j int) bool { return result[i].UpdatedAt > result[j].UpdatedAt })
+	return result
+}
 
 func (s *Service) SearchKnowledge(q string) []Knowledge {
+	return s.searchKnowledge(q, false)
+}
+
+func (s *Service) SearchKnowledgeAll(q string) []Knowledge {
+	return s.searchKnowledge(q, true)
+}
+
+func (s *Service) searchKnowledge(q string, includeDrafts bool) []Knowledge {
+	_ = s.reloadKnowledge()
 	q = strings.ToLower(strings.TrimSpace(q))
-	if q == "" {
-		return s.Knowledge()
-	}
-	result := []Knowledge{}
+	s.mu.RLock()
+	result := make([]Knowledge, 0, len(s.knowledge))
 	for _, item := range s.knowledge {
-		haystack := strings.ToLower(item.Title + " " + item.Summary + " " + strings.Join(item.Tags, " "))
-		if strings.Contains(haystack, q) {
-			result = append(result, item)
+		if !includeDrafts && item.Status != "published" {
+			continue
+		}
+		if q != "" {
+			haystack := strings.ToLower(item.Title + " " + item.Category + " " + item.Summary + " " + item.Content + " " + strings.Join(item.Tags, " "))
+			if !strings.Contains(haystack, q) {
+				continue
+			}
+		}
+		result = append(result, item)
+	}
+	s.mu.RUnlock()
+	sort.SliceStable(result, func(i, j int) bool { return result[i].UpdatedAt > result[j].UpdatedAt })
+	return result
+}
+
+func (s *Service) GetKnowledge(id string) (Knowledge, error) {
+	id = strings.TrimSpace(id)
+	_ = s.reloadKnowledge()
+	s.mu.Lock()
+	for i := range s.knowledge {
+		if s.knowledge[i].ID == id {
+			s.knowledge[i].Views++
+			item := s.knowledge[i]
+			s.mu.Unlock()
+			_ = s.repo.SaveKnowledge(context.Background(), item)
+			return item, nil
 		}
 	}
-	return result
+	s.mu.Unlock()
+	return Knowledge{}, ErrNotFound
+}
+
+func (s *Service) CreateKnowledge(input KnowledgeInput, author string) (Knowledge, error) {
+	item, err := normalizeKnowledgeInput(Knowledge{}, input)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	item.ID = newID("kb")
+	item.Source = "manual"
+	item.Author = strings.TrimSpace(author)
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	if err = s.repo.SaveKnowledge(context.Background(), item); err != nil {
+		return Knowledge{}, err
+	}
+	s.mu.Lock()
+	s.knowledge = append([]Knowledge{item}, s.knowledge...)
+	s.mu.Unlock()
+	return item, nil
+}
+
+func (s *Service) UpdateKnowledge(id string, input KnowledgeInput, author string) (Knowledge, error) {
+	_ = s.reloadKnowledge()
+	s.mu.Lock()
+	index := -1
+	for i := range s.knowledge {
+		if s.knowledge[i].ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		s.mu.Unlock()
+		return Knowledge{}, ErrNotFound
+	}
+	existing := s.knowledge[index]
+	updated, err := normalizeKnowledgeInput(existing, input)
+	if err != nil {
+		s.mu.Unlock()
+		return Knowledge{}, err
+	}
+	updated.ID = existing.ID
+	updated.Source = existing.Source
+	updated.SourceID = existing.SourceID
+	updated.Author = strings.TrimSpace(author)
+	updated.CreatedAt = existing.CreatedAt
+	updated.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+	s.knowledge[index] = updated
+	s.mu.Unlock()
+	if err = s.repo.SaveKnowledge(context.Background(), updated); err != nil {
+		return Knowledge{}, err
+	}
+	return updated, nil
+}
+
+func (s *Service) DeleteKnowledge(id string) error {
+	if err := s.repo.DeleteKnowledge(context.Background(), id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.knowledge {
+		if s.knowledge[i].ID == id {
+			s.knowledge = append(s.knowledge[:i], s.knowledge[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *Service) reloadKnowledge() error {
+	items, err := s.repo.LoadKnowledge(context.Background())
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.knowledge = items
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) MarkKnowledgeHelpful(id string) (Knowledge, error) {
+	_ = s.reloadKnowledge()
+	s.mu.Lock()
+	for i := range s.knowledge {
+		if s.knowledge[i].ID == id {
+			s.knowledge[i].Helpful++
+			s.knowledge[i].UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+			item := s.knowledge[i]
+			s.mu.Unlock()
+			if err := s.repo.SaveKnowledge(context.Background(), item); err != nil {
+				return Knowledge{}, err
+			}
+			return item, nil
+		}
+	}
+	s.mu.Unlock()
+	return Knowledge{}, ErrNotFound
+}
+
+func (s *Service) CreateKnowledgeFromAnalysis(analysisID, author string) (Knowledge, error) {
+	analysis, err := s.Get(analysisID)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	steps := []string{}
+	for _, recommendation := range analysis.Recommendations {
+		steps = append(steps, recommendation.Steps...)
+	}
+	content := "## 故障摘要\n" + analysis.Summary + "\n\n## 根因判断\n" + analysis.RootCause + "\n\n## 处置步骤\n- " + strings.Join(steps, "\n- ")
+	item, err := s.CreateKnowledge(KnowledgeInput{Title: analysis.Title, Category: knowledgeCategory(analysis.RootCause), Summary: analysis.Summary, Content: content, Tags: []string{analysis.Severity, analysis.RootCause, analysis.Target}, Status: "draft"}, author)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	item.Source = "analysis"
+	item.SourceID = analysis.ID
+	s.mu.Lock()
+	for i := range s.knowledge {
+		if s.knowledge[i].ID == item.ID {
+			s.knowledge[i].Source = item.Source
+			s.knowledge[i].SourceID = item.SourceID
+			item = s.knowledge[i]
+			break
+		}
+	}
+	s.mu.Unlock()
+	if err = s.repo.SaveKnowledge(context.Background(), item); err != nil {
+		return Knowledge{}, err
+	}
+	return item, nil
+}
+
+func normalizeKnowledgeInput(existing Knowledge, input KnowledgeInput) (Knowledge, error) {
+	item := existing
+	item.Title = strings.TrimSpace(input.Title)
+	item.Category = strings.TrimSpace(input.Category)
+	item.Summary = strings.TrimSpace(input.Summary)
+	item.Content = strings.TrimSpace(input.Content)
+	item.Tags = make([]string, 0, len(input.Tags))
+	for _, tag := range input.Tags {
+		if value := strings.TrimSpace(tag); value != "" && !containsString(item.Tags, value) {
+			item.Tags = append(item.Tags, value)
+		}
+	}
+	item.Status = strings.ToLower(strings.TrimSpace(input.Status))
+	if item.Status == "" {
+		item.Status = "published"
+	}
+	if item.Status != "published" && item.Status != "draft" {
+		return Knowledge{}, ErrValidation
+	}
+	if item.Title == "" || item.Summary == "" || item.Content == "" {
+		return Knowledge{}, ErrValidation
+	}
+	return item, nil
+}
+
+func knowledgeCategory(rootCause string) string {
+	switch {
+	case strings.Contains(rootCause, "数据库"):
+		return "数据库"
+	case strings.Contains(rootCause, "Kubernetes") || strings.Contains(rootCause, "Pod"):
+		return "Kubernetes"
+	case strings.Contains(rootCause, "网络"):
+		return "网络"
+	case strings.Contains(rootCause, "磁盘") || strings.Contains(rootCause, "内存"):
+		return "主机"
+	default:
+		return "故障处理"
+	}
 }

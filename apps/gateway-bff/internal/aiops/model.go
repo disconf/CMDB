@@ -99,12 +99,29 @@ type Analysis struct {
 }
 
 type Knowledge struct {
-	ID       string   `json:"id"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Category  string   `json:"category"`
+	Summary   string   `json:"summary"`
+	Content   string   `json:"content"`
+	Tags      []string `json:"tags"`
+	Helpful   int      `json:"helpful"`
+	Views     int      `json:"views"`
+	Status    string   `json:"status"`
+	Source    string   `json:"source"`
+	SourceID  string   `json:"sourceId,omitempty"`
+	Author    string   `json:"author"`
+	CreatedAt string   `json:"createdAt"`
+	UpdatedAt string   `json:"updatedAt"`
+}
+
+type KnowledgeInput struct {
 	Title    string   `json:"title"`
 	Category string   `json:"category"`
 	Summary  string   `json:"summary"`
+	Content  string   `json:"content"`
 	Tags     []string `json:"tags"`
-	Helpful  int      `json:"helpful"`
+	Status   string   `json:"status"`
 }
 
 type ChangePlanStep struct {
@@ -180,6 +197,9 @@ type AnalyzeInput struct {
 type repository interface {
 	LoadAnalyses(context.Context) ([]Analysis, error)
 	SaveAnalysis(context.Context, Analysis) error
+	LoadKnowledge(context.Context) ([]Knowledge, error)
+	SaveKnowledge(context.Context, Knowledge) error
+	DeleteKnowledge(context.Context, string) error
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
 	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)
