@@ -103,3 +103,37 @@ Gateway 处理大量 CMDB 资产、告警和 Agent 心跳时需要更高的 Go �
 - 容器内存限制：4Gi。
 - `GOMEMLIMIT=3500MiB`。
 - `GOGC=75`。
+## 只读证据补充
+
+分析生成后可以调用：
+
+```text
+POST /api/v1/aiops/analyses/{id}/evidence
+```
+
+默认证据策略：
+
+- 资产名称/DNS 可用时执行 DNS 解析。
+- 资产 ID 可用且 Prometheus 已配置时查询 `up{cmdb_asset_id="..."}`。
+- Pod/Kubernetes 告警从 `namespace/pod` 目标补充 Kubernetes 诊断。
+- 用户显式传入工具时，只允许 `dns`、`tcp`、`http`、`tls`、`prometheus`、`k8s-pod`。
+- 工具执行结果写入排查工具箱历史，并转换为 AIOps 证据链条目。
+
+## 报告导出
+
+```text
+GET /api/v1/aiops/analyses/{id}/report
+GET /api/v1/aiops/analyses/{id}/report?format=markdown
+```
+
+报告包含：
+
+- 分析编号、告警、根因、置信度和严重级别
+- 分析摘要和人工反馈
+- 证据链
+- 关联资产和拓扑影响
+- 故障时间线
+- Runbook 建议
+- 受控执行记录
+
+Markdown 模式可直接下载，作为故障复盘和工单附件的基础格式。

@@ -159,3 +159,14 @@ type RunbookPolicy struct {
 	Risk             string `json:"risk"`
 	ApprovalRequired bool   `json:"approvalRequired"`
 }
+
+type EvidenceInput struct {
+	Tools []string `json:"tools,omitempty"`
+}
+
+type Report struct {
+	Analysis    Analysis    `json:"analysis"`
+	Executions  []Execution `json:"executions"`
+	GeneratedAt string      `json:"generatedAt"`
+	Markdown    string      `json:"markdown"`
+}

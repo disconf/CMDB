@@ -1,11 +1,14 @@
 package aiops
 
 import (
+	"context"
+
 	"cmdb/gateway-bff/internal/cmdb"
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/tickets"
+	"cmdb/gateway-bff/internal/toolbox"
 	"cmdb/gateway-bff/internal/topology"
 )
 
@@ -35,6 +38,11 @@ type TicketProvider interface {
 type JobProvider interface {
 	Create(jobs.CreateInput) (jobs.Job, error)
 	Run(string) (jobs.Job, error)
+}
+
+type ToolProvider interface {
+	Tools() []toolbox.Tool
+	Run(context.Context, toolbox.RunInput) (toolbox.Result, error)
 }
 
 type ReleaseProvider interface {

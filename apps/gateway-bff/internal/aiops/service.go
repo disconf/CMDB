@@ -19,6 +19,7 @@ var (
 	ErrNotFound   = errors.New("analysis not found")
 	ErrValidation = errors.New("validation")
 	ErrNotReady   = errors.New("analysis dependencies not ready")
+	ErrNoEvidence = errors.New("no new evidence")
 )
 
 type Service struct {
@@ -32,6 +33,7 @@ type Service struct {
 	impact     ImpactProvider
 	tickets    TicketProvider
 	releases   ReleaseProvider
+	tools      ToolProvider
 	jobs       JobProvider
 }
 
@@ -61,6 +63,7 @@ func (s *Service) SetImpactProvider(provider ImpactProvider)   { s.impact = prov
 func (s *Service) SetTicketProvider(provider TicketProvider)   { s.tickets = provider }
 func (s *Service) SetReleaseProvider(provider ReleaseProvider) { s.releases = provider }
 func (s *Service) SetJobProvider(provider JobProvider)         { s.jobs = provider }
+func (s *Service) SetToolProvider(provider ToolProvider)       { s.tools = provider }
 
 func (s *Service) ready() error {
 	if s.alerts == nil || s.assets == nil {

@@ -80,6 +80,7 @@ func NewServer() *Server {
 	aiopsService.SetTicketProvider(ticketsService)
 	aiopsService.SetReleaseProvider(releasesService)
 	aiopsService.SetJobProvider(jobsService)
+	aiopsService.SetToolProvider(toolboxService)
 	ticketsService.SetDecisionHandler(func(ticket tickets.Ticket, token, decision string) {
 		aiopsService.HandleTicketDecision(context.Background(), ticket, token, decision)
 	})
@@ -3394,6 +3395,59 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/analyses/{id}/evidence", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		var in aiops.EvidenceInput
+		if decodeJSONLenient(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := aiopsService.CollectEvidence(r.Context(), r.PathValue("id"), in.Tools)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNoEvidence) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "NO_NEW_EVIDENCE", "message": "没有可新增的只读证据"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "AIOPS_EVIDENCE_NOT_READY"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "EVIDENCE_COLLECTION_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/aiops/analyses/{id}/report", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		report, err := aiopsService.Report(r.PathValue("id"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANALYSIS_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REPORT_GENERATION_FAILED"})
+			return
+		}
+		if strings.EqualFold(r.URL.Query().Get("format"), "markdown") {
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			w.Header().Set("Content-Disposition", `attachment; filename="`+report.Analysis.ID+`.md"`)
+			_, _ = w.Write([]byte(report.Markdown))
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {

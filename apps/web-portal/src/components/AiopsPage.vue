@@ -31,6 +31,7 @@ const message = ref('')
 const error = ref('')
 const loading = ref(false)
 const generating = ref(false)
+const enriching = ref(false)
 const selectedAlertID = ref('')
 const feedbackStatus = ref('confirmed')
 const correctedRootCause = ref('')
@@ -118,6 +119,42 @@ async function submitFeedback(status:'confirmed'|'rejected'|'partial') {
     error.value = reason instanceof Error ? reason.message : '分析反馈提交失败'
   }
 }
+async function enrichEvidence() {
+  if (!selected.value) return
+  enriching.value = true
+  message.value = ''
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/analyses/${selected.value.id}/evidence`, { method:'POST', headers:headers.value, body:'{}' })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.message || '证据补充失败')
+    selected.value = payload
+    message.value = '已补充只读诊断证据'
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '证据补充失败'
+  } finally {
+    enriching.value = false
+  }
+}
+
+async function exportReport() {
+  if (!selected.value) return
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/analyses/${selected.value.id}/report?format=markdown`, { headers:headers.value })
+    if (!response.ok) throw new Error('报告导出失败')
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${selected.value.id}.md`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '报告导出失败'
+  }
+}
 function statusLabel(value:string) { return ({ firing:'触发中', acknowledged:'已确认', pending:'待审批', approved:'已通过', completed:'已完成', failed:'失败', success:'成功', running:'运行中' } as Record<string,string>)[value] || value }
 onMounted(load)
 </script>
@@ -159,7 +196,7 @@ onMounted(load)
       <main v-if="selected" class="analysis-detail">
         <header>
           <div><span>ROOT CAUSE ANALYSIS</span><h2>{{ selected.rootCause }}</h2><p>{{ selected.summary }}</p><div class="analysis-meta"><b :data-severity="selected.severity">{{ selected.severity }}</b><span>{{ selected.alertTitle }}</span><span>{{ selected.target }}</span></div></div>
-          <div class="confidence-ring" :style="{'--score':selected.confidence+'%'}"><strong>{{ selected.confidence }}%</strong><span>置信度</span></div>
+          <div class="analysis-actions"><button :disabled="enriching" @click="enrichEvidence"><Sparkles :class="{spin:enriching}"/>补充证据</button><button @click="exportReport"><FileSearch/>导出报告</button></div><div class="confidence-ring" :style="{'--score':selected.confidence+'%'}"><strong>{{ selected.confidence }}%</strong><span>置信度</span></div>
         </header>
 
         <section class="feedback-panel">

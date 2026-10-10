@@ -2,6 +2,7 @@ package aiops
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"cmdb/gateway-bff/internal/cmdb"
@@ -9,6 +10,7 @@ import (
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/tickets"
+	"cmdb/gateway-bff/internal/toolbox"
 	"cmdb/gateway-bff/internal/topology"
 )
 
@@ -76,6 +78,16 @@ func (f *fakeJobs) Run(id string) (jobs.Job, error) {
 	return jobs.Job{ID: id, Name: "主机健康巡检", Status: "running", Progress: 10}, nil
 }
 
+type fakeTools struct{}
+
+func (fakeTools) Tools() []toolbox.Tool {
+	return []toolbox.Tool{{ID: "dns", Name: "DNS 解析", ReadOnly: true, Configured: true}, {ID: "prometheus", Name: "Prometheus 查询", ReadOnly: true, Configured: true}}
+}
+
+func (fakeTools) Run(_ context.Context, in toolbox.RunInput) (toolbox.Result, error) {
+	return toolbox.Result{ID: "diag-1", ToolID: in.ToolID, ToolName: in.ToolID + " 诊断", Status: "success", Summary: "只读证据采集成功", FinishedAt: "2026-10-10 10:00:00"}, nil
+}
+
 type fakeReleases struct{}
 
 func (fakeReleases) List() ([]releases.Release, error) { return []releases.Release{}, nil }
@@ -90,6 +102,7 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	s.SetReleaseProvider(fakeReleases{})
 	jobsProvider := &fakeJobs{}
 	s.SetJobProvider(jobsProvider)
+	s.SetToolProvider(fakeTools{})
 	item, err := s.Analyze(context.Background(), "alert-1")
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +112,14 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	}
 	if len(item.Tickets) != 1 || item.Impact.Total != 1 {
 		t.Fatalf("related context missing: %#v", item)
+	}
+	enriched, err := s.CollectEvidence(context.Background(), item.ID, nil)
+	if err != nil || len(enriched.Evidence) <= len(item.Evidence) {
+		t.Fatalf("collect evidence: %#v %v", enriched, err)
+	}
+	report, err := s.Report(item.ID)
+	if err != nil || !strings.Contains(report.Markdown, "# 故障分析报告") {
+		t.Fatalf("report: %#v %v", report, err)
 	}
 	execution, err := s.Execute(context.Background(), item.ID, item.Recommendations[0].RunbookID, "admin")
 	if err != nil {
