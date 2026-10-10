@@ -107,25 +107,54 @@ type Knowledge struct {
 	Helpful  int      `json:"helpful"`
 }
 
+type ChangePlanStep struct {
+	Order  int    `json:"order"`
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+}
+
+type ChangePlan struct {
+	TargetAssetID       string           `json:"targetAssetId,omitempty"`
+	TargetAssetName     string           `json:"targetAssetName,omitempty"`
+	Environment         string           `json:"environment,omitempty"`
+	RunbookID           string           `json:"runbookId"`
+	RunbookTitle        string           `json:"runbookTitle"`
+	ExecutionMode       string           `json:"executionMode"`
+	ChangeWindow        string           `json:"changeWindow,omitempty"`
+	RollbackRunbookID   string           `json:"rollbackRunbookId,omitempty"`
+	RollbackRunbookName string           `json:"rollbackRunbookName,omitempty"`
+	SourceExecutionID   string           `json:"sourceExecutionId,omitempty"`
+	Preconditions       []string         `json:"preconditions"`
+	Steps               []ChangePlanStep `json:"steps"`
+	Verification        []string         `json:"verification"`
+	RollbackPlan        []string         `json:"rollbackPlan"`
+	PlannedBy           string           `json:"plannedBy"`
+	PlannedAt           string           `json:"plannedAt"`
+}
+
 type Execution struct {
-	ID                string `json:"id"`
-	AnalysisID        string `json:"analysisId"`
-	RunbookID         string `json:"runbookId"`
-	RunbookTitle      string `json:"runbookTitle,omitempty"`
-	Status            string `json:"status"`
-	RequestedBy       string `json:"requestedBy"`
-	RequestedAt       string `json:"requestedAt"`
-	ApprovalRequired  bool   `json:"approvalRequired"`
-	TicketID          string `json:"ticketId,omitempty"`
-	JobID             string `json:"jobId,omitempty"`
-	ApprovedBy        string `json:"approvedBy,omitempty"`
-	ApprovedAt        string `json:"approvedAt,omitempty"`
-	FinishedAt        string `json:"finishedAt,omitempty"`
-	ResultSummary     string `json:"resultSummary,omitempty"`
-	Error             string `json:"error,omitempty"`
-	Simulated         bool   `json:"simulated"`
-	Rollback          bool   `json:"rollback"`
-	ParentExecutionID string `json:"parentExecutionId,omitempty"`
+	ID                  string     `json:"id"`
+	AnalysisID          string     `json:"analysisId"`
+	RunbookID           string     `json:"runbookId"`
+	RunbookTitle        string     `json:"runbookTitle,omitempty"`
+	Status              string     `json:"status"`
+	RequestedBy         string     `json:"requestedBy"`
+	RequestedAt         string     `json:"requestedAt"`
+	ApprovalRequired    bool       `json:"approvalRequired"`
+	TicketID            string     `json:"ticketId,omitempty"`
+	JobID               string     `json:"jobId,omitempty"`
+	ApprovedBy          string     `json:"approvedBy,omitempty"`
+	ApprovedAt          string     `json:"approvedAt,omitempty"`
+	FinishedAt          string     `json:"finishedAt,omitempty"`
+	ResultSummary       string     `json:"resultSummary,omitempty"`
+	Error               string     `json:"error,omitempty"`
+	Simulated           bool       `json:"simulated"`
+	Rollback            bool       `json:"rollback"`
+	ParentExecutionID   string     `json:"parentExecutionId,omitempty"`
+	ChangePlan          ChangePlan `json:"changePlan"`
+	VerificationStatus  string     `json:"verificationStatus,omitempty"`
+	VerificationSummary string     `json:"verificationSummary,omitempty"`
+	VerifiedAt          string     `json:"verifiedAt,omitempty"`
 }
 
 type Summary struct {

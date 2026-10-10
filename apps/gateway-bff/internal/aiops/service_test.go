@@ -133,6 +133,9 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	if execution.Status != "pending-approval" || execution.TicketID != "TKT-AI-1" || len(ticketsProvider.created) != 1 {
 		t.Fatalf("execution: %#v created=%#v", execution, ticketsProvider.created)
 	}
+	if execution.ChangePlan.RunbookID == "" || len(execution.ChangePlan.Steps) == 0 || len(execution.ChangePlan.RollbackPlan) == 0 {
+		t.Fatalf("change plan missing: %#v", execution.ChangePlan)
+	}
 	s.HandleTicketDecision(context.Background(), tickets.Ticket{ID: execution.TicketID, Applicant: "admin", AutomationTemplate: execution.RunbookID}, "test-token", "approve")
 	execution = s.Executions()[0]
 	if execution.Status != "running" || execution.JobID != "job-ai-1" || jobsProvider.runID != "job-ai-1" {
@@ -142,7 +145,7 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.OnJobTerminal(jobs.Job{ID: "job-ai-1", Name: "主机健康巡检", Status: "success", Progress: 100})
-	if updated := s.Executions()[0]; updated.Status != "success" || updated.FinishedAt == "" {
+	if updated := s.Executions()[0]; updated.Status != "success" || updated.FinishedAt == "" || updated.VerificationStatus != "passed" || updated.VerifiedAt == "" {
 		t.Fatalf("terminal callback: %#v", updated)
 	}
 	if summary := s.Summary(); summary.Accuracy != 100 || summary.ConfirmedFeedback != 1 {
@@ -252,7 +255,7 @@ func TestRunbookSimulationCanEnableWithoutLiveGate(t *testing.T) {
 	}
 	s.HandleTicketDecision(context.Background(), tickets.Ticket{ID: "TKT-SIM", Applicant: "admin", AutomationTemplate: policy.RunbookID}, "test-token", "approve")
 	simulated, _ := s.findExecutionByTicket("TKT-SIM")
-	if simulated.Status != "success" || !simulated.Simulated || simulated.JobID != "" {
+	if simulated.Status != "success" || !simulated.Simulated || simulated.JobID != "" || simulated.VerificationStatus != "passed" {
 		t.Fatalf("simulation result: %#v", simulated)
 	}
 }

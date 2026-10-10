@@ -105,6 +105,9 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		execution.ApprovedAt = time.Now().Format("2006-01-02 15:04:05")
 		execution.FinishedAt = execution.ApprovedAt
 		execution.ResultSummary = "变更演练完成，未创建真实任务、未修改目标主机"
+		execution.VerificationStatus = "passed"
+		execution.VerificationSummary = "演练模式已完成，无真实变更需要验证"
+		execution.VerifiedAt = execution.ApprovedAt
 		_ = s.saveExecution(ctx, execution)
 		return
 	}
@@ -130,6 +133,8 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 	execution.ApprovedBy = ticket.ID
 	execution.ApprovedAt = time.Now().Format("2006-01-02 15:04:05")
 	execution.ResultSummary = fmt.Sprintf("已创建白名单任务 %s（%s）", job.Name, job.ID)
+	execution.VerificationStatus = "pending"
+	execution.VerificationSummary = "等待任务完成并读取目标监控状态"
 	_ = s.saveExecution(ctx, execution)
 }
 
@@ -151,9 +156,40 @@ func (s *Service) OnJobTerminal(job jobs.Job) {
 			break
 		}
 	}
+	s.verifyExecution(&execution, job)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = s.saveExecution(ctx, execution)
+}
+
+func (s *Service) verifyExecution(execution *Execution, job jobs.Job) {
+	if execution == nil {
+		return
+	}
+	execution.VerifiedAt = time.Now().Format("2006-01-02 15:04:05")
+	if execution.Simulated {
+		execution.VerificationStatus = "passed"
+		execution.VerificationSummary = "演练模式已完成，无真实变更需要验证"
+		return
+	}
+	if job.Status != "success" {
+		execution.VerificationStatus = "failed"
+		execution.VerificationSummary = "任务未成功完成，未进入变更后验证"
+		return
+	}
+	if s.alerts == nil || strings.TrimSpace(execution.ChangePlan.TargetAssetID) == "" {
+		execution.VerificationStatus = "pending"
+		execution.VerificationSummary = "任务成功，但缺少监控目标，等待人工验证"
+		return
+	}
+	host := s.alerts.Host(execution.ChangePlan.TargetAssetID)
+	if !host.Monitored || !host.Up {
+		execution.VerificationStatus = "failed"
+		execution.VerificationSummary = "任务成功，但目标主机监控状态异常"
+		return
+	}
+	execution.VerificationStatus = "passed"
+	execution.VerificationSummary = "任务成功，目标主机监控状态为 Up"
 }
 
 func (s *Service) RequestRollback(ctx context.Context, executionID, user string) (Execution, error) {
@@ -187,6 +223,7 @@ func (s *Service) RequestRollback(ctx context.Context, executionID, user string)
 	if err != nil {
 		return Execution{}, err
 	}
+	plan := s.buildChangePlan(analysis, Recommendation{RunbookID: rollback.RunbookID, Title: rollback.Title, Steps: []string{"执行已注册的回滚 Runbook"}}, rollback, user, original.ID, true)
 	s.mu.RLock()
 	for _, item := range s.executions {
 		if item.ParentExecutionID == original.ID && (item.Status == "pending-approval" || item.Status == "running" || item.Status == "success") {
@@ -214,7 +251,7 @@ func (s *Service) RequestRollback(ctx context.Context, executionID, user string)
 	if err != nil {
 		return Execution{}, err
 	}
-	item := Execution{ID: newID("aiexec"), AnalysisID: analysis.ID, RunbookID: rollback.RunbookID, RunbookTitle: rollback.Title, Status: "pending-approval", RequestedBy: user, RequestedAt: time.Now().Format("2006-01-02 15:04:05"), ApprovalRequired: true, TicketID: ticket.ID, Rollback: true, ParentExecutionID: original.ID}
+	item := Execution{ID: newID("aiexec"), AnalysisID: analysis.ID, RunbookID: rollback.RunbookID, RunbookTitle: rollback.Title, Status: "pending-approval", RequestedBy: user, RequestedAt: time.Now().Format("2006-01-02 15:04:05"), ApprovalRequired: true, TicketID: ticket.ID, Rollback: true, ParentExecutionID: original.ID, ChangePlan: plan, VerificationStatus: "pending", VerificationSummary: "等待回滚任务完成后验证"}
 	if err = s.repo.SaveExecution(ctx, item); err != nil {
 		return Execution{}, err
 	}

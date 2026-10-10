@@ -15,7 +15,9 @@ type RelatedRelease = { id:string; application:string; version:string; status:st
 type Feedback = { status:string; correctedRootCause?:string; note?:string; reviewer:string; reviewedAt:string }
 type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
-type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string; simulated:boolean; rollback:boolean; parentExecutionId?:string }
+type ChangePlanStep = { order:number; title:string; detail:string }
+type ChangePlan = { targetAssetId?:string; targetAssetName?:string; environment?:string; runbookId:string; runbookTitle:string; executionMode:string; changeWindow?:string; rollbackRunbookId?:string; rollbackRunbookName?:string; sourceExecutionId?:string; preconditions:string[]; steps:ChangePlanStep[]; verification:string[]; rollbackPlan:string[]; plannedBy:string; plannedAt:string }
+type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string; simulated:boolean; rollback:boolean; parentExecutionId?:string; changePlan:ChangePlan; verificationStatus?:string; verificationSummary?:string; verifiedAt?:string }
 type Runbook = { runbookId:string; title:string; templateId:string; mode:string; executionMode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; rollbackRunbookId?:string; liveDailyLimit:number; liveCooldownMinutes:number; requireRollback:boolean; updatedAt?:string; updatedBy?:string }
 type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number; feedbackCount:number; confirmedFeedback:number; rejectedFeedback:number }
 type RootCauseFeedbackStat = { rootCause:string; confirmed:number; rejected:number; partial:number; accuracy:number; adjustment:number }
@@ -219,7 +221,8 @@ async function exportReport() {
     error.value = reason instanceof Error ? reason.message : '报告导出失败'
   }
 }
-function statusLabel(value:string) { return ({ firing:'触发中', acknowledged:'已确认', pending:'待审批', 'pending-approval':'待审批', rejected:'已驳回', approved:'已通过', completed:'已完成', failed:'失败', success:'成功', running:'运行中' } as Record<string,string>)[value] || value }
+function statusLabel(value:string) { return ({ firing:'触发中', acknowledged:'已确认', pending:'待审批', 'pending-approval':'待审批', rejected:'已驳回', approved:'已通过', completed:'已完成', failed:'失败', success:'成功', running:'运行中', passed:'验证通过', 'not-required':'无需验证' } as Record<string,string>)[value] || value }
+function verificationLabel(value?:string) { return ({ passed:'验证通过', failed:'验证失败', pending:'待验证' } as Record<string,string>)[value || ''] || '未验证' }
 function rollbackRunbook(item:Execution) { const policy = runbooks.value.find(value => value.runbookId === item.runbookId); return policy?.rollbackRunbookId || '' }
 async function requestRollback(item:Execution) {
   rollbackPendingID.value = item.id
@@ -324,7 +327,16 @@ onMounted(load)
               <header><div><b>{{ item.runbookTitle || item.runbookId }}</b><span class="execution-kind">{{ item.rollback ? '回滚' : item.simulated ? '演练' : '真实' }}</span></div><span :data-status="item.status">{{ statusLabel(item.status) }}</span></header>
               <dl><div><dt>审批工单</dt><dd>{{ item.ticketId || '—' }}</dd></div><div><dt>任务 ID</dt><dd>{{ item.jobId || '—' }}</dd></div><div><dt>审批人</dt><dd>{{ item.approvedBy || '—' }}</dd></div><div><dt>完成时间</dt><dd>{{ item.finishedAt || '—' }}</dd></div></dl>
               <p>{{ item.resultSummary || '等待工单审批' }}</p><em v-if="item.error">{{ item.error }}</em>
-              <button v-if="item.status==='failed' && rollbackRunbook(item)" class="rollback-request" :disabled="rollbackPendingID===item.id" @click="requestRollback(item)"><RotateCcw/>{{ rollbackPendingID===item.id ? '申请中' : '申请回滚审批' }}</button>
+              <div class="verification-line" :data-status="item.verificationStatus"><span>执行后验证</span><b>{{ verificationLabel(item.verificationStatus) }}</b><small>{{ item.verificationSummary || '等待验证' }}</small></div>
+              <details class="change-plan">
+                <summary>查看变更计划与回滚方案</summary>
+                <div class="plan-meta"><span>目标：{{ item.changePlan?.targetAssetName || item.changePlan?.targetAssetId || '—' }}</span><span>环境：{{ item.changePlan?.environment || '—' }}</span><span>方式：{{ item.changePlan?.executionMode || '—' }}</span><span>计划时间：{{ item.changePlan?.plannedAt || item.requestedAt }}</span></div>
+                <section v-if="item.changePlan?.preconditions?.length"><b>前置条件</b><ul><li v-for="step in item.changePlan.preconditions" :key="step">{{ step }}</li></ul></section>
+                <section v-if="item.changePlan?.steps?.length"><b>执行步骤</b><ol><li v-for="step in item.changePlan.steps" :key="step.order"><strong>{{ step.title }}</strong><span>{{ step.detail }}</span></li></ol></section>
+                <section v-if="item.changePlan?.rollbackPlan?.length"><b>回滚方案</b><ul><li v-for="step in item.changePlan.rollbackPlan" :key="step">{{ step }}</li></ul></section>
+                <section v-if="item.changePlan?.verification?.length"><b>验证要求</b><ul><li v-for="step in item.changePlan.verification" :key="step">{{ step }}</li></ul></section>
+              </details>
+              <button v-if="(item.status==='failed' || item.verificationStatus==='failed') && rollbackRunbook(item)" class="rollback-request" :disabled="rollbackPendingID===item.id" @click="requestRollback(item)"><RotateCcw/>{{ rollbackPendingID===item.id ? '申请中' : '申请回滚审批' }}</button>
             </article>
           </div>
           <div v-else class="execution-empty">尚未提交受控执行申请</div>

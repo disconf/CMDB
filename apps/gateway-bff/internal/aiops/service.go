@@ -191,6 +191,11 @@ func (s *Service) Execute(ctx context.Context, analysisID, runbookID, user strin
 	if selected == nil {
 		return Execution{}, ErrValidation
 	}
+	policy, ok := s.policyFor(selected.RunbookID)
+	if !ok {
+		policy = RunbookPolicy{RunbookID: selected.RunbookID, Title: selected.Title, Mode: "read-only", ExecutionMode: "live", ChangeWindow: "*"}
+	}
+	plan := s.buildChangePlan(analysis, *selected, policy, user, "", false)
 	if s.tickets == nil {
 		return Execution{}, ErrNotReady
 	}
@@ -219,7 +224,7 @@ func (s *Service) Execute(ctx context.Context, analysisID, runbookID, user strin
 	if err != nil {
 		return Execution{}, err
 	}
-	item := Execution{ID: newID("aiexec"), AnalysisID: analysis.ID, RunbookID: selected.RunbookID, RunbookTitle: selected.Title, Status: "pending-approval", RequestedBy: user, RequestedAt: time.Now().Format("2006-01-02 15:04:05"), ApprovalRequired: true, TicketID: ticket.ID}
+	item := Execution{ID: newID("aiexec"), AnalysisID: analysis.ID, RunbookID: selected.RunbookID, RunbookTitle: selected.Title, Status: "pending-approval", RequestedBy: user, RequestedAt: time.Now().Format("2006-01-02 15:04:05"), ApprovalRequired: true, TicketID: ticket.ID, ChangePlan: plan, VerificationStatus: "pending", VerificationSummary: "等待任务执行后验证"}
 	if err = s.repo.SaveExecution(ctx, item); err != nil {
 		return Execution{}, err
 	}

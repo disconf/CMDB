@@ -61,7 +61,11 @@ CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   approved_at timestamptz,
   finished_at timestamptz,
   result_summary text NOT NULL DEFAULT '',
-  error_message text NOT NULL DEFAULT ''
+  error_message text NOT NULL DEFAULT '',
+  change_plan jsonb NOT NULL DEFAULT '{}',
+  verification_status text NOT NULL DEFAULT '',
+  verification_summary text NOT NULL DEFAULT '',
+  verified_at timestamptz
 );
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS job_id text NOT NULL DEFAULT '';
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS approved_by text NOT NULL DEFAULT '';
@@ -72,6 +76,10 @@ ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS error_message text
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS simulated boolean NOT NULL DEFAULT false;
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS rollback boolean NOT NULL DEFAULT false;
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS parent_execution_id text NOT NULL DEFAULT '';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS change_plan jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS verification_status text NOT NULL DEFAULT '';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS verification_summary text NOT NULL DEFAULT '';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS verified_at timestamptz;
 CREATE TABLE IF NOT EXISTS aiops_runbook_policies (
   runbook_id text PRIMARY KEY,
   title text NOT NULL,
@@ -203,17 +211,22 @@ func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) 
 	if item.FinishedAt != "" {
 		finishedAt, _ = parseAITime(item.FinishedAt)
 	}
+	var verifiedAt any
+	if item.VerifiedAt != "" {
+		verifiedAt, _ = parseAITime(item.VerifiedAt)
+	}
+	changePlan, _ := json.Marshal(item.ChangePlan)
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO aiops_execution_requests(id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,rollback,parent_execution_id,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-ON CONFLICT(id) DO UPDATE SET status=excluded.status,simulated=excluded.simulated,rollback=excluded.rollback,parent_execution_id=excluded.parent_execution_id,ticket_id=excluded.ticket_id,job_id=excluded.job_id,approved_by=excluded.approved_by,approved_at=excluded.approved_at,finished_at=excluded.finished_at,result_summary=excluded.result_summary,error_message=excluded.error_message`,
-		item.ID, item.AnalysisID, item.RunbookID, item.RunbookTitle, item.Status, item.RequestedBy, requestedAt, item.ApprovalRequired, item.Simulated, item.Rollback, item.ParentExecutionID, item.TicketID, item.JobID, item.ApprovedBy, approvedAt, finishedAt, item.ResultSummary, item.Error)
+INSERT INTO aiops_execution_requests(id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,rollback,parent_execution_id,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message,change_plan,verification_status,verification_summary,verified_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+ON CONFLICT(id) DO UPDATE SET status=excluded.status,simulated=excluded.simulated,rollback=excluded.rollback,parent_execution_id=excluded.parent_execution_id,ticket_id=excluded.ticket_id,job_id=excluded.job_id,approved_by=excluded.approved_by,approved_at=excluded.approved_at,finished_at=excluded.finished_at,result_summary=excluded.result_summary,error_message=excluded.error_message,change_plan=excluded.change_plan,verification_status=excluded.verification_status,verification_summary=excluded.verification_summary,verified_at=excluded.verified_at`,
+		item.ID, item.AnalysisID, item.RunbookID, item.RunbookTitle, item.Status, item.RequestedBy, requestedAt, item.ApprovalRequired, item.Simulated, item.Rollback, item.ParentExecutionID, item.TicketID, item.JobID, item.ApprovedBy, approvedAt, finishedAt, item.ResultSummary, item.Error, changePlan, item.VerificationStatus, item.VerificationSummary, verifiedAt)
 	return err
 }
 
 func (r *postgresRepository) LoadExecutions(ctx context.Context) ([]Execution, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,rollback,parent_execution_id,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message
+SELECT id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,rollback,parent_execution_id,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message,change_plan,verification_status,verification_summary,verified_at
 FROM aiops_execution_requests ORDER BY requested_at DESC`)
 	if err != nil {
 		return nil, err
@@ -223,16 +236,21 @@ FROM aiops_execution_requests ORDER BY requested_at DESC`)
 	for rows.Next() {
 		var item Execution
 		var requestedAt time.Time
-		var approvedAt, finishedAt sql.NullTime
-		if err = rows.Scan(&item.ID, &item.AnalysisID, &item.RunbookID, &item.RunbookTitle, &item.Status, &item.RequestedBy, &requestedAt, &item.ApprovalRequired, &item.Simulated, &item.Rollback, &item.ParentExecutionID, &item.TicketID, &item.JobID, &item.ApprovedBy, &approvedAt, &finishedAt, &item.ResultSummary, &item.Error); err != nil {
+		var approvedAt, finishedAt, verifiedAt sql.NullTime
+		var changePlan []byte
+		if err = rows.Scan(&item.ID, &item.AnalysisID, &item.RunbookID, &item.RunbookTitle, &item.Status, &item.RequestedBy, &requestedAt, &item.ApprovalRequired, &item.Simulated, &item.Rollback, &item.ParentExecutionID, &item.TicketID, &item.JobID, &item.ApprovedBy, &approvedAt, &finishedAt, &item.ResultSummary, &item.Error, &changePlan, &item.VerificationStatus, &item.VerificationSummary, &verifiedAt); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal(changePlan, &item.ChangePlan)
 		item.RequestedAt = requestedAt.Local().Format("2006-01-02 15:04:05")
 		if approvedAt.Valid {
 			item.ApprovedAt = approvedAt.Time.Local().Format("2006-01-02 15:04:05")
 		}
 		if finishedAt.Valid {
 			item.FinishedAt = finishedAt.Time.Local().Format("2006-01-02 15:04:05")
+		}
+		if verifiedAt.Valid {
+			item.VerifiedAt = verifiedAt.Time.Local().Format("2006-01-02 15:04:05")
 		}
 		result = append(result, item)
 	}
