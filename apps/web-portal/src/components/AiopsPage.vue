@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Bot, BrainCircuit, CheckCircle2, Clock3, FileSearch, GitBranch, Lightbulb, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Sparkles, TicketCheck } from 'lucide-vue-next'
+import { BookOpen, Bot, BrainCircuit, CheckCircle2, Clock3, FileSearch, GitBranch, Lightbulb, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Sparkles, TicketCheck } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { confidenceTone, riskLabel } from '@/features/aiops/aiopsModel'
 import KnowledgePanel from './KnowledgePanel.vue'
@@ -14,7 +14,7 @@ type Timeline = { time:string; type:string; source:string; message:string }
 type RelatedTicket = { id:string; title:string; status:string; assignee:string }
 type RelatedRelease = { id:string; application:string; version:string; status:string; startedAt:string }
 type Feedback = { status:string; correctedRootCause?:string; note?:string; reviewer:string; reviewedAt:string }
-type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
+type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; knowledgeSuggestions:Knowledge[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
 type ChangePlanStep = { order:number; title:string; detail:string }
 type ChangePlan = { targetAssetId?:string; targetAssetName?:string; environment?:string; runbookId:string; runbookTitle:string; executionMode:string; changeWindow?:string; rollbackRunbookId?:string; rollbackRunbookName?:string; sourceExecutionId?:string; preconditions:string[]; steps:ChangePlanStep[]; verification:string[]; rollbackPlan:string[]; plannedBy:string; plannedAt:string }
@@ -440,6 +440,8 @@ onMounted(load)
           <ol><li v-for="step in rec.steps" :key="step">{{ step }}</li></ol>
           <footer><span><ShieldCheck/>只创建审批工单，不直接执行服务器操作</span><button class="primary" @click="execute(rec)"><Play/>申请审批</button></footer>
         </article>
+
+        <section v-if="selected.knowledgeSuggestions?.length" class="knowledge-suggestions"><header><h3><BookOpen/>推荐知识</h3><p>根据根因和告警关键词匹配的已发布知识。</p></header><div><button v-for="item in selected.knowledgeSuggestions" :key="item.id" @click="tab='knowledge'"><b>{{ item.title }}</b><span>{{ item.summary }}</span><small>{{ item.category }} · 有帮助 {{ item.helpful }}</small></button></div></section>
 
         <section class="execution-panel">
           <header><h3><TicketCheck/>受控执行闭环</h3><p>工单审批通过后，平台只按白名单模板创建任务，并把任务状态回写到 AIOps。</p></header>

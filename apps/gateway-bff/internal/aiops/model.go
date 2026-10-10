@@ -86,6 +86,7 @@ type Analysis struct {
 	UpdatedAt            string           `json:"updatedAt,omitempty"`
 	Evidence             []Evidence       `json:"evidence"`
 	Recommendations      []Recommendation `json:"recommendations"`
+	KnowledgeSuggestions []Knowledge      `json:"knowledgeSuggestions"`
 	RelatedAssets        []RelatedAsset   `json:"relatedAssets"`
 	Impact               ImpactSummary    `json:"impact"`
 	Timeline             []TimelineEvent  `json:"timeline"`
@@ -99,29 +100,38 @@ type Analysis struct {
 }
 
 type Knowledge struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title"`
-	Category  string   `json:"category"`
-	Summary   string   `json:"summary"`
-	Content   string   `json:"content"`
-	Tags      []string `json:"tags"`
-	Helpful   int      `json:"helpful"`
-	Views     int      `json:"views"`
-	Status    string   `json:"status"`
-	Source    string   `json:"source"`
-	SourceID  string   `json:"sourceId,omitempty"`
-	Author    string   `json:"author"`
-	CreatedAt string   `json:"createdAt"`
-	UpdatedAt string   `json:"updatedAt"`
+	ID        string         `json:"id"`
+	Title     string         `json:"title"`
+	Category  string         `json:"category"`
+	Summary   string         `json:"summary"`
+	Content   string         `json:"content"`
+	Tags      []string       `json:"tags"`
+	Helpful   int            `json:"helpful"`
+	Views     int            `json:"views"`
+	Status    string         `json:"status"`
+	Source    string         `json:"source"`
+	SourceID  string         `json:"sourceId,omitempty"`
+	Author    string         `json:"author"`
+	CreatedAt string         `json:"createdAt"`
+	UpdatedAt string         `json:"updatedAt"`
+	Related   []KnowledgeRef `json:"related"`
 }
 
 type KnowledgeInput struct {
-	Title    string   `json:"title"`
-	Category string   `json:"category"`
-	Summary  string   `json:"summary"`
-	Content  string   `json:"content"`
-	Tags     []string `json:"tags"`
-	Status   string   `json:"status"`
+	Title    string         `json:"title"`
+	Category string         `json:"category"`
+	Summary  string         `json:"summary"`
+	Content  string         `json:"content"`
+	Tags     []string       `json:"tags"`
+	Status   string         `json:"status"`
+	Related  []KnowledgeRef `json:"related"`
+}
+
+type KnowledgeRef struct {
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status,omitempty"`
 }
 
 type ChangePlanStep struct {

@@ -37,3 +37,11 @@ func TestKnowledgeCRUDAndAnalysisSynthesis(t *testing.T) {
 		t.Fatalf("unexpected synthesized knowledge: %#v", fromAnalysis)
 	}
 }
+
+func TestKnowledgeSuggestionsPreferTitleAndTags(t *testing.T) {
+	service := NewService()
+	items := service.knowledgeSuggestionsFor("磁盘空间耗尽风险", "磁盘使用率告警", 3)
+	if len(items) == 0 || items[0].ID != "kb-005" {
+		t.Fatalf("expected disk knowledge suggestion, got %#v", items)
+	}
+}

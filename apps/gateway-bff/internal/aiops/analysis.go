@@ -26,7 +26,7 @@ func (s *Service) Analyze(ctx context.Context, alertID string) (Analysis, error)
 		ID: analysisID, AlertID: alert.ID, AlertTitle: alert.Title, Title: alert.Title + " 归因分析",
 		Status: "completed", Severity: alert.Severity, Target: alert.Target,
 		CreatedAt: now.Format("2006-01-02 15:04:05"), UpdatedAt: now.Format("2006-01-02 15:04:05"),
-		Evidence: []Evidence{}, Recommendations: []Recommendation{}, RelatedAssets: []RelatedAsset{},
+		Evidence: []Evidence{}, Recommendations: []Recommendation{}, KnowledgeSuggestions: []Knowledge{}, RelatedAssets: []RelatedAsset{},
 		Timeline: []TimelineEvent{}, Tickets: []RelatedTicket{}, Releases: []RelatedRelease{}, DataSources: []string{},
 	}
 	if existing, err := s.Get(analysisID); err == nil {
@@ -136,10 +136,11 @@ func (s *Service) Analyze(ctx context.Context, alertID string) (Analysis, error)
 	item.ConfidenceReason = reason
 	item.AppliedFeedbackCount = feedbackCount
 	item.Recommendations = recommendationFor(item.RootCause)
+	item.KnowledgeSuggestions = s.knowledgeSuggestionsFor(item.RootCause, item.AlertTitle, 3)
 	if reason != "" {
 		item.Timeline = append(item.Timeline, TimelineEvent{Time: time.Now().Format("2006-01-02 15:04:05"), Type: "feedback", Source: "feedback", Message: reason})
 	}
-	item.Summary = fmt.Sprintf("基于 %d 项证据生成根因假设：%s；置信度调整 %+d，参考历史反馈 %d 条；关联资产 %d 个，关联工单 %d 个，近期发布 %d 个。", len(item.Evidence), item.RootCause, adjustment, feedbackCount, len(item.RelatedAssets), len(item.Tickets), len(item.Releases))
+	item.Summary = fmt.Sprintf("基于 %d 项证据生成根因假设：%s；置信度调整 %+d，参考历史反馈 %d 条；关联资产 %d 个，关联工单 %d 个，近期发布 %d 个，推荐知识 %d 条。", len(item.Evidence), item.RootCause, adjustment, feedbackCount, len(item.RelatedAssets), len(item.Tickets), len(item.Releases), len(item.KnowledgeSuggestions))
 	sort.SliceStable(item.Timeline, func(i, j int) bool { return item.Timeline[i].Time > item.Timeline[j].Time })
 	if err := s.repo.SaveAnalysis(ctx, item); err != nil {
 		return Analysis{}, err

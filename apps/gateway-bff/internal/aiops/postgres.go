@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS aiops_analyses (
   updated_at timestamptz NOT NULL,
   evidence jsonb NOT NULL DEFAULT '[]',
   recommendations jsonb NOT NULL DEFAULT '[]',
+  knowledge_suggestions jsonb NOT NULL DEFAULT '[]',
   related_assets jsonb NOT NULL DEFAULT '[]',
   impact jsonb NOT NULL DEFAULT '{}',
   timeline jsonb NOT NULL DEFAULT '[]',
@@ -41,6 +42,7 @@ ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS feedback jsonb NOT NULL DEFA
 ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS confidence_adjustment integer NOT NULL DEFAULT 0;
 ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS confidence_reason text NOT NULL DEFAULT '';
 ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS applied_feedback_count integer NOT NULL DEFAULT 0;
+ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS knowledge_suggestions jsonb NOT NULL DEFAULT '[]';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_aiops_analyses_alert_id ON aiops_analyses(alert_id);
 CREATE INDEX IF NOT EXISTS idx_aiops_analyses_created_at ON aiops_analyses(created_at DESC);
 CREATE TABLE IF NOT EXISTS aiops_knowledge (
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS aiops_knowledge (
   source text NOT NULL DEFAULT 'manual',
   source_id text NOT NULL DEFAULT '',
   author text NOT NULL DEFAULT '',
+  related jsonb NOT NULL DEFAULT '[]',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -65,6 +68,7 @@ ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAUL
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'manual';
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS source_id text NOT NULL DEFAULT '';
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS author text NOT NULL DEFAULT '';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS related jsonb NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_updated_at ON aiops_knowledge(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_category ON aiops_knowledge(category);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
@@ -192,6 +196,7 @@ func openPostgres(databaseURL string) (*postgresRepository, error) {
 func (r *postgresRepository) SaveAnalysis(ctx context.Context, item Analysis) error {
 	evidence, _ := json.Marshal(item.Evidence)
 	recommendations, _ := json.Marshal(item.Recommendations)
+	knowledgeSuggestions, _ := json.Marshal(item.KnowledgeSuggestions)
 	assets, _ := json.Marshal(item.RelatedAssets)
 	impact, _ := json.Marshal(item.Impact)
 	timeline, _ := json.Marshal(item.Timeline)
@@ -211,15 +216,15 @@ func (r *postgresRepository) SaveAnalysis(ctx context.Context, item Analysis) er
 		}
 	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO aiops_analyses(id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,confidence_adjustment,confidence_reason,applied_feedback_count,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
-ON CONFLICT(id) DO UPDATE SET alert_title=excluded.alert_title,title=excluded.title,status=excluded.status,severity=excluded.severity,target=excluded.target,root_cause=excluded.root_cause,confidence=excluded.confidence,confidence_adjustment=excluded.confidence_adjustment,confidence_reason=excluded.confidence_reason,applied_feedback_count=excluded.applied_feedback_count,summary=excluded.summary,updated_at=excluded.updated_at,evidence=excluded.evidence,recommendations=excluded.recommendations,related_assets=excluded.related_assets,impact=excluded.impact,timeline=excluded.timeline,tickets=excluded.tickets,releases=excluded.releases,data_sources=excluded.data_sources,feedback=excluded.feedback`,
-		item.ID, item.AlertID, item.AlertTitle, item.Title, item.Status, item.Severity, item.Target, item.RootCause, item.Confidence, item.ConfidenceAdjustment, item.ConfidenceReason, item.AppliedFeedbackCount, item.Summary, created, updated, evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback)
+INSERT INTO aiops_analyses(id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,confidence_adjustment,confidence_reason,applied_feedback_count,summary,created_at,updated_at,evidence,recommendations,knowledge_suggestions,related_assets,impact,timeline,tickets,releases,data_sources,feedback)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+ON CONFLICT(id) DO UPDATE SET alert_title=excluded.alert_title,title=excluded.title,status=excluded.status,severity=excluded.severity,target=excluded.target,root_cause=excluded.root_cause,confidence=excluded.confidence,confidence_adjustment=excluded.confidence_adjustment,confidence_reason=excluded.confidence_reason,applied_feedback_count=excluded.applied_feedback_count,summary=excluded.summary,updated_at=excluded.updated_at,evidence=excluded.evidence,recommendations=excluded.recommendations,knowledge_suggestions=excluded.knowledge_suggestions,related_assets=excluded.related_assets,impact=excluded.impact,timeline=excluded.timeline,tickets=excluded.tickets,releases=excluded.releases,data_sources=excluded.data_sources,feedback=excluded.feedback`,
+		item.ID, item.AlertID, item.AlertTitle, item.Title, item.Status, item.Severity, item.Target, item.RootCause, item.Confidence, item.ConfidenceAdjustment, item.ConfidenceReason, item.AppliedFeedbackCount, item.Summary, created, updated, evidence, recommendations, knowledgeSuggestions, assets, impact, timeline, tickets, releases, sources, feedback)
 	return err
 }
 func (r *postgresRepository) LoadAnalyses(ctx context.Context) ([]Analysis, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,confidence_adjustment,confidence_reason,applied_feedback_count,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback
+SELECT id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,confidence_adjustment,confidence_reason,applied_feedback_count,summary,created_at,updated_at,evidence,recommendations,knowledge_suggestions,related_assets,impact,timeline,tickets,releases,data_sources,feedback
 FROM aiops_analyses ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -229,14 +234,15 @@ FROM aiops_analyses ORDER BY created_at DESC`)
 	for rows.Next() {
 		var item Analysis
 		var created, updated time.Time
-		var evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback []byte
-		if err = rows.Scan(&item.ID, &item.AlertID, &item.AlertTitle, &item.Title, &item.Status, &item.Severity, &item.Target, &item.RootCause, &item.Confidence, &item.ConfidenceAdjustment, &item.ConfidenceReason, &item.AppliedFeedbackCount, &item.Summary, &created, &updated, &evidence, &recommendations, &assets, &impact, &timeline, &tickets, &releases, &sources, &feedback); err != nil {
+		var evidence, recommendations, knowledgeSuggestions, assets, impact, timeline, tickets, releases, sources, feedback []byte
+		if err = rows.Scan(&item.ID, &item.AlertID, &item.AlertTitle, &item.Title, &item.Status, &item.Severity, &item.Target, &item.RootCause, &item.Confidence, &item.ConfidenceAdjustment, &item.ConfidenceReason, &item.AppliedFeedbackCount, &item.Summary, &created, &updated, &evidence, &recommendations, &knowledgeSuggestions, &assets, &impact, &timeline, &tickets, &releases, &sources, &feedback); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Local().Format("2006-01-02 15:04:05")
 		item.UpdatedAt = updated.Local().Format("2006-01-02 15:04:05")
 		_ = json.Unmarshal(evidence, &item.Evidence)
 		_ = json.Unmarshal(recommendations, &item.Recommendations)
+		_ = json.Unmarshal(knowledgeSuggestions, &item.KnowledgeSuggestions)
 		_ = json.Unmarshal(assets, &item.RelatedAssets)
 		_ = json.Unmarshal(impact, &item.Impact)
 		_ = json.Unmarshal(timeline, &item.Timeline)
@@ -257,6 +263,7 @@ FROM aiops_analyses ORDER BY created_at DESC`)
 
 func (r *postgresRepository) SaveKnowledge(ctx context.Context, item Knowledge) error {
 	tags, _ := json.Marshal(item.Tags)
+	related, _ := json.Marshal(item.Related)
 	createdAt, err := parseAITime(item.CreatedAt)
 	if err != nil {
 		createdAt = time.Now()
@@ -265,13 +272,13 @@ func (r *postgresRepository) SaveKnowledge(ctx context.Context, item Knowledge) 
 	if err != nil {
 		updatedAt = time.Now()
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge(id,title,category,summary,content,tags,helpful,views,status,source,source_id,author,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,summary=excluded.summary,content=excluded.content,tags=excluded.tags,helpful=excluded.helpful,views=excluded.views,status=excluded.status,source=excluded.source,source_id=excluded.source_id,author=excluded.author,updated_at=excluded.updated_at`,
-		item.ID, item.Title, item.Category, item.Summary, item.Content, tags, item.Helpful, item.Views, item.Status, item.Source, item.SourceID, item.Author, createdAt, updatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge(id,title,category,summary,content,tags,related,helpful,views,status,source,source_id,author,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,summary=excluded.summary,content=excluded.content,tags=excluded.tags,related=excluded.related,helpful=excluded.helpful,views=excluded.views,status=excluded.status,source=excluded.source,source_id=excluded.source_id,author=excluded.author,updated_at=excluded.updated_at`,
+		item.ID, item.Title, item.Category, item.Summary, item.Content, tags, related, item.Helpful, item.Views, item.Status, item.Source, item.SourceID, item.Author, createdAt, updatedAt)
 	return err
 }
 
 func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,title,category,summary,content,tags,helpful,views,status,source,source_id,author,created_at,updated_at FROM aiops_knowledge ORDER BY updated_at DESC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,title,category,summary,content,tags,related,helpful,views,status,source,source_id,author,created_at,updated_at FROM aiops_knowledge ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -279,12 +286,13 @@ func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, er
 	result := []Knowledge{}
 	for rows.Next() {
 		var item Knowledge
-		var tags []byte
+		var tags, related []byte
 		var createdAt, updatedAt time.Time
-		if err = rows.Scan(&item.ID, &item.Title, &item.Category, &item.Summary, &item.Content, &tags, &item.Helpful, &item.Views, &item.Status, &item.Source, &item.SourceID, &item.Author, &createdAt, &updatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.Title, &item.Category, &item.Summary, &item.Content, &tags, &related, &item.Helpful, &item.Views, &item.Status, &item.Source, &item.SourceID, &item.Author, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(tags, &item.Tags)
+		_ = json.Unmarshal(related, &item.Related)
 		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
 		item.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
 		result = append(result, item)

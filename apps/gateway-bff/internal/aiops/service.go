@@ -384,22 +384,124 @@ func (s *Service) searchKnowledge(q string, includeDrafts bool) []Knowledge {
 	_ = s.reloadKnowledge()
 	q = strings.ToLower(strings.TrimSpace(q))
 	s.mu.RLock()
-	result := make([]Knowledge, 0, len(s.knowledge))
+	type scoredKnowledge struct {
+		item  Knowledge
+		score int
+	}
+	scored := make([]scoredKnowledge, 0, len(s.knowledge))
 	for _, item := range s.knowledge {
 		if !includeDrafts && item.Status != "published" {
 			continue
 		}
+		score := 1
 		if q != "" {
-			haystack := strings.ToLower(item.Title + " " + item.Category + " " + item.Summary + " " + item.Content + " " + strings.Join(item.Tags, " "))
-			if !strings.Contains(haystack, q) {
+			score = knowledgeSearchScore(item, q)
+			if score == 0 {
 				continue
 			}
 		}
-		result = append(result, item)
+		scored = append(scored, scoredKnowledge{item: item, score: score})
 	}
 	s.mu.RUnlock()
-	sort.SliceStable(result, func(i, j int) bool { return result[i].UpdatedAt > result[j].UpdatedAt })
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		if scored[i].item.Helpful != scored[j].item.Helpful {
+			return scored[i].item.Helpful > scored[j].item.Helpful
+		}
+		return scored[i].item.UpdatedAt > scored[j].item.UpdatedAt
+	})
+	result := make([]Knowledge, 0, len(scored))
+	for _, item := range scored {
+		result = append(result, item.item)
+	}
 	return result
+}
+
+func knowledgeSearchScore(item Knowledge, query string) int {
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) == 0 {
+		return 1
+	}
+	title := strings.ToLower(item.Title)
+	category := strings.ToLower(item.Category)
+	summary := strings.ToLower(item.Summary)
+	content := strings.ToLower(item.Content)
+	tags := strings.ToLower(strings.Join(item.Tags, " "))
+	score := 0
+	for _, term := range terms {
+		matched := false
+		if strings.Contains(title, term) {
+			score += 100
+			matched = true
+		}
+		if strings.Contains(category, term) {
+			score += 50
+			matched = true
+		}
+		if strings.Contains(tags, term) {
+			score += 40
+			matched = true
+		}
+		if strings.Contains(summary, term) {
+			score += 25
+			matched = true
+		}
+		if strings.Contains(content, term) {
+			score += 10
+			matched = true
+		}
+		if !matched {
+			return 0
+		}
+	}
+	return score
+}
+
+func (s *Service) knowledgeSuggestionsFor(rootCause, alertTitle string, limit int) []Knowledge {
+	if limit <= 0 {
+		return []Knowledge{}
+	}
+	queries := []string{knowledgeKeyword(rootCause), alertTitle}
+	result := []Knowledge{}
+	seen := map[string]bool{}
+	for _, query := range queries {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			continue
+		}
+		for _, item := range s.SearchKnowledge(query) {
+			if seen[item.ID] {
+				continue
+			}
+			seen[item.ID] = true
+			result = append(result, item)
+			if len(result) >= limit {
+				return result
+			}
+		}
+	}
+	return result
+}
+
+func knowledgeKeyword(rootCause string) string {
+	switch {
+	case strings.Contains(rootCause, "内存"):
+		return "内存"
+	case strings.Contains(rootCause, "磁盘"):
+		return "磁盘"
+	case strings.Contains(rootCause, "网络"):
+		return "网络"
+	case strings.Contains(rootCause, "Kubernetes") || strings.Contains(rootCause, "Pod"):
+		return "Kubernetes"
+	case strings.Contains(rootCause, "延迟"):
+		return "延迟"
+	case strings.Contains(rootCause, "数据库"):
+		return "数据库"
+	default:
+		return ""
+	}
 }
 
 func (s *Service) GetKnowledge(id string) (Knowledge, error) {
@@ -424,6 +526,7 @@ func (s *Service) CreateKnowledge(input KnowledgeInput, author string) (Knowledg
 	if err != nil {
 		return Knowledge{}, err
 	}
+	item.Related = s.resolveKnowledgeRefs(item.Related)
 	now := time.Now().Format("2006-01-02 15:04:05")
 	item.ID = newID("kb")
 	item.Source = "manual"
@@ -459,6 +562,7 @@ func (s *Service) UpdateKnowledge(id string, input KnowledgeInput, author string
 		s.mu.Unlock()
 		return Knowledge{}, err
 	}
+	updated.Related = s.resolveKnowledgeRefs(updated.Related)
 	updated.ID = existing.ID
 	updated.Source = existing.Source
 	updated.SourceID = existing.SourceID
@@ -572,7 +676,70 @@ func normalizeKnowledgeInput(existing Knowledge, input KnowledgeInput) (Knowledg
 	if item.Title == "" || item.Summary == "" || item.Content == "" {
 		return Knowledge{}, ErrValidation
 	}
+	if input.Related != nil {
+		item.Related = normalizeKnowledgeRefs(input.Related)
+	}
 	return item, nil
+}
+
+func normalizeKnowledgeRefs(items []KnowledgeRef) []KnowledgeRef {
+	result := make([]KnowledgeRef, 0, len(items))
+	for _, item := range items {
+		item.Type = strings.ToLower(strings.TrimSpace(item.Type))
+		item.ID = strings.TrimSpace(item.ID)
+		item.Name = strings.TrimSpace(item.Name)
+		item.Status = strings.TrimSpace(item.Status)
+		if item.ID == "" || (item.Type != "asset" && item.Type != "ticket" && item.Type != "alert") {
+			continue
+		}
+		duplicate := false
+		for _, existing := range result {
+			if existing.Type == item.Type && existing.ID == item.ID {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (s *Service) resolveKnowledgeRefs(items []KnowledgeRef) []KnowledgeRef {
+	result := normalizeKnowledgeRefs(items)
+	for index := range result {
+		item := &result[index]
+		switch item.Type {
+		case "asset":
+			if s.assets != nil {
+				if asset, err := s.assets.GetAsset(item.ID); err == nil {
+					item.Name, item.Status = asset.Name, asset.Status
+				}
+			}
+		case "ticket":
+			if s.tickets != nil {
+				if tickets, err := s.tickets.List(); err == nil {
+					for _, ticket := range tickets {
+						if ticket.ID == item.ID {
+							item.Name, item.Status = ticket.Title, ticket.Status
+							break
+						}
+					}
+				}
+			}
+		case "alert":
+			if s.alerts != nil {
+				for _, alert := range s.alerts.Alerts() {
+					if alert.ID == item.ID {
+						item.Name, item.Status = alert.Title, alert.Status
+						break
+					}
+				}
+			}
+		}
+	}
+	return result
 }
 
 func knowledgeCategory(rootCause string) string {
