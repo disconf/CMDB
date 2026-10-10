@@ -193,3 +193,11 @@ Runbook 支持两种执行方式：
 - 只读 Runbook 使用 `live` 并通过只读任务模板执行。
 - 变更类 Runbook 使用 `simulate`，默认禁用。
 - 只有明确完成演练和审批后，才允许管理员把指定 Runbook 切换为 `live`。
+
+## 执行审计与受控回滚
+
+- `GET /api/v1/aiops/execution-stats` 汇总演练、真实执行、待审批、运行中、成功、失败和执行成功率，并按 Runbook 聚合。
+- Runbook 策略新增 `rollbackRunbookId`，仅变更类 Runbook 可以关联另一个变更类回滚 Runbook，不能关联自身。
+- 失败的真实执行可调用 `POST /api/v1/aiops/executions/{id}/rollback` 申请回滚。
+- 回滚申请只创建独立审批工单，不自动执行；审批通过后仍复用原有一套授权、环境、变更窗口和全局真实变更开关。
+- 演练执行不会触发回滚，禁止对回滚执行再次申请回滚，并对同一原执行做重复申请保护。

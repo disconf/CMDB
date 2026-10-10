@@ -235,6 +235,71 @@ func (s *Service) Executions() []Execution {
 	return append([]Execution(nil), s.executions...)
 }
 
+func (s *Service) ExecutionStats() ExecutionStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	stats := ExecutionStats{ByRunbook: []RunbookExecutionStat{}}
+	byRunbook := map[string]*RunbookExecutionStat{}
+	for _, item := range s.executions {
+		stats.Total++
+		if item.Simulated {
+			stats.Simulated++
+		} else {
+			stats.Live++
+		}
+		switch item.Status {
+		case "pending-approval":
+			stats.PendingApproval++
+		case "running":
+			stats.Running++
+		case "success":
+			stats.Success++
+		case "failed":
+			stats.Failed++
+		case "rejected":
+			stats.Rejected++
+		}
+		key := item.RunbookID
+		row := byRunbook[key]
+		if row == nil {
+			row = &RunbookExecutionStat{RunbookID: item.RunbookID, RunbookTitle: item.RunbookTitle}
+			byRunbook[key] = row
+		}
+		row.Total++
+		if item.Simulated {
+			row.Simulated++
+		} else {
+			row.Live++
+		}
+		switch item.Status {
+		case "success":
+			row.Success++
+		case "failed":
+			row.Failed++
+		case "pending-approval", "running":
+			row.InProgress++
+		}
+	}
+	completed := stats.Success + stats.Failed
+	if completed > 0 {
+		stats.SuccessRate = math.Round(float64(stats.Success)/float64(completed)*10000) / 100
+	}
+	for _, row := range byRunbook {
+		completed := row.Success + row.Failed
+		if completed > 0 {
+			row.SuccessRate = math.Round(float64(row.Success)/float64(completed)*10000) / 100
+		}
+		stats.ByRunbook = append(stats.ByRunbook, *row)
+	}
+	sort.SliceStable(stats.ByRunbook, func(i, j int) bool {
+		if stats.ByRunbook[i].Total != stats.ByRunbook[j].Total {
+			return stats.ByRunbook[i].Total > stats.ByRunbook[j].Total
+		}
+		return stats.ByRunbook[i].RunbookID < stats.ByRunbook[j].RunbookID
+	})
+	return stats
+}
+
 func (s *Service) SetFeedback(ctx context.Context, analysisID string, in FeedbackInput, reviewer string) (Analysis, error) {
 	status := strings.ToLower(strings.TrimSpace(in.Status))
 	if status != "confirmed" && status != "rejected" && status != "partial" {

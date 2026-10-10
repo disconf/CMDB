@@ -135,6 +135,74 @@ func (s *Service) OnJobTerminal(job jobs.Job) {
 	_ = s.saveExecution(ctx, execution)
 }
 
+func (s *Service) RequestRollback(ctx context.Context, executionID, user string) (Execution, error) {
+	executionID = strings.TrimSpace(executionID)
+	user = strings.TrimSpace(user)
+	if executionID == "" || user == "" {
+		return Execution{}, ErrValidation
+	}
+	original, ok := s.findExecutionByID(executionID)
+	if !ok {
+		return Execution{}, ErrNotFound
+	}
+	if original.Status != "failed" || original.Rollback {
+		return Execution{}, ErrValidation
+	}
+	policy, ok := s.policyFor(original.RunbookID)
+	if !ok || strings.TrimSpace(policy.RollbackRunbookID) == "" {
+		return Execution{}, ErrValidation
+	}
+	rollback, ok := s.policyFor(policy.RollbackRunbookID)
+	if !ok || rollback.Mode != "change" || !rollback.Enabled {
+		return Execution{}, ErrValidation
+	}
+	if rollback.ExecutionMode == "live" && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
+		return Execution{}, ErrChangeDisabled
+	}
+	if s.tickets == nil {
+		return Execution{}, ErrNotReady
+	}
+	analysis, err := s.Get(original.AnalysisID)
+	if err != nil {
+		return Execution{}, err
+	}
+	s.mu.RLock()
+	for _, item := range s.executions {
+		if item.ParentExecutionID == original.ID && (item.Status == "pending-approval" || item.Status == "running" || item.Status == "success") {
+			s.mu.RUnlock()
+			return Execution{}, ErrValidation
+		}
+	}
+	s.mu.RUnlock()
+	assetID, projectGroup := "", ""
+	if len(analysis.RelatedAssets) > 0 {
+		assetID = analysis.RelatedAssets[0].ID
+		projectGroup = analysis.RelatedAssets[0].ProjectGroup
+	}
+	ticket, err := s.tickets.Create(tickets.CreateInput{
+		Title:              "AIOps 回滚执行审批：" + rollback.Title,
+		Type:               "change",
+		Priority:           "high",
+		Applicant:          user,
+		Description:        "AIOps 执行 " + original.ID + " 失败，申请执行回滚 Runbook " + rollback.RunbookID + "。回滚仍需人工审批，平台不会自动操作服务器。",
+		RelatedAsset:       assetID,
+		RelatedAlert:       analysis.AlertID,
+		ProjectGroup:       projectGroup,
+		AutomationTemplate: rollback.RunbookID,
+	})
+	if err != nil {
+		return Execution{}, err
+	}
+	item := Execution{ID: newID("aiexec"), AnalysisID: analysis.ID, RunbookID: rollback.RunbookID, RunbookTitle: rollback.Title, Status: "pending-approval", RequestedBy: user, RequestedAt: time.Now().Format("2006-01-02 15:04:05"), ApprovalRequired: true, TicketID: ticket.ID, Rollback: true, ParentExecutionID: original.ID}
+	if err = s.repo.SaveExecution(ctx, item); err != nil {
+		return Execution{}, err
+	}
+	s.mu.Lock()
+	s.executions = append([]Execution{item}, s.executions...)
+	s.mu.Unlock()
+	return item, nil
+}
+
 func (s *Service) failExecution(ctx context.Context, execution Execution, message string) {
 	execution.Status = "failed"
 	execution.Error = message
@@ -165,6 +233,17 @@ func (s *Service) findExecutionByTicket(ticketID string) (Execution, bool) {
 	defer s.mu.RUnlock()
 	for _, item := range s.executions {
 		if item.TicketID == ticketID {
+			return item, true
+		}
+	}
+	return Execution{}, false
+}
+
+func (s *Service) findExecutionByID(executionID string) (Execution, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.executions {
+		if item.ID == executionID {
 			return item, true
 		}
 	}

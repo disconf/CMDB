@@ -206,6 +206,61 @@ func TestRunbookSimulationCanEnableWithoutLiveGate(t *testing.T) {
 		t.Fatalf("simulation result: %#v", simulated)
 	}
 }
+func TestExecutionStatsAndControlledRollback(t *testing.T) {
+	s := NewService()
+	s.SetAlertProvider(fakeAlerts{})
+	s.SetAssetProvider(fakeAssets{})
+	s.SetImpactProvider(fakeImpact{})
+	ticketsProvider := &fakeTickets{}
+	s.SetTicketProvider(ticketsProvider)
+	s.SetReleaseProvider(fakeReleases{})
+	s.SetJobProvider(&fakeJobs{})
+	s.SetToolProvider(fakeTools{})
+	analysis, err := s.Analyze(context.Background(), "alert-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackPolicy, ok := s.policyFor("rb-service-restart")
+	if !ok {
+		t.Fatal("missing rollback runbook")
+	}
+	rollbackPolicy.Enabled = true
+	rollbackPolicy.ExecutionMode = "simulate"
+	if _, err = s.UpdateRunbook(context.Background(), rollbackPolicy.RunbookID, rollbackPolicy, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := s.policyFor("rb-log-cleanup")
+	if !ok {
+		t.Fatal("missing primary runbook")
+	}
+	policy.Enabled = true
+	policy.ExecutionMode = "simulate"
+	policy.RollbackRunbookID = rollbackPolicy.RunbookID
+	if _, err = s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	failed := Execution{ID: "aiexec-failed", AnalysisID: analysis.ID, RunbookID: policy.RunbookID, RunbookTitle: policy.Title, Status: "failed", RequestedBy: "admin", RequestedAt: "2026-10-10 12:00:00", ApprovalRequired: true, TicketID: "TKT-FAILED", Error: "execution failed"}
+	if err = s.saveExecution(context.Background(), failed); err != nil {
+		t.Fatal(err)
+	}
+	rollback, err := s.RequestRollback(context.Background(), failed.ID, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rollback.Rollback || rollback.ParentExecutionID != failed.ID || rollback.Status != "pending-approval" {
+		t.Fatalf("unexpected rollback request: %#v", rollback)
+	}
+	s.HandleTicketDecision(context.Background(), tickets.Ticket{ID: rollback.TicketID, Applicant: "admin", AutomationTemplate: rollback.RunbookID}, "test-token", "approve")
+	completed, _ := s.findExecutionByID(rollback.ID)
+	if completed.Status != "success" || !completed.Simulated {
+		t.Fatalf("unexpected rollback result: %#v", completed)
+	}
+	stats := s.ExecutionStats()
+	if stats.Total != 2 || stats.Simulated != 1 || stats.Live != 1 || stats.Success != 1 || stats.Failed != 1 || stats.SuccessRate != 50 {
+		t.Fatalf("unexpected execution stats: %#v", stats)
+	}
+}
+
 func TestKnowledgeSearch(t *testing.T) {
 	if len(NewService().SearchKnowledge("OOM")) == 0 {
 		t.Fatal("expected knowledge result")

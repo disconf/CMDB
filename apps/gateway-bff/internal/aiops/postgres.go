@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   requested_at timestamptz NOT NULL,
   approval_required boolean NOT NULL DEFAULT true,
   simulated boolean NOT NULL DEFAULT false,
+  rollback boolean NOT NULL DEFAULT false,
+  parent_execution_id text NOT NULL DEFAULT '',
   ticket_id text NOT NULL DEFAULT '',
   job_id text NOT NULL DEFAULT '',
   approved_by text NOT NULL DEFAULT '',
@@ -68,7 +70,8 @@ ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS finished_at timest
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS result_summary text NOT NULL DEFAULT '';
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS error_message text NOT NULL DEFAULT '';
 ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS simulated boolean NOT NULL DEFAULT false;
-ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS execution_mode text NOT NULL DEFAULT 'simulate';
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS rollback boolean NOT NULL DEFAULT false;
+ALTER TABLE aiops_execution_requests ADD COLUMN IF NOT EXISTS parent_execution_id text NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS aiops_runbook_policies (
   runbook_id text PRIMARY KEY,
   title text NOT NULL,
@@ -81,9 +84,13 @@ CREATE TABLE IF NOT EXISTS aiops_runbook_policies (
   max_targets integer NOT NULL DEFAULT 1,
   allowed_environments jsonb NOT NULL DEFAULT '[]',
   change_window text NOT NULL DEFAULT '*',
+  rollback_runbook_id text NOT NULL DEFAULT '',
   updated_by text NOT NULL DEFAULT '',
   updated_at timestamptz NOT NULL DEFAULT now()
-);CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
+);
+ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS execution_mode text NOT NULL DEFAULT 'simulate';
+ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS rollback_runbook_id text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
 `
 
 type postgresRepository struct {
@@ -191,16 +198,16 @@ func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) 
 		finishedAt, _ = parseAITime(item.FinishedAt)
 	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO aiops_execution_requests(id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-ON CONFLICT(id) DO UPDATE SET status=excluded.status,simulated=excluded.simulated,ticket_id=excluded.ticket_id,job_id=excluded.job_id,approved_by=excluded.approved_by,approved_at=excluded.approved_at,finished_at=excluded.finished_at,result_summary=excluded.result_summary,error_message=excluded.error_message`,
-		item.ID, item.AnalysisID, item.RunbookID, item.RunbookTitle, item.Status, item.RequestedBy, requestedAt, item.ApprovalRequired, item.Simulated, item.TicketID, item.JobID, item.ApprovedBy, approvedAt, finishedAt, item.ResultSummary, item.Error)
+INSERT INTO aiops_execution_requests(id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,rollback,parent_execution_id,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+ON CONFLICT(id) DO UPDATE SET status=excluded.status,simulated=excluded.simulated,rollback=excluded.rollback,parent_execution_id=excluded.parent_execution_id,ticket_id=excluded.ticket_id,job_id=excluded.job_id,approved_by=excluded.approved_by,approved_at=excluded.approved_at,finished_at=excluded.finished_at,result_summary=excluded.result_summary,error_message=excluded.error_message`,
+		item.ID, item.AnalysisID, item.RunbookID, item.RunbookTitle, item.Status, item.RequestedBy, requestedAt, item.ApprovalRequired, item.Simulated, item.Rollback, item.ParentExecutionID, item.TicketID, item.JobID, item.ApprovedBy, approvedAt, finishedAt, item.ResultSummary, item.Error)
 	return err
 }
 
 func (r *postgresRepository) LoadExecutions(ctx context.Context) ([]Execution, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message
+SELECT id,analysis_id,runbook_id,runbook_title,status,requested_by,requested_at,approval_required,simulated,rollback,parent_execution_id,ticket_id,job_id,approved_by,approved_at,finished_at,result_summary,error_message
 FROM aiops_execution_requests ORDER BY requested_at DESC`)
 	if err != nil {
 		return nil, err
@@ -211,7 +218,7 @@ FROM aiops_execution_requests ORDER BY requested_at DESC`)
 		var item Execution
 		var requestedAt time.Time
 		var approvedAt, finishedAt sql.NullTime
-		if err = rows.Scan(&item.ID, &item.AnalysisID, &item.RunbookID, &item.RunbookTitle, &item.Status, &item.RequestedBy, &requestedAt, &item.ApprovalRequired, &item.Simulated, &item.TicketID, &item.JobID, &item.ApprovedBy, &approvedAt, &finishedAt, &item.ResultSummary, &item.Error); err != nil {
+		if err = rows.Scan(&item.ID, &item.AnalysisID, &item.RunbookID, &item.RunbookTitle, &item.Status, &item.RequestedBy, &requestedAt, &item.ApprovalRequired, &item.Simulated, &item.Rollback, &item.ParentExecutionID, &item.TicketID, &item.JobID, &item.ApprovedBy, &approvedAt, &finishedAt, &item.ResultSummary, &item.Error); err != nil {
 			return nil, err
 		}
 		item.RequestedAt = requestedAt.Local().Format("2006-01-02 15:04:05")
@@ -236,7 +243,7 @@ func parseAITime(value string) (time.Time, error) {
 }
 
 func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]RunbookPolicy, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,updated_by,updated_at FROM aiops_runbook_policies ORDER BY mode,runbook_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +253,7 @@ func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]Runbook
 		var item RunbookPolicy
 		var environments []byte
 		var updatedAt time.Time
-		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.ExecutionMode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.UpdatedBy, &updatedAt); err != nil {
+		if err = rows.Scan(&item.RunbookID, &item.Title, &item.TemplateID, &item.Mode, &item.ExecutionMode, &item.Risk, &item.ApprovalRequired, &item.Enabled, &item.MaxTargets, &environments, &item.ChangeWindow, &item.RollbackRunbookID, &item.UpdatedBy, &updatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(environments, &item.AllowedEnvironments)
@@ -262,6 +269,6 @@ func (r *postgresRepository) SaveRunbookPolicy(ctx context.Context, item Runbook
 	if err != nil {
 		updatedAt = time.Now()
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,execution_mode=excluded.execution_mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.ExecutionMode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.UpdatedBy, updatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_runbook_policies(runbook_id,title,template_id,mode,execution_mode,risk,approval_required,enabled,max_targets,allowed_environments,change_window,rollback_runbook_id,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(runbook_id) DO UPDATE SET title=excluded.title,template_id=excluded.template_id,mode=excluded.mode,execution_mode=excluded.execution_mode,risk=excluded.risk,approval_required=excluded.approval_required,enabled=excluded.enabled,max_targets=excluded.max_targets,allowed_environments=excluded.allowed_environments,change_window=excluded.change_window,rollback_runbook_id=excluded.rollback_runbook_id,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.RunbookID, item.Title, item.TemplateID, item.Mode, item.ExecutionMode, item.Risk, item.ApprovalRequired, item.Enabled, item.MaxTargets, environments, item.ChangeWindow, item.RollbackRunbookID, item.UpdatedBy, updatedAt)
 	return err
 }

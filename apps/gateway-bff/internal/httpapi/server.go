@@ -3520,6 +3520,40 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, aiopsService.Executions())
 	})
+	mux.HandleFunc("GET /api/v1/aiops/execution-stats", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, aiopsService.ExecutionStats())
+	})
+	mux.HandleFunc("POST /api/v1/aiops/executions/{id}/rollback", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.RequestRollback(r.Context(), r.PathValue("id"), u.Username)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "EXECUTION_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrChangeDisabled) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "CHANGE_RUNBOOKS_DISABLED", "message": "回滚 Runbook 的真实执行全局开关未启用"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ROLLBACK_NOT_AVAILABLE", "message": "当前执行不满足回滚申请条件"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "AIOPS_TICKET_SERVICE_NOT_READY"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "ROLLBACK_REQUEST_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, item)
+	})
 	mux.HandleFunc("POST /api/v1/aiops/analyses/{id}/execute", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:execute") {
 			return

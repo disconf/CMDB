@@ -108,22 +108,24 @@ type Knowledge struct {
 }
 
 type Execution struct {
-	ID               string `json:"id"`
-	AnalysisID       string `json:"analysisId"`
-	RunbookID        string `json:"runbookId"`
-	RunbookTitle     string `json:"runbookTitle,omitempty"`
-	Status           string `json:"status"`
-	RequestedBy      string `json:"requestedBy"`
-	RequestedAt      string `json:"requestedAt"`
-	ApprovalRequired bool   `json:"approvalRequired"`
-	TicketID         string `json:"ticketId,omitempty"`
-	JobID            string `json:"jobId,omitempty"`
-	ApprovedBy       string `json:"approvedBy,omitempty"`
-	ApprovedAt       string `json:"approvedAt,omitempty"`
-	FinishedAt       string `json:"finishedAt,omitempty"`
-	ResultSummary    string `json:"resultSummary,omitempty"`
-	Error            string `json:"error,omitempty"`
-	Simulated        bool   `json:"simulated"`
+	ID                string `json:"id"`
+	AnalysisID        string `json:"analysisId"`
+	RunbookID         string `json:"runbookId"`
+	RunbookTitle      string `json:"runbookTitle,omitempty"`
+	Status            string `json:"status"`
+	RequestedBy       string `json:"requestedBy"`
+	RequestedAt       string `json:"requestedAt"`
+	ApprovalRequired  bool   `json:"approvalRequired"`
+	TicketID          string `json:"ticketId,omitempty"`
+	JobID             string `json:"jobId,omitempty"`
+	ApprovedBy        string `json:"approvedBy,omitempty"`
+	ApprovedAt        string `json:"approvedAt,omitempty"`
+	FinishedAt        string `json:"finishedAt,omitempty"`
+	ResultSummary     string `json:"resultSummary,omitempty"`
+	Error             string `json:"error,omitempty"`
+	Simulated         bool   `json:"simulated"`
+	Rollback          bool   `json:"rollback"`
+	ParentExecutionID string `json:"parentExecutionId,omitempty"`
 }
 
 type Summary struct {
@@ -169,8 +171,34 @@ type RunbookPolicy struct {
 	MaxTargets          int      `json:"maxTargets"`
 	AllowedEnvironments []string `json:"allowedEnvironments"`
 	ChangeWindow        string   `json:"changeWindow"`
+	RollbackRunbookID   string   `json:"rollbackRunbookId,omitempty"`
 	UpdatedAt           string   `json:"updatedAt,omitempty"`
 	UpdatedBy           string   `json:"updatedBy,omitempty"`
+}
+
+type RunbookExecutionStat struct {
+	RunbookID    string  `json:"runbookId"`
+	RunbookTitle string  `json:"runbookTitle"`
+	Total        int     `json:"total"`
+	Simulated    int     `json:"simulated"`
+	Live         int     `json:"live"`
+	Success      int     `json:"success"`
+	Failed       int     `json:"failed"`
+	InProgress   int     `json:"inProgress"`
+	SuccessRate  float64 `json:"successRate"`
+}
+
+type ExecutionStats struct {
+	Total           int                    `json:"total"`
+	Simulated       int                    `json:"simulated"`
+	Live            int                    `json:"live"`
+	PendingApproval int                    `json:"pendingApproval"`
+	Running         int                    `json:"running"`
+	Success         int                    `json:"success"`
+	Failed          int                    `json:"failed"`
+	Rejected        int                    `json:"rejected"`
+	SuccessRate     float64                `json:"successRate"`
+	ByRunbook       []RunbookExecutionStat `json:"byRunbook"`
 }
 
 type EvidenceInput struct {

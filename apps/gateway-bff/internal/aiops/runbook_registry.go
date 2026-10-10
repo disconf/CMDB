@@ -22,6 +22,7 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 	input.Risk = strings.ToLower(strings.TrimSpace(input.Risk))
 	input.ExecutionMode = strings.ToLower(strings.TrimSpace(input.ExecutionMode))
 	input.ChangeWindow = strings.TrimSpace(input.ChangeWindow)
+	input.RollbackRunbookID = strings.TrimSpace(input.RollbackRunbookID)
 	if input.ChangeWindow == "" {
 		input.ChangeWindow = "*"
 	}
@@ -53,8 +54,9 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 	if input.Mode == "change" && input.ExecutionMode == "live" && input.Enabled && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
 		return RunbookPolicy{}, ErrChangeDisabled
 	}
+	templates := s.jobs.Templates()
 	found := false
-	for _, template := range s.jobs.Templates() {
+	for _, template := range templates {
 		if template.ID == input.TemplateID {
 			found = true
 			break
@@ -62,6 +64,25 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 	}
 	if !found {
 		return RunbookPolicy{}, ErrValidation
+	}
+	if input.RollbackRunbookID != "" {
+		if input.Mode != "change" || input.RollbackRunbookID == runbookID {
+			return RunbookPolicy{}, ErrValidation
+		}
+		rollbackPolicy, ok := s.policyFor(input.RollbackRunbookID)
+		if !ok || rollbackPolicy.Mode != "change" {
+			return RunbookPolicy{}, ErrValidation
+		}
+		rollbackTemplateFound := false
+		for _, template := range templates {
+			if template.ID == rollbackPolicy.TemplateID {
+				rollbackTemplateFound = true
+				break
+			}
+		}
+		if !rollbackTemplateFound {
+			return RunbookPolicy{}, ErrValidation
+		}
 	}
 	environments := normalizeEnvironments(input.AllowedEnvironments)
 	if len(environments) == 0 {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Bot, BrainCircuit, CheckCircle2, Clock3, FileSearch, GitBranch, Lightbulb, Play, RefreshCw, Search, ShieldCheck, Sparkles, TicketCheck } from 'lucide-vue-next'
+import { Bot, BrainCircuit, CheckCircle2, Clock3, FileSearch, GitBranch, Lightbulb, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Sparkles, TicketCheck } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { confidenceTone, riskLabel } from '@/features/aiops/aiopsModel'
 
@@ -15,11 +15,13 @@ type RelatedRelease = { id:string; application:string; version:string; status:st
 type Feedback = { status:string; correctedRootCause?:string; note?:string; reviewer:string; reviewedAt:string }
 type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
-type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string }
-type Runbook = { runbookId:string; title:string; templateId:string; mode:string; executionMode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; updatedAt?:string; updatedBy?:string }
+type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string; simulated:boolean; rollback:boolean; parentExecutionId?:string }
+type Runbook = { runbookId:string; title:string; templateId:string; mode:string; executionMode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; rollbackRunbookId?:string; updatedAt?:string; updatedBy?:string }
 type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number; feedbackCount:number; confirmedFeedback:number; rejectedFeedback:number }
 type RootCauseFeedbackStat = { rootCause:string; confirmed:number; rejected:number; partial:number; accuracy:number; adjustment:number }
 type FeedbackStats = { total:number; confirmed:number; rejected:number; partial:number; accuracy:number; byRootCause:RootCauseFeedbackStat[] }
+type RunbookExecutionStat = { runbookId:string; runbookTitle:string; total:number; simulated:number; live:number; success:number; failed:number; inProgress:number; successRate:number }
+type ExecutionStats = { total:number; simulated:number; live:number; pendingApproval:number; running:number; success:number; failed:number; rejected:number; successRate:number; byRunbook:RunbookExecutionStat[] }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
@@ -27,7 +29,9 @@ const alerts = ref<Alert[]>([])
 const analyses = ref<Analysis[]>([])
 const knowledge = ref<Knowledge[]>([])
 const feedbackStats = ref<FeedbackStats>()
+const executionStats = ref<ExecutionStats>()
 const executions = ref<Execution[]>([])
+const rollbackPendingID = ref('')
 const runbooks = ref<Runbook[]>([])
 const selectedRunbook = ref<Runbook>()
 const selected = ref<Analysis>()
@@ -49,14 +53,15 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','feedback/stats','runbooks'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
+    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','execution-stats','feedback/stats','runbooks'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
     if (responses.some(response => !response.ok)) throw new Error('AIOps 数据加载失败')
-    const [summaryData, alertData, analysisData, knowledgeData, executionData, feedbackStatsData, runbookData] = await Promise.all(responses.map(response => response.json()))
+    const [summaryData, alertData, analysisData, knowledgeData, executionData, executionStatsData, feedbackStatsData, runbookData] = await Promise.all(responses.map(response => response.json()))
     summary.value = summaryData
     alerts.value = alertData
     analyses.value = analysisData
     knowledge.value = knowledgeData
     executions.value = executionData
+    executionStats.value = executionStatsData
     feedbackStats.value = feedbackStatsData
     runbooks.value = runbookData
     selectedRunbook.value = runbooks.value.find(item => item.runbookId===selectedRunbook.value?.runbookId) || runbooks.value[0]
@@ -192,7 +197,24 @@ async function exportReport() {
     error.value = reason instanceof Error ? reason.message : '报告导出失败'
   }
 }
-function statusLabel(value:string) { return ({ firing:'触发中', acknowledged:'已确认', pending:'待审批', approved:'已通过', completed:'已完成', failed:'失败', success:'成功', running:'运行中' } as Record<string,string>)[value] || value }
+function statusLabel(value:string) { return ({ firing:'触发中', acknowledged:'已确认', pending:'待审批', 'pending-approval':'待审批', rejected:'已驳回', approved:'已通过', completed:'已完成', failed:'失败', success:'成功', running:'运行中' } as Record<string,string>)[value] || value }
+function rollbackRunbook(item:Execution) { const policy = runbooks.value.find(value => value.runbookId === item.runbookId); return policy?.rollbackRunbookId || '' }
+async function requestRollback(item:Execution) {
+  rollbackPendingID.value = item.id
+  message.value = ''
+  error.value = ''
+  try {
+    const response = await fetch(`/api/v1/aiops/executions/${item.id}/rollback`, { method:'POST', headers:headers.value, body:'{}' })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.message || '回滚审批申请失败')
+    message.value = `回滚申请已转为审批工单 ${payload.ticketId || payload.id}，不会自动执行`
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '回滚审批申请失败'
+  } finally {
+    rollbackPendingID.value = ''
+  }
+}
 onMounted(load)
 </script>
 <template>
@@ -220,6 +242,10 @@ onMounted(load)
     <section v-if="feedbackStats?.total" class="feedback-stats">
       <header><div><h3><ShieldCheck/>反馈学习</h3><p>人工确认和否决结果会调整后续分析置信度。</p></div><b>整体准确率 {{ feedbackStats.accuracy }}% · {{ feedbackStats.total }} 条反馈</b></header>
       <div><article v-for="item in feedbackStats.byRootCause.slice(0,6)" :key="item.rootCause"><strong>{{ item.rootCause }}</strong><span>确认 {{ item.confirmed }} · 否决 {{ item.rejected }} · 部分 {{ item.partial }}</span><b :data-tone="item.adjustment>=0?'up':'down'">置信度调整 {{ item.adjustment>=0?'+':'' }}{{ item.adjustment }}</b></article></div>
+    </section>
+    <section v-if="executionStats?.total" class="execution-stats">
+      <header><div><h3><GitBranch/>执行审计统计</h3><p>演练与真实执行分开统计，回滚申请仍走独立审批。</p></div><b>完成成功率 {{ executionStats.successRate }}% · {{ executionStats.total }} 次</b></header>
+      <div><article><span>演练执行</span><strong>{{ executionStats.simulated }}</strong></article><article><span>真实执行</span><strong>{{ executionStats.live }}</strong></article><article><span>待审批</span><strong>{{ executionStats.pendingApproval }}</strong></article><article><span>运行中</span><strong>{{ executionStats.running }}</strong></article><article><span>成功</span><strong>{{ executionStats.success }}</strong></article><article><span>失败</span><strong>{{ executionStats.failed }}</strong></article></div>
     </section>
     <nav class="aiops-tabs"><button :class="{active:tab==='analysis'}" @click="tab='analysis'">智能分析</button><button :class="{active:tab==='runbooks'}" @click="tab='runbooks'">Runbook 策略</button><button :class="{active:tab==='knowledge'}" @click="tab='knowledge'">知识库</button></nav>
 
@@ -273,9 +299,10 @@ onMounted(load)
           <header><h3><TicketCheck/>受控执行闭环</h3><p>工单审批通过后，平台只按白名单模板创建任务，并把任务状态回写到 AIOps。</p></header>
           <div v-if="selectedExecutions.length" class="execution-list">
             <article v-for="item in selectedExecutions" :key="item.id">
-              <header><b>{{ item.runbookTitle || item.runbookId }}</b><span :data-status="item.status">{{ statusLabel(item.status) }}</span></header>
+              <header><div><b>{{ item.runbookTitle || item.runbookId }}</b><span class="execution-kind">{{ item.rollback ? '回滚' : item.simulated ? '演练' : '真实' }}</span></div><span :data-status="item.status">{{ statusLabel(item.status) }}</span></header>
               <dl><div><dt>审批工单</dt><dd>{{ item.ticketId || '—' }}</dd></div><div><dt>任务 ID</dt><dd>{{ item.jobId || '—' }}</dd></div><div><dt>审批人</dt><dd>{{ item.approvedBy || '—' }}</dd></div><div><dt>完成时间</dt><dd>{{ item.finishedAt || '—' }}</dd></div></dl>
               <p>{{ item.resultSummary || '等待工单审批' }}</p><em v-if="item.error">{{ item.error }}</em>
+              <button v-if="item.status==='failed' && rollbackRunbook(item)" class="rollback-request" :disabled="rollbackPendingID===item.id" @click="requestRollback(item)"><RotateCcw/>{{ rollbackPendingID===item.id ? '申请中' : '申请回滚审批' }}</button>
             </article>
           </div>
           <div v-else class="execution-empty">尚未提交受控执行申请</div>
@@ -295,6 +322,7 @@ onMounted(load)
           <label>风险<select v-model="selectedRunbook.risk"><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></label>
           <label>最大目标数<input v-model.number="selectedRunbook.maxTargets" type="number" min="1" max="10" /></label>
           <label>变更窗口<input v-model="selectedRunbook.changeWindow" placeholder="qa=*;production=Sat-Sun" /></label>
+          <label v-if="selectedRunbook.mode==='change'">失败回滚 Runbook<select v-model="selectedRunbook.rollbackRunbookId"><option value="">未配置</option><option v-for="item in runbooks.filter(value => value.mode==='change' && value.runbookId!==selectedRunbook?.runbookId)" :key="item.runbookId" :value="item.runbookId">{{ item.title }} · {{ item.enabled ? '已启用' : '未启用' }}</option></select></label>
           <label class="wide">允许环境<input :value="selectedRunbook.allowedEnvironments.join(',')" disabled /></label>
         </form>
         <footer><span><ShieldCheck/>当前阶段所有变更类 Runbook 默认关闭，必须显式开启全局开关。</span><button :class="{danger:selectedRunbook.enabled}" @click="toggleRunbook(selectedRunbook)">{{ selectedRunbook.enabled ? '禁用 Runbook' : '启用 Runbook' }}</button></footer>
