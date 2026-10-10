@@ -218,3 +218,10 @@ manual(人工) > csv > ssh > agent > node-exporter > snmp
 - 同步资产类型为“虚拟化集群 / 物理服务器(ESXi) / 虚拟机”，来源标记为 `vCenter`。
 - CMDB 新增“虚拟化平台”入口，支持查看和同步资源。
 
+
+## 腾讯云 CVM 云资源同步
+
+- 新增 `/api/v1/cmdb/cloud-tencent/*` 配置、测试、预览和同步接口。
+- 使用腾讯云 TC3-HMAC-SHA256 签名调用 CVM `DescribeInstances`。
+- SecretId 存配置，SecretKey 保存到 Vault。
+- 同步写入 `cloud-host` 资产并保留地域、可用区、实例规格、操作系统、CPU、内存和电源状态。
