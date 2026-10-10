@@ -137,3 +137,22 @@ GET /api/v1/aiops/analyses/{id}/report?format=markdown
 - 受控执行记录
 
 Markdown 模式可直接下载，作为故障复盘和工单附件的基础格式。
+## 反馈学习与置信度调整
+
+- 系统统计同一根因的 `confirmed`、`rejected`、`partial` 反馈。
+- 完成样本达到 3 条后：
+  - 确认率高于 50% 时提高后续分析置信度，最高 `+10`。
+  - 确认率低于 50% 时降低后续分析置信度，最低 `-10`。
+  - 部分正确反馈会轻微降低调整值。
+- 同一告警标题存在人工修正根因时，最近一次修正根因会优先应用到后续分析。
+- 分析结果记录：
+  - `confidenceAdjustment`
+  - `confidenceReason`
+  - `appliedFeedbackCount`
+- 反馈统计接口：
+
+```text
+GET /api/v1/aiops/feedback/stats
+```
+
+返回整体准确率，以及按根因聚合的确认、否决、部分正确和调整值。

@@ -13,16 +13,19 @@ type Timeline = { time:string; type:string; source:string; message:string }
 type RelatedTicket = { id:string; title:string; status:string; assignee:string }
 type RelatedRelease = { id:string; application:string; version:string; status:string; startedAt:string }
 type Feedback = { status:string; correctedRootCause?:string; note?:string; reviewer:string; reviewedAt:string }
-type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
+type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
 type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string }
 type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number; feedbackCount:number; confirmedFeedback:number; rejectedFeedback:number }
+type RootCauseFeedbackStat = { rootCause:string; confirmed:number; rejected:number; partial:number; accuracy:number; adjustment:number }
+type FeedbackStats = { total:number; confirmed:number; rejected:number; partial:number; accuracy:number; byRootCause:RootCauseFeedbackStat[] }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
 const alerts = ref<Alert[]>([])
 const analyses = ref<Analysis[]>([])
 const knowledge = ref<Knowledge[]>([])
+const feedbackStats = ref<FeedbackStats>()
 const executions = ref<Execution[]>([])
 const selected = ref<Analysis>()
 const query = ref('')
@@ -43,14 +46,15 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
+    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','feedback/stats'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
     if (responses.some(response => !response.ok)) throw new Error('AIOps 数据加载失败')
-    const [summaryData, alertData, analysisData, knowledgeData, executionData] = await Promise.all(responses.map(response => response.json()))
+    const [summaryData, alertData, analysisData, knowledgeData, executionData, feedbackStatsData] = await Promise.all(responses.map(response => response.json()))
     summary.value = summaryData
     alerts.value = alertData
     analyses.value = analysisData
     knowledge.value = knowledgeData
     executions.value = executionData
+    feedbackStats.value = feedbackStatsData
     selected.value = analyses.value.find(item => item.id === selected.value?.id) || analyses.value[0]
     if (!selectedAlertID.value && alerts.value.length) selectedAlertID.value = alerts.value[0].id
   } catch (reason) {
@@ -180,6 +184,10 @@ onMounted(load)
     <div v-if="error" class="aiops-message error">{{ error }}</div>
     <div v-if="message" class="aiops-message"><CheckCircle2/>{{ message }}</div>
 
+    <section v-if="feedbackStats?.total" class="feedback-stats">
+      <header><div><h3><ShieldCheck/>反馈学习</h3><p>人工确认和否决结果会调整后续分析置信度。</p></div><b>整体准确率 {{ feedbackStats.accuracy }}% · {{ feedbackStats.total }} 条反馈</b></header>
+      <div><article v-for="item in feedbackStats.byRootCause.slice(0,6)" :key="item.rootCause"><strong>{{ item.rootCause }}</strong><span>确认 {{ item.confirmed }} · 否决 {{ item.rejected }} · 部分 {{ item.partial }}</span><b :data-tone="item.adjustment>=0?'up':'down'">置信度调整 {{ item.adjustment>=0?'+':'' }}{{ item.adjustment }}</b></article></div>
+    </section>
     <nav class="aiops-tabs"><button :class="{active:tab==='analysis'}" @click="tab='analysis'">智能分析</button><button :class="{active:tab==='knowledge'}" @click="tab='knowledge'">知识库</button></nav>
 
     <div v-if="tab==='analysis'" class="aiops-workspace">

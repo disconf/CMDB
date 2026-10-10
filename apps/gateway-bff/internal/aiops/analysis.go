@@ -128,10 +128,18 @@ func (s *Service) Analyze(ctx context.Context, alertID string) (Analysis, error)
 		}
 	}
 
-	item.RootCause = inferRootCause(alert, metrics, asset)
-	item.Confidence = confidenceFromEvidence(item.Evidence)
+	inferredCause := inferRootCause(alert, metrics, asset)
+	correctedCause, adjustment, reason, feedbackCount := s.feedbackAdjustment(item.AlertTitle, inferredCause)
+	item.RootCause = correctedCause
+	item.Confidence = clampConfidence(confidenceFromEvidence(item.Evidence) + adjustment)
+	item.ConfidenceAdjustment = adjustment
+	item.ConfidenceReason = reason
+	item.AppliedFeedbackCount = feedbackCount
 	item.Recommendations = recommendationFor(item.RootCause)
-	item.Summary = fmt.Sprintf("基于 %d 项证据生成根因假设：%s；关联资产 %d 个，关联工单 %d 个，近期发布 %d 个。", len(item.Evidence), item.RootCause, len(item.RelatedAssets), len(item.Tickets), len(item.Releases))
+	if reason != "" {
+		item.Timeline = append(item.Timeline, TimelineEvent{Time: time.Now().Format("2006-01-02 15:04:05"), Type: "feedback", Source: "feedback", Message: reason})
+	}
+	item.Summary = fmt.Sprintf("基于 %d 项证据生成根因假设：%s；置信度调整 %+d，参考历史反馈 %d 条；关联资产 %d 个，关联工单 %d 个，近期发布 %d 个。", len(item.Evidence), item.RootCause, adjustment, feedbackCount, len(item.RelatedAssets), len(item.Tickets), len(item.Releases))
 	sort.SliceStable(item.Timeline, func(i, j int) bool { return item.Timeline[i].Time > item.Timeline[j].Time })
 	if err := s.repo.SaveAnalysis(ctx, item); err != nil {
 		return Analysis{}, err
@@ -270,6 +278,15 @@ func inferRootCause(alert monitor.Alert, metrics []monitor.Metric, asset cmdb.As
 	}
 }
 
+func clampConfidence(value int) int {
+	if value > 98 {
+		return 98
+	}
+	if value < 10 {
+		return 10
+	}
+	return value
+}
 func containsAny(value string, needles ...string) bool {
 	for _, needle := range needles {
 		if strings.Contains(value, needle) {

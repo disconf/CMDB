@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS aiops_analyses (
   target text NOT NULL DEFAULT '',
   root_cause text NOT NULL DEFAULT '',
   confidence integer NOT NULL DEFAULT 0,
+  confidence_adjustment integer NOT NULL DEFAULT 0,
+  confidence_reason text NOT NULL DEFAULT '',
+  applied_feedback_count integer NOT NULL DEFAULT 0,
   summary text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
@@ -35,6 +38,9 @@ CREATE TABLE IF NOT EXISTS aiops_analyses (
   feedback jsonb NOT NULL DEFAULT '{}'
 );
 ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS feedback jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS confidence_adjustment integer NOT NULL DEFAULT 0;
+ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS confidence_reason text NOT NULL DEFAULT '';
+ALTER TABLE aiops_analyses ADD COLUMN IF NOT EXISTS applied_feedback_count integer NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_aiops_analyses_alert_id ON aiops_analyses(alert_id);
 CREATE INDEX IF NOT EXISTS idx_aiops_analyses_created_at ON aiops_analyses(created_at DESC);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
@@ -110,15 +116,15 @@ func (r *postgresRepository) SaveAnalysis(ctx context.Context, item Analysis) er
 		}
 	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO aiops_analyses(id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-ON CONFLICT(id) DO UPDATE SET alert_title=excluded.alert_title,title=excluded.title,status=excluded.status,severity=excluded.severity,target=excluded.target,root_cause=excluded.root_cause,confidence=excluded.confidence,summary=excluded.summary,updated_at=excluded.updated_at,evidence=excluded.evidence,recommendations=excluded.recommendations,related_assets=excluded.related_assets,impact=excluded.impact,timeline=excluded.timeline,tickets=excluded.tickets,releases=excluded.releases,data_sources=excluded.data_sources,feedback=excluded.feedback`,
-		item.ID, item.AlertID, item.AlertTitle, item.Title, item.Status, item.Severity, item.Target, item.RootCause, item.Confidence, item.Summary, created, updated, evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback)
+INSERT INTO aiops_analyses(id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,confidence_adjustment,confidence_reason,applied_feedback_count,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+ON CONFLICT(id) DO UPDATE SET alert_title=excluded.alert_title,title=excluded.title,status=excluded.status,severity=excluded.severity,target=excluded.target,root_cause=excluded.root_cause,confidence=excluded.confidence,confidence_adjustment=excluded.confidence_adjustment,confidence_reason=excluded.confidence_reason,applied_feedback_count=excluded.applied_feedback_count,summary=excluded.summary,updated_at=excluded.updated_at,evidence=excluded.evidence,recommendations=excluded.recommendations,related_assets=excluded.related_assets,impact=excluded.impact,timeline=excluded.timeline,tickets=excluded.tickets,releases=excluded.releases,data_sources=excluded.data_sources,feedback=excluded.feedback`,
+		item.ID, item.AlertID, item.AlertTitle, item.Title, item.Status, item.Severity, item.Target, item.RootCause, item.Confidence, item.ConfidenceAdjustment, item.ConfidenceReason, item.AppliedFeedbackCount, item.Summary, created, updated, evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback)
 	return err
 }
 func (r *postgresRepository) LoadAnalyses(ctx context.Context) ([]Analysis, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback
+SELECT id,alert_id,alert_title,title,status,severity,target,root_cause,confidence,confidence_adjustment,confidence_reason,applied_feedback_count,summary,created_at,updated_at,evidence,recommendations,related_assets,impact,timeline,tickets,releases,data_sources,feedback
 FROM aiops_analyses ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -129,7 +135,7 @@ FROM aiops_analyses ORDER BY created_at DESC`)
 		var item Analysis
 		var created, updated time.Time
 		var evidence, recommendations, assets, impact, timeline, tickets, releases, sources, feedback []byte
-		if err = rows.Scan(&item.ID, &item.AlertID, &item.AlertTitle, &item.Title, &item.Status, &item.Severity, &item.Target, &item.RootCause, &item.Confidence, &item.Summary, &created, &updated, &evidence, &recommendations, &assets, &impact, &timeline, &tickets, &releases, &sources, &feedback); err != nil {
+		if err = rows.Scan(&item.ID, &item.AlertID, &item.AlertTitle, &item.Title, &item.Status, &item.Severity, &item.Target, &item.RootCause, &item.Confidence, &item.ConfidenceAdjustment, &item.ConfidenceReason, &item.AppliedFeedbackCount, &item.Summary, &created, &updated, &evidence, &recommendations, &assets, &impact, &timeline, &tickets, &releases, &sources, &feedback); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = created.Local().Format("2006-01-02 15:04:05")

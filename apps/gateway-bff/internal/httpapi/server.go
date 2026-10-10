@@ -3449,6 +3449,12 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, report)
 	})
+	mux.HandleFunc("GET /api/v1/aiops/feedback/stats", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, aiopsService.FeedbackStats())
+	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

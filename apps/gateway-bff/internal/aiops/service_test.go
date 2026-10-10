@@ -143,6 +143,10 @@ func TestAnalyzeAndCreateApprovalTicket(t *testing.T) {
 	if summary := s.Summary(); summary.Accuracy != 100 || summary.ConfirmedFeedback != 1 {
 		t.Fatalf("feedback summary: %#v", summary)
 	}
+	stats := s.FeedbackStats()
+	if stats.Total != 1 || stats.Confirmed != 1 || len(stats.ByRootCause) == 0 {
+		t.Fatalf("feedback stats: %#v", stats)
+	}
 }
 
 func TestKnowledgeSearch(t *testing.T) {

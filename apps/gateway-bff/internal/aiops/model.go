@@ -72,27 +72,30 @@ type Feedback struct {
 }
 
 type Analysis struct {
-	ID              string           `json:"id"`
-	AlertID         string           `json:"alertId"`
-	AlertTitle      string           `json:"alertTitle,omitempty"`
-	Title           string           `json:"title"`
-	Status          string           `json:"status"`
-	Severity        string           `json:"severity"`
-	Target          string           `json:"target"`
-	RootCause       string           `json:"rootCause"`
-	Confidence      int              `json:"confidence"`
-	Summary         string           `json:"summary"`
-	CreatedAt       string           `json:"createdAt"`
-	UpdatedAt       string           `json:"updatedAt,omitempty"`
-	Evidence        []Evidence       `json:"evidence"`
-	Recommendations []Recommendation `json:"recommendations"`
-	RelatedAssets   []RelatedAsset   `json:"relatedAssets"`
-	Impact          ImpactSummary    `json:"impact"`
-	Timeline        []TimelineEvent  `json:"timeline"`
-	Tickets         []RelatedTicket  `json:"tickets"`
-	Releases        []RelatedRelease `json:"releases"`
-	DataSources     []string         `json:"dataSources"`
-	Feedback        *Feedback        `json:"feedback,omitempty"`
+	ID                   string           `json:"id"`
+	AlertID              string           `json:"alertId"`
+	AlertTitle           string           `json:"alertTitle,omitempty"`
+	Title                string           `json:"title"`
+	Status               string           `json:"status"`
+	Severity             string           `json:"severity"`
+	Target               string           `json:"target"`
+	RootCause            string           `json:"rootCause"`
+	Confidence           int              `json:"confidence"`
+	Summary              string           `json:"summary"`
+	CreatedAt            string           `json:"createdAt"`
+	UpdatedAt            string           `json:"updatedAt,omitempty"`
+	Evidence             []Evidence       `json:"evidence"`
+	Recommendations      []Recommendation `json:"recommendations"`
+	RelatedAssets        []RelatedAsset   `json:"relatedAssets"`
+	Impact               ImpactSummary    `json:"impact"`
+	Timeline             []TimelineEvent  `json:"timeline"`
+	Tickets              []RelatedTicket  `json:"tickets"`
+	Releases             []RelatedRelease `json:"releases"`
+	DataSources          []string         `json:"dataSources"`
+	ConfidenceAdjustment int              `json:"confidenceAdjustment"`
+	ConfidenceReason     string           `json:"confidenceReason,omitempty"`
+	AppliedFeedbackCount int              `json:"appliedFeedbackCount"`
+	Feedback             *Feedback        `json:"feedback,omitempty"`
 }
 
 type Knowledge struct {
@@ -169,4 +172,22 @@ type Report struct {
 	Executions  []Execution `json:"executions"`
 	GeneratedAt string      `json:"generatedAt"`
 	Markdown    string      `json:"markdown"`
+}
+
+type RootCauseFeedbackStat struct {
+	RootCause  string  `json:"rootCause"`
+	Confirmed  int     `json:"confirmed"`
+	Rejected   int     `json:"rejected"`
+	Partial    int     `json:"partial"`
+	Accuracy   float64 `json:"accuracy"`
+	Adjustment int     `json:"adjustment"`
+}
+
+type FeedbackStats struct {
+	Total       int                     `json:"total"`
+	Confirmed   int                     `json:"confirmed"`
+	Rejected    int                     `json:"rejected"`
+	Partial     int                     `json:"partial"`
+	Accuracy    float64                 `json:"accuracy"`
+	ByRootCause []RootCauseFeedbackStat `json:"byRootCause"`
 }
