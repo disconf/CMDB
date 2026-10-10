@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     cmdb_base_url:str="http://gateway:8080"
     cmdb_token:str=""
     cmdb_internal_token:str=""
-    runner_command_map_json:str='{"health-check --full":"health-check.yml","install-node-exporter":"install-node-exporter.yml","rolling-restart --wait":"rolling-restart.yml","log-cleanup --days 14":"log-cleanup.yml","patch-install --approved":"patch-install.yml"}'
+    runner_command_map_json:str='{"health-check --full":"health-check.yml","install-node-exporter":"install-node-exporter.yml","rolling-restart --wait":"rolling-restart.yml","log-cleanup --days 14":"log-cleanup.yml","log-cleanup-rollback":"log-cleanup-rollback.yml","patch-install --approved":"patch-install.yml"}'
     playbook_dir:str="/opt/runner/playbooks"
     work_dir:str="/tmp/cmdb-runner"
     max_targets:int=Field(default=100,ge=1,le=1000)

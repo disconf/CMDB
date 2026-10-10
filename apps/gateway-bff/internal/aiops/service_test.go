@@ -71,7 +71,7 @@ type fakeJobs struct {
 }
 
 func (f *fakeJobs) Templates() []jobs.Template {
-	return []jobs.Template{{ID: "tpl-health", Name: "主机健康巡检", Risk: "low", Enabled: true}, {ID: "tpl-clean", Name: "日志空间清理", Risk: "low", Enabled: true}, {ID: "tpl-restart", Name: "应用滚动重启", Risk: "medium", Enabled: true}, {ID: "tpl-patch", Name: "安全补丁安装", Risk: "high", Enabled: true}}
+	return []jobs.Template{{ID: "tpl-health", Name: "主机健康巡检", Risk: "low", Enabled: true}, {ID: "tpl-clean", Name: "日志空间清理", Risk: "low", Enabled: true}, {ID: "tpl-clean-rollback", Name: "日志清理回滚", Risk: "medium", Enabled: true}, {ID: "tpl-restart", Name: "应用滚动重启", Risk: "medium", Enabled: true}, {ID: "tpl-patch", Name: "安全补丁安装", Risk: "high", Enabled: true}}
 }
 func (f *fakeJobs) Create(in jobs.CreateInput) (jobs.Job, error) {
 	f.created = append(f.created, in)

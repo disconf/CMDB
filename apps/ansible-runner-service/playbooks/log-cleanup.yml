@@ -1,10 +1,13 @@
-- name: Clean old log files
+- name: Clean old log files with recoverable archive
   hosts: all
-  gather_facts: false
+  gather_facts: true
   become: true
   vars:
     log_dir: /var/log
     keep_days: 14
+    snapshot_id: "manual-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+    snapshot_root: /var/lib/cmdb/change-snapshots
+    archive_dir: "{{ snapshot_root }}/{{ snapshot_id }}"
   tasks:
     - name: Find expired regular files
       ansible.builtin.find:
@@ -14,10 +17,39 @@
         file_type: file
         recurse: true
       register: expired_logs
-    - name: Remove expired files
+
+    - name: Create archive directories
+      ansible.builtin.file:
+        path: "{{ archive_dir }}/{{ item.path | regex_replace('^/', '') | dirname }}"
+        state: directory
+        mode: '0700'
+      loop: "{{ expired_logs.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Archive expired files
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ archive_dir }}/{{ item.path | regex_replace('^/', '') }}"
+        remote_src: true
+      loop: "{{ expired_logs.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Write rollback manifest
+      ansible.builtin.copy:
+        dest: "{{ archive_dir }}/manifest.json"
+        mode: '0600'
+        content: "{{ expired_logs.files | to_nice_json }}"
+
+    - name: Remove expired files after archive
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: absent
       loop: "{{ expired_logs.files }}"
       loop_control:
         label: "{{ item.path }}"
+
+    - name: Report rollback reference
+      ansible.builtin.debug:
+        msg: "snapshot_id={{ snapshot_id }} archived={{ expired_logs.files | length }} removed={{ expired_logs.files | length }}"

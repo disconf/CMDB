@@ -135,7 +135,7 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		Targets:     targets,
 		Operator:    "aiops:" + ticket.Applicant,
 		TicketID:    ticket.ID,
-		Parameters:  map[string]string{"aiops_analysis_id": analysis.ID, "runbook_id": execution.RunbookID},
+		Parameters:  s.aiOpsJobParameters(analysis.ID, execution, policy, targets[0]),
 		PreApproved: true,
 	})
 	if err != nil {
@@ -349,4 +349,17 @@ func (s *Service) findExecutionByJob(jobID string) (Execution, bool) {
 		}
 	}
 	return Execution{}, false
+}
+func (s *Service) aiOpsJobParameters(analysisID string, execution Execution, policy RunbookPolicy, targetID string) map[string]string {
+	parameters := map[string]string{"aiops_analysis_id": analysisID, "runbook_id": execution.RunbookID}
+	if execution.ChangePlan.BaselineID == "" {
+		if baseline, ok := s.latestPassedCanary(policy.RunbookID, targetID, 24*time.Hour); ok {
+			execution.ChangePlan.BaselineID = baseline.ID
+			execution.ChangePlan.BaselineMetrics = len(baseline.Baseline)
+		}
+	}
+	if execution.ChangePlan.BaselineID != "" {
+		parameters["snapshot_id"] = execution.ChangePlan.BaselineID
+	}
+	return parameters
 }

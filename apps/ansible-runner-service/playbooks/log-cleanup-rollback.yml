@@ -1,0 +1,47 @@
+- name: Restore archived log files
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    snapshot_id: ""
+    snapshot_root: /var/lib/cmdb/change-snapshots
+    archive_dir: "{{ snapshot_root }}/{{ snapshot_id }}"
+  tasks:
+    - name: Require snapshot id
+      ansible.builtin.assert:
+        that:
+          - snapshot_id | length > 0
+        fail_msg: "snapshot_id is required for log cleanup rollback"
+
+    - name: Read rollback manifest
+      ansible.builtin.slurp:
+        src: "{{ archive_dir }}/manifest.json"
+      register: manifest_payload
+
+    - name: Parse rollback manifest
+      ansible.builtin.set_fact:
+        rollback_files: "{{ manifest_payload.content | b64decode | from_json }}"
+
+    - name: Restore parent directories
+      ansible.builtin.file:
+        path: "{{ item.path | dirname }}"
+        state: directory
+      loop: "{{ rollback_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Restore archived files
+      ansible.builtin.copy:
+        src: "{{ archive_dir }}/{{ item.path | regex_replace('^/', '') }}"
+        dest: "{{ item.path }}"
+        remote_src: true
+        mode: "{{ item.mode }}"
+        owner: "{{ item.uid }}"
+        group: "{{ item.gid }}"
+      loop: "{{ rollback_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Report rollback result
+      ansible.builtin.debug:
+        msg: "snapshot_id={{ snapshot_id }} restored={{ rollback_files | length }}"

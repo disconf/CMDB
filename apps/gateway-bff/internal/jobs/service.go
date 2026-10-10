@@ -288,7 +288,8 @@ func NewService() *Service {
 		{ID: "tpl-health", Name: "主机健康巡检", Category: "巡检", Description: "检查 CPU、内存、磁盘与关键进程", Command: "health-check --full", Version: 1, Risk: "low", LastRun: "--", Enabled: true},
 		{ID: "tpl-node-exporter", Name: "安装 Node Exporter", Category: "监控", Description: "为 CMDB 主机安装并启动标准主机指标采集器", Command: "install-node-exporter", Version: 1, Risk: "medium", LastRun: "--", Enabled: true},
 		{ID: "tpl-restart", Name: "应用滚动重启", Category: "变更", Description: "按实例顺序执行优雅重启", Command: "rolling-restart --wait", Version: 1, Risk: "medium", LastRun: "--", Enabled: true},
-		{ID: "tpl-clean", Name: "日志空间清理", Category: "维护", Description: "清理超过保留周期的归档日志", Command: "log-cleanup --days 14", Version: 1, Risk: "low", LastRun: "--", Enabled: true},
+		{ID: "tpl-clean", Name: "日志空间清理", Category: "维护", Description: "归档后清理超过保留周期的日志，支持回滚", Command: "log-cleanup --days 14", Version: 2, Risk: "medium", LastRun: "--", Enabled: true},
+		{ID: "tpl-clean-rollback", Name: "日志清理回滚", Category: "变更", Description: "按清理清单从归档恢复日志文件", Command: "log-cleanup-rollback", Version: 1, Risk: "medium", LastRun: "--", Enabled: true},
 		{ID: "tpl-patch", Name: "安全补丁安装", Category: "安全", Description: "安装已审批的系统安全更新", Command: "patch-install --approved", Version: 1, Risk: "high", LastRun: "--", Enabled: true},
 	}
 	s := &Service{playbooks: []Playbook{}, templates: defaultTemplates, schedules: []Schedule{}, next: 1, cancels: map[string]context.CancelFunc{}, executor: newExecutorFromEnv(), location: scheduleLocation(), templateVersions: map[string][]TemplateVersion{}, playbookVersions: map[string][]PlaybookVersion{}, retryTimers: map[string]*time.Timer{}}

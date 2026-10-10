@@ -203,6 +203,7 @@ class RunnerService:
                     playbook=str(playbook_path),
                     inventory=str(inventory_path),
                     envvars=envvars,
+                    extravars=payload.parameters,
                     event_handler=event_handler,
                     cancel_callback=cancel.is_set,
                     quiet=True,

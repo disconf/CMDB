@@ -253,3 +253,11 @@ Runbook 支持两种执行方式：
 - 回滚计划记录基线 ID 和指标数量，回滚后应与基线指标进行对比验证。
 - 基线只保存指标快照，不包含密码、Token 或其他敏感凭据。
 
+## 可恢复日志清理与回滚 Runbook
+
+- Runner 新增 `log-cleanup-rollback` 命令和 `log-cleanup-rollback.yml` 回滚 Playbook。
+- 日志清理前会按变更基线 ID 创建归档目录，复制过期文件并生成 `manifest.json`，归档完成后才删除原文件。
+- 审计任务参数会将 `snapshot_id` 传给 Runner，回滚任务按清单恢复文件、目录和权限。
+- `rb-log-cleanup` 关联 `rb-log-cleanup-rollback`，但日志清理仍保持禁用和演练模式，未执行真实删除。
+- Runner 1.0.5 已通过只读健康检查和两个 Playbook 的语法验证。
+
