@@ -13,6 +13,7 @@ type memoryRepository struct {
 	mu            sync.RWMutex
 	analyses      []Analysis
 	knowledge     []Knowledge
+	versions      []KnowledgeVersion
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
@@ -20,7 +21,7 @@ type memoryRepository struct {
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
 }
 
 func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {
@@ -48,9 +49,41 @@ func (r *memoryRepository) DeleteKnowledge(_ context.Context, id string) error {
 	for i := range r.knowledge {
 		if r.knowledge[i].ID == id {
 			r.knowledge = append(r.knowledge[:i], r.knowledge[i+1:]...)
+			break
+		}
+	}
+	filtered := r.versions[:0]
+	for _, item := range r.versions {
+		if item.KnowledgeID != id {
+			filtered = append(filtered, item)
+		}
+	}
+	r.versions = filtered
+	return nil
+}
+
+func (r *memoryRepository) LoadKnowledgeVersions(_ context.Context, knowledgeID string) ([]KnowledgeVersion, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := []KnowledgeVersion{}
+	for _, item := range r.versions {
+		if item.KnowledgeID == knowledgeID {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+func (r *memoryRepository) SaveKnowledgeVersion(_ context.Context, item KnowledgeVersion) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.versions {
+		if r.versions[i].ID == item.ID {
+			r.versions[i] = item
 			return nil
 		}
 	}
+	r.versions = append([]KnowledgeVersion{item}, r.versions...)
 	return nil
 }
 

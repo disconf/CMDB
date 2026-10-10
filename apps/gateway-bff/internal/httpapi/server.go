@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -3733,6 +3734,43 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_HELPFUL_FAILED"})
 			return
 		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/aiops/knowledge/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		items, err := aiopsService.KnowledgeVersions(r.PathValue("id"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_VERSION_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/{id}/versions/{version}/restore", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		version, err := strconv.Atoi(r.PathValue("version"))
+		if err != nil || version <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_VERSION"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.RestoreKnowledge(r.PathValue("id"), version, user.Username)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_VERSION_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_RESTORE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.knowledge.restore", item.ID, fmt.Sprintf("version=%d", version))
 		writeJSON(w, http.StatusOK, item)
 	})
 	mux.HandleFunc("POST /api/v1/aiops/knowledge/synthesize", func(w http.ResponseWriter, r *http.Request) {

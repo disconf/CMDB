@@ -71,6 +71,17 @@ ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS author text NOT NULL DEFAUL
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS related jsonb NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_updated_at ON aiops_knowledge(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_category ON aiops_knowledge(category);
+CREATE TABLE IF NOT EXISTS aiops_knowledge_versions (
+  id text PRIMARY KEY,
+  knowledge_id text NOT NULL REFERENCES aiops_knowledge(id) ON DELETE CASCADE,
+  version integer NOT NULL,
+  snapshot jsonb NOT NULL,
+  changed_by text NOT NULL DEFAULT '',
+  change_summary text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(knowledge_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_versions_knowledge ON aiops_knowledge_versions(knowledge_id, version DESC);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   id text PRIMARY KEY,
   analysis_id text NOT NULL,
@@ -303,6 +314,38 @@ func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, er
 func (r *postgresRepository) DeleteKnowledge(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM aiops_knowledge WHERE id=$1`, id)
 	return err
+}
+
+func (r *postgresRepository) SaveKnowledgeVersion(ctx context.Context, item KnowledgeVersion) error {
+	snapshot, _ := json.Marshal(item.Snapshot)
+	createdAt, err := parseAITime(item.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge_versions(id,knowledge_id,version,snapshot,changed_by,change_summary,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot,changed_by=excluded.changed_by,change_summary=excluded.change_summary`,
+		item.ID, item.KnowledgeID, item.Version, snapshot, item.ChangedBy, item.ChangeSummary, createdAt)
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledgeVersions(ctx context.Context, knowledgeID string) ([]KnowledgeVersion, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,knowledge_id,version,snapshot,changed_by,change_summary,created_at FROM aiops_knowledge_versions WHERE knowledge_id=$1 ORDER BY version DESC`, knowledgeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeVersion{}
+	for rows.Next() {
+		var item KnowledgeVersion
+		var snapshot []byte
+		var createdAt time.Time
+		if err = rows.Scan(&item.ID, &item.KnowledgeID, &item.Version, &snapshot, &item.ChangedBy, &item.ChangeSummary, &createdAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(snapshot, &item.Snapshot)
+		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
 }
 
 func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) error {

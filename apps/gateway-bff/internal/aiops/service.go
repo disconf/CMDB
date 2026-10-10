@@ -61,6 +61,11 @@ func NewService() *Service {
 			_ = s.repo.SaveKnowledge(ctx, item)
 		}
 	}
+	for _, item := range s.knowledge {
+		if versions, err := s.repo.LoadKnowledgeVersions(ctx, item.ID); err == nil && len(versions) == 0 {
+			_, _ = s.saveKnowledgeVersion(item, "system", "初始化版本")
+		}
+	}
 	if analyses, err := s.repo.LoadAnalyses(ctx); err == nil {
 		s.analyses = analyses
 	}
@@ -539,6 +544,7 @@ func (s *Service) CreateKnowledge(input KnowledgeInput, author string) (Knowledg
 	s.mu.Lock()
 	s.knowledge = append([]Knowledge{item}, s.knowledge...)
 	s.mu.Unlock()
+	_, _ = s.saveKnowledgeVersion(item, author, "创建知识")
 	return item, nil
 }
 
@@ -574,6 +580,7 @@ func (s *Service) UpdateKnowledge(id string, input KnowledgeInput, author string
 	if err = s.repo.SaveKnowledge(context.Background(), updated); err != nil {
 		return Knowledge{}, err
 	}
+	_, _ = s.saveKnowledgeVersion(updated, author, "编辑知识")
 	return updated, nil
 }
 
@@ -620,6 +627,95 @@ func (s *Service) MarkKnowledgeHelpful(id string) (Knowledge, error) {
 	}
 	s.mu.Unlock()
 	return Knowledge{}, ErrNotFound
+}
+
+func (s *Service) KnowledgeVersions(id string) ([]KnowledgeVersion, error) {
+	if _, ok := s.knowledgeExists(id); !ok {
+		return nil, ErrNotFound
+	}
+	items, err := s.repo.LoadKnowledgeVersions(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Version > items[j].Version })
+	return items, nil
+}
+
+func (s *Service) RestoreKnowledge(id string, version int, author string) (Knowledge, error) {
+	versions, err := s.repo.LoadKnowledgeVersions(context.Background(), id)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	var target *KnowledgeVersion
+	for index := range versions {
+		if versions[index].Version == version {
+			target = &versions[index]
+			break
+		}
+	}
+	if target == nil {
+		return Knowledge{}, ErrNotFound
+	}
+	_ = s.reloadKnowledge()
+	s.mu.RLock()
+	exists := false
+	for _, item := range s.knowledge {
+		if item.ID == id {
+			exists = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if !exists {
+		return Knowledge{}, ErrNotFound
+	}
+	restored := target.Snapshot
+	restored.ID = id
+	restored.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+	if err = s.repo.SaveKnowledge(context.Background(), restored); err != nil {
+		return Knowledge{}, err
+	}
+	s.mu.Lock()
+	for index := range s.knowledge {
+		if s.knowledge[index].ID == id {
+			s.knowledge[index] = restored
+			break
+		}
+	}
+	s.mu.Unlock()
+	_, _ = s.saveKnowledgeVersion(restored, author, fmt.Sprintf("从版本 %d 还原", version))
+	return restored, nil
+}
+
+func (s *Service) knowledgeExists(id string) (Knowledge, bool) {
+	_ = s.reloadKnowledge()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.knowledge {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return Knowledge{}, false
+}
+
+func (s *Service) saveKnowledgeVersion(item Knowledge, author, summary string) (KnowledgeVersion, error) {
+	versions, err := s.repo.LoadKnowledgeVersions(context.Background(), item.ID)
+	if err != nil {
+		return KnowledgeVersion{}, err
+	}
+	maxVersion := 0
+	for _, version := range versions {
+		if version.Version > maxVersion {
+			maxVersion = version.Version
+		}
+	}
+	createdAt := time.Now().Format("2006-01-02 15:04:05")
+	version := KnowledgeVersion{ID: newID("kbv"), KnowledgeID: item.ID, Version: maxVersion + 1, Snapshot: item, ChangedBy: strings.TrimSpace(author), ChangeSummary: strings.TrimSpace(summary), CreatedAt: createdAt}
+	if err = s.repo.SaveKnowledgeVersion(context.Background(), version); err != nil {
+		return KnowledgeVersion{}, err
+	}
+	return version, nil
 }
 
 func (s *Service) CreateKnowledgeFromAnalysis(analysisID, author string) (Knowledge, error) {

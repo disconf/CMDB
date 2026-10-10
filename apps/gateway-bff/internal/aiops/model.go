@@ -134,6 +134,16 @@ type KnowledgeRef struct {
 	Status string `json:"status,omitempty"`
 }
 
+type KnowledgeVersion struct {
+	ID            string    `json:"id"`
+	KnowledgeID   string    `json:"knowledgeId"`
+	Version       int       `json:"version"`
+	Snapshot      Knowledge `json:"snapshot"`
+	ChangedBy     string    `json:"changedBy"`
+	ChangeSummary string    `json:"changeSummary"`
+	CreatedAt     string    `json:"createdAt"`
+}
+
 type ChangePlanStep struct {
 	Order  int    `json:"order"`
 	Title  string `json:"title"`
@@ -210,6 +220,8 @@ type repository interface {
 	LoadKnowledge(context.Context) ([]Knowledge, error)
 	SaveKnowledge(context.Context, Knowledge) error
 	DeleteKnowledge(context.Context, string) error
+	LoadKnowledgeVersions(context.Context, string) ([]KnowledgeVersion, error)
+	SaveKnowledgeVersion(context.Context, KnowledgeVersion) error
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
 	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)

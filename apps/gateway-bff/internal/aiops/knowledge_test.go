@@ -14,12 +14,24 @@ func TestKnowledgeCRUDAndAnalysisSynthesis(t *testing.T) {
 	if len(service.SearchKnowledgeAll("unique")) != 1 {
 		t.Fatal("management search must return draft knowledge")
 	}
-	updated, err := service.UpdateKnowledge(created.ID, KnowledgeInput{Title: created.Title, Category: created.Category, Summary: created.Summary, Content: created.Content, Tags: created.Tags, Status: "published"}, "tester")
+	updated, err := service.UpdateKnowledge(created.ID, KnowledgeInput{Title: created.Title, Category: created.Category, Summary: created.Summary, Content: "content-v2", Tags: created.Tags, Status: "published"}, "tester")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Status != "published" || len(service.SearchKnowledge("unique")) != 1 {
 		t.Fatalf("unexpected published knowledge: %#v", updated)
+	}
+	versions, err := service.KnowledgeVersions(created.ID)
+	if err != nil || len(versions) != 2 || versions[0].Version != 2 {
+		t.Fatalf("unexpected knowledge versions: %#v %v", versions, err)
+	}
+	restored, err := service.RestoreKnowledge(created.ID, 1, "tester")
+	if err != nil || restored.Content != "content" {
+		t.Fatalf("restore knowledge failed: %#v %v", restored, err)
+	}
+	afterRestore, err := service.KnowledgeVersions(created.ID)
+	if err != nil || len(afterRestore) != 3 {
+		t.Fatalf("restore did not create a version: %#v %v", afterRestore, err)
 	}
 	helpful, err := service.MarkKnowledgeHelpful(created.ID)
 	if err != nil || helpful.Helpful != 1 {
