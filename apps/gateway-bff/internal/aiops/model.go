@@ -123,6 +123,7 @@ type Execution struct {
 	FinishedAt       string `json:"finishedAt,omitempty"`
 	ResultSummary    string `json:"resultSummary,omitempty"`
 	Error            string `json:"error,omitempty"`
+	Simulated        bool   `json:"simulated"`
 }
 
 type Summary struct {
@@ -161,6 +162,7 @@ type RunbookPolicy struct {
 	Title               string   `json:"title"`
 	TemplateID          string   `json:"templateId"`
 	Mode                string   `json:"mode"`
+	ExecutionMode       string   `json:"executionMode"`
 	Risk                string   `json:"risk"`
 	ApprovalRequired    bool     `json:"approvalRequired"`
 	Enabled             bool     `json:"enabled"`

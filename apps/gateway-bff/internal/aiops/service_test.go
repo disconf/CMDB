@@ -161,6 +161,7 @@ func TestRunbookChangeGate(t *testing.T) {
 		t.Fatal("missing change runbook")
 	}
 	policy.Enabled = true
+	policy.ExecutionMode = "live"
 	t.Setenv("AIOPS_ALLOW_CHANGE_RUNBOOKS", "false")
 	if _, err := s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin"); !errors.Is(err, ErrChangeDisabled) {
 		t.Fatalf("expected change gate, got %v", err)
@@ -169,6 +170,40 @@ func TestRunbookChangeGate(t *testing.T) {
 	updated, err := s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin")
 	if err != nil || !updated.Enabled || updated.TemplateID != "tpl-clean" {
 		t.Fatalf("update runbook: %#v %v", updated, err)
+	}
+}
+func TestRunbookSimulationCanEnableWithoutLiveGate(t *testing.T) {
+	s := NewService()
+	s.SetJobProvider(&fakeJobs{})
+	policy, ok := s.policyFor("rb-log-cleanup")
+	if !ok {
+		t.Fatal("missing change runbook")
+	}
+	policy.Enabled = true
+	policy.ExecutionMode = "simulate"
+	t.Setenv("AIOPS_ALLOW_CHANGE_RUNBOOKS", "false")
+	updated, err := s.UpdateRunbook(context.Background(), policy.RunbookID, policy, "admin")
+	if err != nil || !updated.Enabled || updated.ExecutionMode != "simulate" {
+		t.Fatalf("simulation enable: %#v %v", updated, err)
+	}
+	s.SetAlertProvider(fakeAlerts{})
+	s.SetAssetProvider(fakeAssets{})
+	s.SetImpactProvider(fakeImpact{})
+	ticketsProvider := &fakeTickets{}
+	s.SetTicketProvider(ticketsProvider)
+	s.SetReleaseProvider(fakeReleases{})
+	analysis, err := s.Analyze(context.Background(), "alert-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := Execution{ID: "aiexec-sim", AnalysisID: analysis.ID, RunbookID: policy.RunbookID, RunbookTitle: policy.Title, Status: "pending-approval", TicketID: "TKT-SIM"}
+	if err = s.saveExecution(context.Background(), execution); err != nil {
+		t.Fatal(err)
+	}
+	s.HandleTicketDecision(context.Background(), tickets.Ticket{ID: "TKT-SIM", Applicant: "admin", AutomationTemplate: policy.RunbookID}, "test-token", "approve")
+	simulated, _ := s.findExecutionByTicket("TKT-SIM")
+	if simulated.Status != "success" || !simulated.Simulated || simulated.JobID != "" {
+		t.Fatalf("simulation result: %#v", simulated)
 	}
 }
 func TestKnowledgeSearch(t *testing.T) {

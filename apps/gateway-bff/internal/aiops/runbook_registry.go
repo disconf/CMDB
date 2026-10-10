@@ -20,9 +20,17 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 	input.TemplateID = strings.TrimSpace(input.TemplateID)
 	input.Mode = strings.ToLower(strings.TrimSpace(input.Mode))
 	input.Risk = strings.ToLower(strings.TrimSpace(input.Risk))
+	input.ExecutionMode = strings.ToLower(strings.TrimSpace(input.ExecutionMode))
 	input.ChangeWindow = strings.TrimSpace(input.ChangeWindow)
 	if input.ChangeWindow == "" {
 		input.ChangeWindow = "*"
+	}
+	if input.ExecutionMode == "" {
+		if input.Mode == "change" {
+			input.ExecutionMode = "simulate"
+		} else {
+			input.ExecutionMode = "live"
+		}
 	}
 	if input.MaxTargets <= 0 {
 		input.MaxTargets = 1
@@ -36,7 +44,13 @@ func (s *Service) UpdateRunbook(ctx context.Context, runbookID string, input Run
 	if input.Risk != "low" && input.Risk != "medium" && input.Risk != "high" {
 		return RunbookPolicy{}, ErrValidation
 	}
-	if input.Mode == "change" && input.Enabled && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
+	if input.Mode == "read-only" {
+		input.ExecutionMode = "live"
+	}
+	if input.Mode == "change" && input.ExecutionMode != "simulate" && input.ExecutionMode != "live" {
+		return RunbookPolicy{}, ErrValidation
+	}
+	if input.Mode == "change" && input.ExecutionMode == "live" && input.Enabled && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
 		return RunbookPolicy{}, ErrChangeDisabled
 	}
 	found := false

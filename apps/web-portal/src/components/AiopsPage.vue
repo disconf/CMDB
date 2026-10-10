@@ -16,7 +16,7 @@ type Feedback = { status:string; correctedRootCause?:string; note?:string; revie
 type Analysis = { id:string; alertId:string; alertTitle:string; title:string; severity:string; target:string; rootCause:string; confidence:number; confidenceAdjustment:number; confidenceReason?:string; appliedFeedbackCount:number; summary:string; createdAt:string; evidence:Evidence[]; recommendations:Recommendation[]; relatedAssets:RelatedAsset[]; impact:Impact; timeline:Timeline[]; tickets:RelatedTicket[]; releases:RelatedRelease[]; dataSources:string[]; feedback?:Feedback }
 type Knowledge = { id:string; title:string; category:string; summary:string; tags:string[]; helpful:number }
 type Execution = { id:string; analysisId:string; status:string; runbookId:string; ticketId?:string; jobId?:string; requestedAt:string; runbookTitle?:string; approvedBy?:string; finishedAt?:string; resultSummary?:string; error?:string }
-type Runbook = { runbookId:string; title:string; templateId:string; mode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; updatedAt?:string; updatedBy?:string }
+type Runbook = { runbookId:string; title:string; templateId:string; mode:string; executionMode:string; risk:string; approvalRequired:boolean; enabled:boolean; maxTargets:number; allowedEnvironments:string[]; changeWindow:string; updatedAt?:string; updatedBy?:string }
 type Summary = { openAnomalies:number; analyzedToday:number; averageConfidence:number; accuracy:number; knowledgeCount:number; pendingActions:number; feedbackCount:number; confirmedFeedback:number; rejectedFeedback:number }
 type RootCauseFeedbackStat = { rootCause:string; confirmed:number; rejected:number; partial:number; accuracy:number; adjustment:number }
 type FeedbackStats = { total:number; confirmed:number; rejected:number; partial:number; accuracy:number; byRootCause:RootCauseFeedbackStat[] }
@@ -291,7 +291,7 @@ onMounted(load)
         <form @submit.prevent="saveRunbook">
           <label>标题<input v-model="selectedRunbook.title" /></label>
           <label>任务模板<input v-model="selectedRunbook.templateId" /></label>
-          <label>模式<select v-model="selectedRunbook.mode"><option value="read-only">只读</option><option value="change">变更</option></select></label>
+          <label>模式<select v-model="selectedRunbook.mode"><option value="read-only">只读</option><option value="change">变更</option></select></label><label>执行方式<select v-model="selectedRunbook.executionMode"><option value="simulate">演练（不执行）</option><option value="live">真实执行</option></select></label>
           <label>风险<select v-model="selectedRunbook.risk"><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></label>
           <label>最大目标数<input v-model.number="selectedRunbook.maxTargets" type="number" min="1" max="10" /></label>
           <label>变更窗口<input v-model="selectedRunbook.changeWindow" placeholder="qa=*;production=Sat-Sun" /></label>

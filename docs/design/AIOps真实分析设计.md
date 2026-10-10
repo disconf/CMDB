@@ -181,3 +181,15 @@ Runbook 不再硬编码在代码中，而是持久化到 `aiops_runbook_policies
   - 环境、目标数量、变更窗口全部满足限制
 
 任何一项不满足都会拒绝执行并写入 AIOps 执行失败原因。
+## 变更演练模式
+
+Runbook 支持两种执行方式：
+
+- `simulate`：不创建真实任务，不修改目标主机，但仍执行审批、一次性授权、环境和变更窗口校验。
+- `live`：通过所有门禁后创建任务并执行，必须开启 `AIOPS_ALLOW_CHANGE_RUNBOOKS=true`。
+
+生产默认策略：
+
+- 只读 Runbook 使用 `live` 并通过只读任务模板执行。
+- 变更类 Runbook 使用 `simulate`，默认禁用。
+- 只有明确完成演练和审批后，才允许管理员把指定 Runbook 切换为 `live`。

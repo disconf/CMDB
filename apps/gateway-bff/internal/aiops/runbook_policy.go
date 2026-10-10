@@ -6,7 +6,7 @@ import (
 )
 
 func defaultRunbookPolicies() []RunbookPolicy {
-	return []RunbookPolicy{
+	items := []RunbookPolicy{
 		{RunbookID: "rb-generic-triage", Title: "通用故障只读排查", TemplateID: "tpl-health", Mode: "read-only", Risk: "low", ApprovalRequired: true, Enabled: true, MaxTargets: 1, AllowedEnvironments: []string{"*"}, ChangeWindow: "*"},
 		{RunbookID: "rb-memory-relief", Title: "内存压力排查", TemplateID: "tpl-health", Mode: "read-only", Risk: "low", ApprovalRequired: true, Enabled: true, MaxTargets: 1, AllowedEnvironments: []string{"*"}, ChangeWindow: "*"},
 		{RunbookID: "rb-disk-cleanup", Title: "磁盘空间治理检查", TemplateID: "tpl-health", Mode: "read-only", Risk: "low", ApprovalRequired: true, Enabled: true, MaxTargets: 1, AllowedEnvironments: []string{"*"}, ChangeWindow: "*"},
@@ -18,6 +18,14 @@ func defaultRunbookPolicies() []RunbookPolicy {
 		{RunbookID: "rb-service-restart", Title: "应用滚动重启（变更类）", TemplateID: "tpl-restart", Mode: "change", Risk: "medium", ApprovalRequired: true, Enabled: false, MaxTargets: 1, AllowedEnvironments: []string{"qa", "staging"}, ChangeWindow: "qa=*;staging=Mon-Fri,18:00-23:59"},
 		{RunbookID: "rb-security-patch", Title: "安全补丁安装（高风险）", TemplateID: "tpl-patch", Mode: "change", Risk: "high", ApprovalRequired: true, Enabled: false, MaxTargets: 1, AllowedEnvironments: []string{"production"}, ChangeWindow: "production=Sat-Sun"},
 	}
+	for i := range items {
+		if items[i].Mode == "change" {
+			items[i].ExecutionMode = "simulate"
+		} else {
+			items[i].ExecutionMode = "live"
+		}
+	}
+	return items
 }
 
 func (s *Service) policyFor(runbookID string) (RunbookPolicy, bool) {

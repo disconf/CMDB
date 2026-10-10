@@ -37,7 +37,7 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		s.failExecution(ctx, execution, "Runbook 已禁用")
 		return
 	}
-	if policy.Mode == "change" && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
+	if policy.Mode == "change" && policy.ExecutionMode == "live" && !strings.EqualFold(strings.TrimSpace(os.Getenv("AIOPS_ALLOW_CHANGE_RUNBOOKS")), "true") {
 		s.failExecution(ctx, execution, "变更类 Runbook 全局开关未启用")
 		return
 	}
@@ -75,6 +75,16 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 	}
 	if allowed, message := releases.ChangeWindowAllowed(targetEnvironment, policy.ChangeWindow, time.Now()); !allowed {
 		s.failExecution(ctx, execution, "当前不在变更窗口："+message)
+		return
+	}
+	if policy.Mode == "change" && policy.ExecutionMode == "simulate" {
+		execution.Status = "success"
+		execution.Simulated = true
+		execution.ApprovedBy = ticket.ID
+		execution.ApprovedAt = time.Now().Format("2006-01-02 15:04:05")
+		execution.FinishedAt = execution.ApprovedAt
+		execution.ResultSummary = "变更演练完成，未创建真实任务、未修改目标主机"
+		_ = s.saveExecution(ctx, execution)
 		return
 	}
 	job, err := s.jobs.Create(jobs.CreateInput{
