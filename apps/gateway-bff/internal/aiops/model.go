@@ -124,6 +124,7 @@ type ChangePlan struct {
 	RollbackRunbookID   string           `json:"rollbackRunbookId,omitempty"`
 	RollbackRunbookName string           `json:"rollbackRunbookName,omitempty"`
 	SourceExecutionID   string           `json:"sourceExecutionId,omitempty"`
+	Rehearsal           bool             `json:"rehearsal"`
 	Preconditions       []string         `json:"preconditions"`
 	Steps               []ChangePlanStep `json:"steps"`
 	Verification        []string         `json:"verification"`
@@ -152,6 +153,7 @@ type Execution struct {
 	Rollback            bool       `json:"rollback"`
 	ParentExecutionID   string     `json:"parentExecutionId,omitempty"`
 	ChangePlan          ChangePlan `json:"changePlan"`
+	Rehearsal           bool       `json:"rehearsal"`
 	VerificationStatus  string     `json:"verificationStatus,omitempty"`
 	VerificationSummary string     `json:"verificationSummary,omitempty"`
 	VerifiedAt          string     `json:"verifiedAt,omitempty"`

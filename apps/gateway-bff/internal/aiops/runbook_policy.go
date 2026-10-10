@@ -1,8 +1,10 @@
 package aiops
 
 import (
+	"context"
 	"sort"
 	"strings"
+	"time"
 )
 
 func defaultRunbookPolicies() []RunbookPolicy {
@@ -16,6 +18,7 @@ func defaultRunbookPolicies() []RunbookPolicy {
 		{RunbookID: "rb-db-slow-query", Title: "数据库连接与慢查询检查", TemplateID: "tpl-health", Mode: "read-only", Risk: "low", ApprovalRequired: true, Enabled: true, MaxTargets: 1, AllowedEnvironments: []string{"*"}, ChangeWindow: "*"},
 		{RunbookID: "rb-log-cleanup", Title: "日志空间清理（变更类）", TemplateID: "tpl-clean", Mode: "change", Risk: "medium", ApprovalRequired: true, Enabled: false, MaxTargets: 1, AllowedEnvironments: []string{"qa", "staging"}, ChangeWindow: "qa=*;staging=Mon-Fri,18:00-23:59", LiveDailyLimit: 1, LiveCooldownMinutes: 30, RequireRollback: true, RequireCanary: true},
 		{RunbookID: "rb-service-restart", Title: "应用滚动重启（变更类）", TemplateID: "tpl-restart", Mode: "change", Risk: "medium", ApprovalRequired: true, Enabled: false, MaxTargets: 1, AllowedEnvironments: []string{"qa", "staging"}, ChangeWindow: "qa=*;staging=Mon-Fri,18:00-23:59", LiveDailyLimit: 1, LiveCooldownMinutes: 30, RequireRollback: true, RequireCanary: true},
+		{RunbookID: "rb-qa-live-rehearsal", Title: "QA 真实通道演练（只读）", TemplateID: "tpl-health", Mode: "change", Risk: "low", ApprovalRequired: true, Enabled: false, MaxTargets: 1, AllowedEnvironments: []string{"qa"}, ChangeWindow: "qa=*", LiveDailyLimit: 1, LiveCooldownMinutes: 0, RequireRollback: false, RequireCanary: true},
 		{RunbookID: "rb-security-patch", Title: "安全补丁安装（高风险）", TemplateID: "tpl-patch", Mode: "change", Risk: "high", ApprovalRequired: true, Enabled: false, MaxTargets: 1, AllowedEnvironments: []string{"production"}, ChangeWindow: "production=Sat-Sun", LiveDailyLimit: 1, LiveCooldownMinutes: 60, RequireRollback: true, RequireCanary: true},
 	}
 	for i := range items {
@@ -30,6 +33,13 @@ func defaultRunbookPolicies() []RunbookPolicy {
 
 func (s *Service) policyFor(runbookID string) (RunbookPolicy, bool) {
 	id := strings.TrimSpace(runbookID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if items, err := s.repo.LoadRunbookPolicies(ctx); err == nil && len(items) > 0 {
+		s.mu.Lock()
+		s.runbooks = items
+		s.mu.Unlock()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, item := range s.runbooks {

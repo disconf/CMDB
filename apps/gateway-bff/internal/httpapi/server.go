@@ -3365,6 +3365,34 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("POST /api/v1/aiops/rehearsals", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var in struct {
+			RunbookID string `json:"runbookId"`
+			AssetID   string `json:"assetId"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.StartLiveRehearsal(r.Context(), in.RunbookID, in.AssetID, u.Username)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "REHEARSAL_NOT_AVAILABLE", "message": "只允许启用且绑定只读健康检查模板的变更类 Runbook"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNotReady) {
+			writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "REHEARSAL_NOT_READY"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "REHEARSAL_CREATE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, item)
+	})
 	mux.HandleFunc("GET /api/v1/aiops/canary-validations", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

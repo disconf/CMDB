@@ -44,6 +44,7 @@ const runbookPreflight = ref<RunbookPreflight>()
 const changeControl = ref<ChangeControl>()
 const preflightLoading = ref(false)
 const changeControlSaving = ref(false)
+const rehearsalAssetID = ref('host-node01.jzq.com')
 const canaries = ref<CanaryValidation[]>([])
 const canaryPendingID = ref('')
 const selected = ref<Analysis>()
@@ -144,6 +145,22 @@ async function saveRunbook() {
 
 function canaryFor(item:Execution) {
   return canaries.value.find(value => value.runbookId === item.runbookId && value.assetId === item.changePlan?.targetAssetId)
+}
+
+async function startLiveRehearsal() {
+  if (!selectedRunbook.value) return
+  message.value = ''
+  error.value = ''
+  try {
+    const response = await fetch('/api/v1/aiops/rehearsals', { method:'POST', headers:headers.value, body:JSON.stringify({ runbookId:selectedRunbook.value.runbookId, assetId:rehearsalAssetID.value }) })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || '真实通道演练申请失败')
+    message.value = `真实通道演练已转为审批工单 ${data.ticketId || data.id}，实际只执行只读健康检查`
+    tab.value = 'analysis'
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '真实通道演练申请失败'
+  }
 }
 
 async function startCanary(item:Execution) {
@@ -417,6 +434,11 @@ onMounted(load)
       <aside class="runbook-list"><header><h3>Runbook 注册中心</h3><p>变更类默认禁用，启用需要平台全局开关。</p></header><button v-for="item in runbooks" :key="item.runbookId" :class="{active:selectedRunbook?.runbookId===item.runbookId}" @click="selectedRunbook=item;runbookPreflight=undefined"><div><strong>{{ item.title }}</strong><span>{{ item.templateId }} · {{ item.mode }} · {{ item.risk }}</span></div><b :data-enabled="item.enabled">{{ item.enabled ? '已启用' : '已禁用' }}</b></button></aside>
       <main v-if="selectedRunbook" class="runbook-editor">
         <header><div><span>RUNBOOK POLICY</span><h2>{{ selectedRunbook.title }}</h2><p>{{ selectedRunbook.runbookId }}</p></div><div class="runbook-header-actions"><button :disabled="preflightLoading" @click="runPreflight"><RefreshCw :class="{spin:preflightLoading}"/>执行预检</button><button class="primary" @click="saveRunbook">保存策略</button></div></header>
+        <section v-if="selectedRunbook.mode==='change' && selectedRunbook.templateId==='tpl-health'" class="rehearsal-box">
+          <div><strong>QA 真实通道演练</strong><span>使用同一审批、授权、Runner 和验证链路，但只执行只读健康检查。</span></div>
+          <input v-model="rehearsalAssetID" placeholder="资产 ID 或 host-node01.jzq.com" />
+          <button class="primary" :disabled="!canManageAiops || !selectedRunbook.enabled" @click="startLiveRehearsal"><Play/>发起演练审批</button>
+        </section>
         <form @submit.prevent="saveRunbook">
           <label>标题<input v-model="selectedRunbook.title" /></label>
           <label>任务模板<input v-model="selectedRunbook.templateId" /></label>

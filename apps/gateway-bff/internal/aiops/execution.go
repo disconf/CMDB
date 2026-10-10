@@ -57,8 +57,11 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 	}
 	analysis, err := s.Get(execution.AnalysisID)
 	if err != nil {
-		s.failExecution(ctx, execution, "分析记录不存在")
-		return
+		if !execution.Rehearsal || strings.TrimSpace(execution.ChangePlan.TargetAssetID) == "" {
+			s.failExecution(ctx, execution, "分析记录不存在")
+			return
+		}
+		analysis = Analysis{RelatedAssets: []RelatedAsset{{ID: execution.ChangePlan.TargetAssetID, Name: execution.ChangePlan.TargetAssetName, Environment: execution.ChangePlan.Environment}}}
 	}
 	targets := []string{}
 	for _, asset := range analysis.RelatedAssets {
@@ -303,10 +306,21 @@ func (s *Service) saveExecution(ctx context.Context, execution Execution) error 
 	return nil
 }
 
-func (s *Service) findExecutionByTicket(ticketID string) (Execution, bool) {
+func (s *Service) refreshExecutions() []Execution {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if items, err := s.repo.LoadExecutions(ctx); err == nil {
+		s.mu.Lock()
+		s.executions = items
+		s.mu.Unlock()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, item := range s.executions {
+	return append([]Execution(nil), s.executions...)
+}
+
+func (s *Service) findExecutionByTicket(ticketID string) (Execution, bool) {
+	for _, item := range s.refreshExecutions() {
 		if item.TicketID == ticketID {
 			return item, true
 		}
@@ -315,9 +329,7 @@ func (s *Service) findExecutionByTicket(ticketID string) (Execution, bool) {
 }
 
 func (s *Service) findExecutionByID(executionID string) (Execution, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, item := range s.executions {
+	for _, item := range s.refreshExecutions() {
 		if item.ID == executionID {
 			return item, true
 		}
@@ -326,9 +338,7 @@ func (s *Service) findExecutionByID(executionID string) (Execution, bool) {
 }
 
 func (s *Service) findExecutionByJob(jobID string) (Execution, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, item := range s.executions {
+	for _, item := range s.refreshExecutions() {
 		if item.JobID == jobID {
 			return item, true
 		}

@@ -73,6 +73,19 @@ func NewService() *Service {
 			_ = s.repo.SaveRunbookPolicy(ctx, item)
 		}
 	}
+	for _, item := range defaultRunbookPolicies() {
+		found := false
+		for _, existing := range s.runbooks {
+			if existing.RunbookID == item.RunbookID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.runbooks = append(s.runbooks, item)
+			_ = s.repo.SaveRunbookPolicy(ctx, item)
+		}
+	}
 	return s
 }
 
@@ -243,17 +256,14 @@ func (s *Service) Execute(ctx context.Context, analysisID, runbookID, user strin
 }
 
 func (s *Service) Executions() []Execution {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return append([]Execution(nil), s.executions...)
+	return s.refreshExecutions()
 }
 
 func (s *Service) ExecutionStats() ExecutionStats {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	executions := s.refreshExecutions()
 	stats := ExecutionStats{ByRunbook: []RunbookExecutionStat{}}
 	byRunbook := map[string]*RunbookExecutionStat{}
-	for _, item := range s.executions {
+	for _, item := range executions {
 		stats.Total++
 		if item.Simulated {
 			stats.Simulated++
