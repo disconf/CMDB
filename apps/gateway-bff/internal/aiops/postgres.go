@@ -105,6 +105,16 @@ ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS live_daily_limit int
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS live_cooldown_minutes integer NOT NULL DEFAULT 30;
 ALTER TABLE aiops_runbook_policies ADD COLUMN IF NOT EXISTS require_rollback boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS idx_aiops_execution_requests_time ON aiops_execution_requests(requested_at DESC);
+CREATE TABLE IF NOT EXISTS aiops_change_control (
+  id text PRIMARY KEY,
+  frozen boolean NOT NULL DEFAULT false,
+  live_enabled boolean NOT NULL DEFAULT true,
+  reason text NOT NULL DEFAULT '',
+  freeze_until timestamptz,
+  updated_by text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO aiops_change_control(id,frozen,live_enabled,reason,updated_by) VALUES('default',false,true,'','system') ON CONFLICT(id) DO NOTHING;
 `
 
 type postgresRepository struct {
@@ -285,6 +295,40 @@ func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]Runbook
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (r *postgresRepository) LoadChangeControl(ctx context.Context) (ChangeControl, error) {
+	var item ChangeControl
+	var freezeUntil sql.NullTime
+	var updatedAt time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT id,frozen,live_enabled,reason,freeze_until,updated_by,updated_at FROM aiops_change_control WHERE id='default'`).Scan(&item.ID, &item.Frozen, &item.LiveEnabled, &item.Reason, &freezeUntil, &item.UpdatedBy, &updatedAt)
+	if err != nil {
+		return ChangeControl{}, err
+	}
+	if freezeUntil.Valid {
+		item.FreezeUntil = freezeUntil.Time.Local().Format("2006-01-02 15:04:05")
+	}
+	item.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+	return item, nil
+}
+
+func (r *postgresRepository) SaveChangeControl(ctx context.Context, item ChangeControl) error {
+	var freezeUntil any
+	if item.FreezeUntil != "" {
+		parsed, err := parseAITime(item.FreezeUntil)
+		if err != nil {
+			return err
+		}
+		freezeUntil = parsed
+	}
+	updatedAt := time.Now()
+	if item.UpdatedAt != "" {
+		if parsed, err := parseAITime(item.UpdatedAt); err == nil {
+			updatedAt = parsed
+		}
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO aiops_change_control(id,frozen,live_enabled,reason,freeze_until,updated_by,updated_at) VALUES('default',$1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET frozen=excluded.frozen,live_enabled=excluded.live_enabled,reason=excluded.reason,freeze_until=excluded.freeze_until,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, item.Frozen, item.LiveEnabled, item.Reason, freezeUntil, item.UpdatedBy, updatedAt)
+	return err
 }
 
 func (r *postgresRepository) SaveRunbookPolicy(ctx context.Context, item RunbookPolicy) error {

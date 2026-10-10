@@ -41,6 +41,12 @@ func (s *Service) HandleTicketDecision(ctx context.Context, ticket tickets.Ticke
 		s.failExecution(ctx, execution, "变更类 Runbook 全局开关未启用")
 		return
 	}
+	if policy.Mode == "change" && policy.ExecutionMode == "live" {
+		if blocked, message := s.changeControlBlocked(time.Now()); blocked {
+			s.failExecution(ctx, execution, message)
+			return
+		}
+	}
 	if s.tickets == nil || s.jobs == nil {
 		s.failExecution(ctx, execution, "任务执行依赖未配置")
 		return

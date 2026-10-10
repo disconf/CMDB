@@ -3365,6 +3365,37 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("GET /api/v1/aiops/change-control", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, aiopsService.ChangeControl())
+	})
+	mux.HandleFunc("PUT /api/v1/aiops/change-control", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var in aiops.ChangeControl
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		u, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.UpdateChangeControl(r.Context(), in, u.Username)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "冻结变更时必须填写原因，时间格式无效或配置不完整"})
+			return
+		}
+		if errors.Is(err, aiops.ErrChangeDisabled) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "CHANGE_RUNBOOKS_DISABLED", "message": "环境变量未开启真实变更，不能重新打开平台总开关"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "CHANGE_CONTROL_UPDATE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
 	mux.HandleFunc("GET /api/v1/aiops/runbooks", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

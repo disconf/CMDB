@@ -212,6 +212,19 @@ func TestRunbookPreflightRequiresRollbackAndEnforcesThrottle(t *testing.T) {
 	if err != nil || !preflight.Ready {
 		t.Fatalf("expected ready preflight: %#v %v", preflight, err)
 	}
+	if _, err = s.UpdateChangeControl(context.Background(), ChangeControl{Frozen: true, LiveEnabled: true}, "admin"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("freeze without reason should fail, got %v", err)
+	}
+	if _, err = s.UpdateChangeControl(context.Background(), ChangeControl{Frozen: true, LiveEnabled: true, Reason: "QA 变更冻结演练"}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err = s.RunbookPreflight(policy.RunbookID, analysis.ID)
+	if err != nil || preflight.Ready {
+		t.Fatalf("expected frozen preflight to fail: %#v %v", preflight, err)
+	}
+	if _, err = s.UpdateChangeControl(context.Background(), ChangeControl{Frozen: false, LiveEnabled: true}, "admin"); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().Format("2006-01-02 15:04:05")
 	if err = s.saveExecution(context.Background(), Execution{ID: "aiexec-live", AnalysisID: analysis.ID, RunbookID: policy.RunbookID, RunbookTitle: policy.Title, Status: "success", RequestedBy: "admin", RequestedAt: now, ApprovalRequired: true, FinishedAt: now}); err != nil {
 		t.Fatal(err)

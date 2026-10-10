@@ -25,23 +25,24 @@ var (
 )
 
 type Service struct {
-	mu         sync.RWMutex
-	repo       repository
-	knowledge  []Knowledge
-	analyses   []Analysis
-	executions []Execution
-	runbooks   []RunbookPolicy
-	alerts     AlertProvider
-	assets     AssetProvider
-	impact     ImpactProvider
-	tickets    TicketProvider
-	releases   ReleaseProvider
-	tools      ToolProvider
-	jobs       JobProvider
+	mu            sync.RWMutex
+	repo          repository
+	knowledge     []Knowledge
+	analyses      []Analysis
+	executions    []Execution
+	runbooks      []RunbookPolicy
+	changeControl ChangeControl
+	alerts        AlertProvider
+	assets        AssetProvider
+	impact        ImpactProvider
+	tickets       TicketProvider
+	releases      ReleaseProvider
+	tools         ToolProvider
+	jobs          JobProvider
 }
 
 func NewService() *Service {
-	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}}
+	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}}
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
 		repo, err := openPostgres(databaseURL)
 		if err != nil {
@@ -56,6 +57,9 @@ func NewService() *Service {
 	}
 	if executions, err := s.repo.LoadExecutions(ctx); err == nil {
 		s.executions = executions
+	}
+	if control, err := s.repo.LoadChangeControl(ctx); err == nil {
+		s.changeControl = control
 	}
 	if runbooks, err := s.repo.LoadRunbookPolicies(ctx); err == nil && len(runbooks) > 0 {
 		s.runbooks = runbooks

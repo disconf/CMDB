@@ -180,6 +180,8 @@ type repository interface {
 	SaveExecution(context.Context, Execution) error
 	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)
 	SaveRunbookPolicy(context.Context, RunbookPolicy) error
+	LoadChangeControl(context.Context) (ChangeControl, error)
+	SaveChangeControl(context.Context, ChangeControl) error
 }
 
 type FeedbackInput struct {
@@ -218,6 +220,16 @@ type RunbookExecutionStat struct {
 	Failed       int     `json:"failed"`
 	InProgress   int     `json:"inProgress"`
 	SuccessRate  float64 `json:"successRate"`
+}
+
+type ChangeControl struct {
+	ID          string `json:"id"`
+	Frozen      bool   `json:"frozen"`
+	LiveEnabled bool   `json:"liveEnabled"`
+	Reason      string `json:"reason,omitempty"`
+	FreezeUntil string `json:"freezeUntil,omitempty"`
+	UpdatedBy   string `json:"updatedBy,omitempty"`
+	UpdatedAt   string `json:"updatedAt,omitempty"`
 }
 
 type RunbookPreflightCheck struct {

@@ -60,6 +60,13 @@ func (s *Service) RunbookPreflight(runbookID, analysisID string) (RunbookPreflig
 	} else {
 		add("execution-mode", "执行方式", "pass", "真实执行门禁已满足")
 	}
+	if policy.Mode == "change" && policy.ExecutionMode == "live" {
+		if blocked, message := s.changeControlBlocked(time.Now()); blocked {
+			add("change-control", "变更冻结", "fail", message)
+		} else {
+			add("change-control", "变更冻结", "pass", "平台未冻结变更且真实变更总开关已开启")
+		}
+	}
 
 	if analysisID == "" {
 		add("analysis", "分析目标", "warn", "未选择分析记录，本次只检查策略级条件")

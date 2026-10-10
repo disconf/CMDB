@@ -10,14 +10,15 @@ import (
 )
 
 type memoryRepository struct {
-	mu         sync.RWMutex
-	analyses   []Analysis
-	executions []Execution
-	runbooks   []RunbookPolicy
+	mu            sync.RWMutex
+	analyses      []Analysis
+	executions    []Execution
+	runbooks      []RunbookPolicy
+	changeControl ChangeControl
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}}
+	return &memoryRepository{analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}}
 }
 
 func (r *memoryRepository) LoadAnalyses(context.Context) ([]Analysis, error) {
@@ -74,6 +75,19 @@ func (r *memoryRepository) SaveRunbookPolicy(_ context.Context, item RunbookPoli
 		}
 	}
 	r.runbooks = append(r.runbooks, item)
+	return nil
+}
+
+func (r *memoryRepository) LoadChangeControl(context.Context) (ChangeControl, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.changeControl, nil
+}
+
+func (r *memoryRepository) SaveChangeControl(_ context.Context, item ChangeControl) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.changeControl = item
 	return nil
 }
 func newID(prefix string) string {

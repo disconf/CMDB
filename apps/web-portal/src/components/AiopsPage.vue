@@ -26,6 +26,7 @@ type RunbookExecutionStat = { runbookId:string; runbookTitle:string; total:numbe
 type ExecutionStats = { total:number; simulated:number; live:number; pendingApproval:number; running:number; success:number; failed:number; rejected:number; successRate:number; byRunbook:RunbookExecutionStat[] }
 type PreflightCheck = { key:string; label:string; status:'pass'|'warn'|'fail'; detail:string }
 type RunbookPreflight = { runbookId:string; analysisId?:string; ready:boolean; checks:PreflightCheck[]; nextAllowedAt?:string; generatedAt:string }
+type ChangeControl = { frozen:boolean; liveEnabled:boolean; reason?:string; freezeUntil?:string; updatedBy?:string; updatedAt?:string }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
@@ -39,7 +40,9 @@ const rollbackPendingID = ref('')
 const runbooks = ref<Runbook[]>([])
 const selectedRunbook = ref<Runbook>()
 const runbookPreflight = ref<RunbookPreflight>()
+const changeControl = ref<ChangeControl>()
 const preflightLoading = ref(false)
+const changeControlSaving = ref(false)
 const selected = ref<Analysis>()
 const query = ref('')
 const tab = ref<'analysis'|'knowledge'|'runbooks'>('analysis')
@@ -54,14 +57,15 @@ const correctedRootCause = ref('')
 const feedbackNote = ref('')
 const headers = computed(() => ({ Authorization:`Bearer ${auth.token}`, 'Content-Type':'application/json' }))
 const selectedExecutions = computed(() => executions.value.filter(item => item.analysisId === selected.value?.id))
+const canManageAiops = computed(() => auth.user?.permissions.includes('aiops:execute') || false)
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','execution-stats','feedback/stats','runbooks'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
+    const responses = await Promise.all(['summary','alerts','analyses','knowledge','executions','execution-stats','feedback/stats','runbooks','change-control'].map(path => fetch('/api/v1/aiops/'+path, { headers:headers.value })))
     if (responses.some(response => !response.ok)) throw new Error('AIOps 数据加载失败')
-    const [summaryData, alertData, analysisData, knowledgeData, executionData, executionStatsData, feedbackStatsData, runbookData] = await Promise.all(responses.map(response => response.json()))
+    const [summaryData, alertData, analysisData, knowledgeData, executionData, executionStatsData, feedbackStatsData, runbookData, changeControlData] = await Promise.all(responses.map(response => response.json()))
     summary.value = summaryData
     alerts.value = alertData
     analyses.value = analysisData
@@ -70,6 +74,7 @@ async function load() {
     executionStats.value = executionStatsData
     feedbackStats.value = feedbackStatsData
     runbooks.value = runbookData
+    changeControl.value = changeControlData
     selectedRunbook.value = runbooks.value.find(item => item.runbookId===selectedRunbook.value?.runbookId) || runbooks.value[0]
     selected.value = analyses.value.find(item => item.id === selected.value?.id) || analyses.value[0]
     if (!selectedAlertID.value && alerts.value.length) selectedAlertID.value = alerts.value[0].id
@@ -130,6 +135,26 @@ async function saveRunbook() {
     await load()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Runbook 保存失败'
+  }
+}
+
+async function saveChangeControl() {
+  if (!changeControl.value) return
+  changeControlSaving.value = true
+  message.value = ''
+  error.value = ''
+  try {
+    const payload = { ...changeControl.value }
+    if (payload.freezeUntil) payload.freezeUntil = payload.freezeUntil.replace('T', ' ').length === 16 ? payload.freezeUntil.replace('T', ' ') + ':00' : payload.freezeUntil.replace('T', ' ')
+    const response = await fetch('/api/v1/aiops/change-control', { method:'PUT', headers:headers.value, body:JSON.stringify(payload) })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || '变更控制保存失败')
+    changeControl.value = data
+    message.value = data.frozen ? '真实变更已冻结' : data.liveEnabled ? '真实变更总开关已开启' : '真实变更总开关已关闭'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '变更控制保存失败'
+  } finally {
+    changeControlSaving.value = false
   }
 }
 
@@ -261,6 +286,18 @@ onMounted(load)
       <article><TicketCheck/><span>待审批动作<strong>{{ summary?.pendingActions || 0 }}</strong></span></article>
     </div>
 
+    <section v-if="changeControl" class="change-control-panel" :data-frozen="changeControl.frozen" :data-live="changeControl.liveEnabled">
+      <header><div><h3><ShieldAlert/>真实变更总控</h3><p>{{ changeControl.frozen ? '所有真实变更已被平台冻结，演练和只读操作不受影响。' : changeControl.liveEnabled ? '真实变更总开关已开启，仍需 Runner、环境变量、Runbook 和审批门禁。' : '真实变更总开关已关闭。' }}</p></div><b>{{ changeControl.frozen ? '已冻结' : changeControl.liveEnabled ? '总开关开启' : '总开关关闭' }}</b></header>
+      <div v-if="canManageAiops" class="change-control-form">
+        <label class="control-toggle"><input v-model="changeControl.frozen" type="checkbox" /> 冻结全部真实变更</label>
+        <label class="control-toggle"><input v-model="changeControl.liveEnabled" type="checkbox" /> 平台真实变更总开关</label>
+        <label>冻结原因<input v-model="changeControl.reason" placeholder="例如：核心网络割接期间冻结变更" /></label>
+        <label>冻结截止时间<input v-model="changeControl.freezeUntil" type="datetime-local" /></label>
+        <button class="primary" :disabled="changeControlSaving" @click="saveChangeControl"><RefreshCw :class="{spin:changeControlSaving}"/>保存总控配置</button>
+      </div>
+      <footer v-else>当前账号只有查看权限，无法修改变更总控。</footer>
+      <small v-if="changeControl.updatedAt">最近更新：{{ changeControl.updatedBy || 'system' }} · {{ changeControl.updatedAt }}</small>
+    </section>
     <div v-if="error" class="aiops-message error">{{ error }}</div>
     <div v-if="message" class="aiops-message"><CheckCircle2/>{{ message }}</div>
 
