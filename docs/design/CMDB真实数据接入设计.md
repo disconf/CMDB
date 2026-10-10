@@ -233,3 +233,11 @@ manual(人工) > csv > ssh > agent > node-exporter > snmp
 - AccessKey ID 保存在集成配置，SecretAccessKey 单独保存到 Vault。
 - 默认按地域生成 EC2 接入点，兼容标准区域和中国区 `amazonaws.com.cn` 域名，也允许填写自定义端点。
 - 同步写入 `cloud-host` 资产，保留地域、可用区、实例规格、操作系统和电源状态。
+
+## 华为云 ECS 云资源同步
+
+- 新增 `/api/v1/cmdb/cloud-huawei/*` 配置、测试、库存预览和同步接口。
+- 使用 `SDK-HMAC-SHA256` 签名调用 ECS `List Servers Details`，通过 `offset/limit` 分页拉取实例。
+- AccessKey ID 和 Project ID 保存在集成配置，SecretAccessKey 单独保存到 Vault。
+- 支持按地域生成默认接入点，也允许接入自定义 ECS API Endpoint。
+- 同步写入 `cloud-host` 资产，保留地域、项目、可用区、实例规格、操作系统和电源状态。
