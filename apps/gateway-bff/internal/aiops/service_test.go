@@ -335,6 +335,15 @@ func TestExecutionStatsAndControlledRollback(t *testing.T) {
 	}
 }
 
+func TestCanaryCompletionCapturesBaseline(t *testing.T) {
+	s := NewService()
+	s.SetAlertProvider(fakeAlerts{})
+	item := s.completeCanary(CanaryValidation{ID: "canary-1", AssetID: "asset-1"}, jobs.Job{ID: "job-1", Status: "success"})
+	if item.Status != "passed" || !item.HostUp || len(item.Baseline) == 0 {
+		t.Fatalf("baseline missing: %#v", item)
+	}
+}
+
 func TestKnowledgeSearch(t *testing.T) {
 	if len(NewService().SearchKnowledge("OOM")) == 0 {
 		t.Fatal("expected knowledge result")

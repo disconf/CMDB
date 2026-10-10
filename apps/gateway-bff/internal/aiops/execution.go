@@ -244,6 +244,11 @@ func (s *Service) RequestRollback(ctx context.Context, executionID, user string)
 		return Execution{}, err
 	}
 	plan := s.buildChangePlan(analysis, Recommendation{RunbookID: rollback.RunbookID, Title: rollback.Title, Steps: []string{"执行已注册的回滚 Runbook"}}, rollback, user, original.ID, true)
+	if baseline, ok := s.latestPassedCanary(original.RunbookID, original.ChangePlan.TargetAssetID, 24*time.Hour); ok {
+		plan.BaselineID = baseline.ID
+		plan.BaselineMetrics = len(baseline.Baseline)
+		plan.RollbackPlan = append(plan.RollbackPlan, "回滚参考基线："+baseline.ID, fmt.Sprintf("基线包含 %d 项监控指标，完成回滚后应与基线对比", len(baseline.Baseline)))
+	}
 	s.mu.RLock()
 	for _, item := range s.executions {
 		if item.ParentExecutionID == original.ID && (item.Status == "pending-approval" || item.Status == "running" || item.Status == "success") {

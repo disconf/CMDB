@@ -129,6 +129,8 @@ type ChangePlan struct {
 	Steps               []ChangePlanStep `json:"steps"`
 	Verification        []string         `json:"verification"`
 	RollbackPlan        []string         `json:"rollbackPlan"`
+	BaselineID          string           `json:"baselineId,omitempty"`
+	BaselineMetrics     int              `json:"baselineMetrics"`
 	PlannedBy           string           `json:"plannedBy"`
 	PlannedAt           string           `json:"plannedAt"`
 }
@@ -227,18 +229,29 @@ type RunbookExecutionStat struct {
 	SuccessRate  float64 `json:"successRate"`
 }
 
+type MetricBaseline struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Value    float64 `json:"value"`
+	Unit     string  `json:"unit"`
+	Warning  float64 `json:"warning,omitempty"`
+	Critical float64 `json:"critical,omitempty"`
+}
+
 type CanaryValidation struct {
-	ID          string   `json:"id"`
-	RunbookID   string   `json:"runbookId"`
-	AssetID     string   `json:"assetId"`
-	AssetName   string   `json:"assetName"`
-	Status      string   `json:"status"`
-	JobID       string   `json:"jobId,omitempty"`
-	Summary     string   `json:"summary"`
-	Checks      []string `json:"checks"`
-	RequestedBy string   `json:"requestedBy"`
-	StartedAt   string   `json:"startedAt"`
-	FinishedAt  string   `json:"finishedAt,omitempty"`
+	ID          string           `json:"id"`
+	RunbookID   string           `json:"runbookId"`
+	AssetID     string           `json:"assetId"`
+	AssetName   string           `json:"assetName"`
+	Status      string           `json:"status"`
+	JobID       string           `json:"jobId,omitempty"`
+	Summary     string           `json:"summary"`
+	Checks      []string         `json:"checks"`
+	HostUp      bool             `json:"hostUp"`
+	Baseline    []MetricBaseline `json:"baseline"`
+	RequestedBy string           `json:"requestedBy"`
+	StartedAt   string           `json:"startedAt"`
+	FinishedAt  string           `json:"finishedAt,omitempty"`
 }
 
 type ChangeControl struct {

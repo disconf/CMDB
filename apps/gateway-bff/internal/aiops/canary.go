@@ -123,6 +123,13 @@ func (s *Service) completeCanary(item CanaryValidation, job jobs.Job) CanaryVali
 	case job.Status == "success" && !changed:
 		item.Status = "passed"
 		item.Summary = "只读健康检查完成，主机、Runner 和凭据通道可用"
+		if s.alerts != nil {
+			host := s.alerts.Host(item.AssetID)
+			item.HostUp = host.Up
+			for _, metric := range host.Metrics {
+				item.Baseline = append(item.Baseline, MetricBaseline{ID: metric.ID, Name: metric.Name, Value: metric.Value, Unit: metric.Unit, Warning: metric.Warning, Critical: metric.Critical})
+			}
+		}
 	case job.Status == "success" && changed:
 		item.Status = "failed"
 		item.Summary = "健康检查产生了变更，灰度通道验证失败"
@@ -131,6 +138,19 @@ func (s *Service) completeCanary(item CanaryValidation, job jobs.Job) CanaryVali
 		item.Summary = "健康检查任务未成功完成"
 	}
 	return item
+}
+
+func (s *Service) latestPassedCanary(runbookID, assetID string, within time.Duration) (CanaryValidation, bool) {
+	for _, item := range s.CanaryValidations() {
+		if item.RunbookID != runbookID || item.AssetID != assetID || item.Status != "passed" {
+			continue
+		}
+		started, err := parseAITime(item.StartedAt)
+		if err == nil && time.Since(started) <= within {
+			return item, true
+		}
+	}
+	return CanaryValidation{}, false
 }
 
 func (s *Service) hasRecentPassedCanary(runbookID, assetID string, within time.Duration) bool {

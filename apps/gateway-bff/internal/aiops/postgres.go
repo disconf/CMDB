@@ -128,11 +128,15 @@ CREATE TABLE IF NOT EXISTS aiops_canary_validations (
   job_id text NOT NULL DEFAULT '',
   summary text NOT NULL DEFAULT '',
   checks jsonb NOT NULL DEFAULT '[]',
+  host_up boolean NOT NULL DEFAULT false,
+  baseline jsonb NOT NULL DEFAULT '[]',
   requested_by text NOT NULL DEFAULT '',
   started_at timestamptz NOT NULL,
   finished_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE aiops_canary_validations ADD COLUMN IF NOT EXISTS host_up boolean NOT NULL DEFAULT false;
+ALTER TABLE aiops_canary_validations ADD COLUMN IF NOT EXISTS baseline jsonb NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_aiops_canary_validations_asset ON aiops_canary_validations(runbook_id,asset_id,started_at DESC);
 `
 
@@ -317,7 +321,7 @@ func (r *postgresRepository) LoadRunbookPolicies(ctx context.Context) ([]Runbook
 }
 
 func (r *postgresRepository) LoadCanaryValidations(ctx context.Context) ([]CanaryValidation, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,runbook_id,asset_id,asset_name,status,job_id,summary,checks,requested_by,started_at,finished_at FROM aiops_canary_validations ORDER BY started_at DESC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,runbook_id,asset_id,asset_name,status,job_id,summary,checks,host_up,baseline,requested_by,started_at,finished_at FROM aiops_canary_validations ORDER BY started_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -325,13 +329,14 @@ func (r *postgresRepository) LoadCanaryValidations(ctx context.Context) ([]Canar
 	result := []CanaryValidation{}
 	for rows.Next() {
 		var item CanaryValidation
-		var checks []byte
+		var checks, baseline []byte
 		var startedAt time.Time
 		var finishedAt sql.NullTime
-		if err = rows.Scan(&item.ID, &item.RunbookID, &item.AssetID, &item.AssetName, &item.Status, &item.JobID, &item.Summary, &checks, &item.RequestedBy, &startedAt, &finishedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.RunbookID, &item.AssetID, &item.AssetName, &item.Status, &item.JobID, &item.Summary, &checks, &item.HostUp, &baseline, &item.RequestedBy, &startedAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(checks, &item.Checks)
+		_ = json.Unmarshal(baseline, &item.Baseline)
 		item.StartedAt = startedAt.Local().Format("2006-01-02 15:04:05")
 		if finishedAt.Valid {
 			item.FinishedAt = finishedAt.Time.Local().Format("2006-01-02 15:04:05")
@@ -351,7 +356,8 @@ func (r *postgresRepository) SaveCanaryValidation(ctx context.Context, item Cana
 		finishedAt, _ = parseAITime(item.FinishedAt)
 	}
 	checks, _ := json.Marshal(item.Checks)
-	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_canary_validations(id,runbook_id,asset_id,asset_name,status,job_id,summary,checks,requested_by,started_at,finished_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,job_id=excluded.job_id,summary=excluded.summary,checks=excluded.checks,finished_at=excluded.finished_at,updated_at=now()`, item.ID, item.RunbookID, item.AssetID, item.AssetName, item.Status, item.JobID, item.Summary, checks, item.RequestedBy, startedAt, finishedAt)
+	baseline, _ := json.Marshal(item.Baseline)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_canary_validations(id,runbook_id,asset_id,asset_name,status,job_id,summary,checks,host_up,baseline,requested_by,started_at,finished_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now()) ON CONFLICT(id) DO UPDATE SET status=excluded.status,job_id=excluded.job_id,summary=excluded.summary,checks=excluded.checks,host_up=excluded.host_up,baseline=excluded.baseline,finished_at=excluded.finished_at,updated_at=now()`, item.ID, item.RunbookID, item.AssetID, item.AssetName, item.Status, item.JobID, item.Summary, checks, item.HostUp, baseline, item.RequestedBy, startedAt, finishedAt)
 	return err
 }
 
