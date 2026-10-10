@@ -210,3 +210,11 @@ manual(人工) > csv > ssh > agent > node-exporter > snmp
 - 同步写入虚拟化集群、ESXi 物理主机和虚拟机资产，并标记来源 `vCenter`。
 - 前端 CMDB 新增“虚拟化平台”一级入口。
 
+## VMware vCenter 资源接入
+
+- 新增 vCenter 配置、连接测试、资源预览和同步接口：`/api/v1/cmdb/vmware/*`。
+- 通过 vSphere Automation API 只读读取集群、ESXi 主机和虚拟机。
+- vCenter 密码保存到 Vault，数据库只保存凭据引用。
+- 同步资产类型为“虚拟化集群 / 物理服务器(ESXi) / 虚拟机”，来源标记为 `vCenter`。
+- CMDB 新增“虚拟化平台”入口，支持查看和同步资源。
+
