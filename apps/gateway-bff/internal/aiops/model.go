@@ -171,10 +171,22 @@ type KnowledgeCitation struct {
 }
 
 type KnowledgeAnswer struct {
-	Question    string              `json:"question"`
-	Answer      string              `json:"answer"`
-	Citations   []KnowledgeCitation `json:"citations"`
-	GeneratedAt string              `json:"generatedAt"`
+	ID          string                   `json:"id"`
+	Question    string                   `json:"question"`
+	Answer      string                   `json:"answer"`
+	Citations   []KnowledgeCitation      `json:"citations"`
+	GeneratedAt string                   `json:"generatedAt"`
+	Model       string                   `json:"model"`
+	CreatedBy   string                   `json:"createdBy"`
+	Feedback    *KnowledgeAnswerFeedback `json:"feedback,omitempty"`
+}
+
+type KnowledgeAnswerFeedback struct {
+	Status          string `json:"status"`
+	CorrectedAnswer string `json:"correctedAnswer,omitempty"`
+	Note            string `json:"note,omitempty"`
+	Reviewer        string `json:"reviewer"`
+	ReviewedAt      string `json:"reviewedAt"`
 }
 
 type ChangePlanStep struct {
@@ -261,6 +273,9 @@ type repository interface {
 	SaveKnowledgeEmbedding(context.Context, string, string, int, []float32) error
 	LoadKnowledgeEmbedding(context.Context, string) ([]float32, error)
 	SearchKnowledgeVector(context.Context, []float32, int) ([]KnowledgeVectorMatch, error)
+	SaveKnowledgeAnswer(context.Context, KnowledgeAnswer) error
+	GetKnowledgeAnswer(context.Context, string) (KnowledgeAnswer, error)
+	LoadKnowledgeAnswers(context.Context, int) ([]KnowledgeAnswer, error)
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
 	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)

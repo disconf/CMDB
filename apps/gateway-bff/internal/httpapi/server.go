@@ -3929,7 +3929,8 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
-		answer, err := aiopsService.AskKnowledge(input.Question, input.Limit)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		answer, err := aiopsService.AskKnowledgeWithUser(input.Question, input.Limit, user.Username)
 		if errors.Is(err, aiops.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "QUESTION_REQUIRED", "message": "请输入知识库问题"})
 			return
@@ -3938,9 +3939,46 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_ASK_FAILED", "message": err.Error()})
 			return
 		}
-		user, _ := authService.CurrentUser(bearerToken(r))
 		auditService.Record(user.Username, "aiops.knowledge.ask", "knowledge", input.Question)
 		writeJSON(w, http.StatusOK, answer)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/answers/{id}/feedback", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		var input aiops.KnowledgeAnswerFeedback
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		input.Reviewer = user.Username
+		item, err := aiopsService.SubmitKnowledgeAnswerFeedback(r.Context(), r.PathValue("id"), input)
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANSWER_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "INVALID_FEEDBACK"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "FEEDBACK_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.knowledge.answer.feedback", item.ID, input.Status)
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/aiops/knowledge/feedback/stats", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		stats, err := aiopsService.KnowledgeAnswerFeedbackStats(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "FEEDBACK_STATS_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
 	})
 	mux.HandleFunc("GET /api/v1/aiops/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {

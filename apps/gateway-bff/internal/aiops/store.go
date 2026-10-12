@@ -17,6 +17,7 @@ type memoryRepository struct {
 	versions      []KnowledgeVersion
 	attachments   []KnowledgeAttachment
 	embeddings    map[string][]float32
+	answers       []KnowledgeAnswer
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
@@ -24,7 +25,7 @@ type memoryRepository struct {
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, embeddings: map[string][]float32{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, embeddings: map[string][]float32{}, answers: []KnowledgeAnswer{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
 }
 
 func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {
@@ -102,6 +103,37 @@ func (r *memoryRepository) SearchKnowledgeVector(_ context.Context, vector []flo
 		result = result[:limit]
 	}
 	return result, nil
+}
+
+func (r *memoryRepository) SaveKnowledgeAnswer(_ context.Context, item KnowledgeAnswer) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.answers {
+		if r.answers[i].ID == item.ID {
+			r.answers[i] = item
+			return nil
+		}
+	}
+	r.answers = append([]KnowledgeAnswer{item}, r.answers...)
+	return nil
+}
+func (r *memoryRepository) GetKnowledgeAnswer(_ context.Context, id string) (KnowledgeAnswer, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, item := range r.answers {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return KnowledgeAnswer{}, ErrNotFound
+}
+func (r *memoryRepository) LoadKnowledgeAnswers(_ context.Context, limit int) ([]KnowledgeAnswer, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if limit > 0 && len(r.answers) > limit {
+		return append([]KnowledgeAnswer(nil), r.answers[:limit]...), nil
+	}
+	return append([]KnowledgeAnswer(nil), r.answers...), nil
 }
 
 func (r *memoryRepository) LoadKnowledgeAttachments(_ context.Context, knowledgeID string) ([]KnowledgeAttachment, error) {

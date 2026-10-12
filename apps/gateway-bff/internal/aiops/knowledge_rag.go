@@ -11,6 +11,10 @@ import (
 const knowledgeRAGMinVectorScore = 0.35
 
 func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, error) {
+	return s.AskKnowledgeWithUser(question, limit, "system")
+}
+
+func (s *Service) AskKnowledgeWithUser(question string, limit int, user string) (KnowledgeAnswer, error) {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return KnowledgeAnswer{}, ErrValidation
@@ -72,9 +76,10 @@ func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, err
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
 	}
-	answer := KnowledgeAnswer{Question: question, Citations: []KnowledgeCitation{}, GeneratedAt: time.Now().Format("2006-01-02 15:04:05")}
+	answer := KnowledgeAnswer{ID: newID("kans"), Question: question, Citations: []KnowledgeCitation{}, GeneratedAt: time.Now().Format("2006-01-02 15:04:05"), Model: s.EmbeddingModel(), CreatedBy: strings.TrimSpace(user)}
 	if len(ranked) == 0 {
 		answer.Answer = "知识库中暂未找到与该问题直接相关的已发布知识，建议补充故障现象、组件名称或错误关键词后重试。"
+		_ = s.repo.SaveKnowledgeAnswer(context.Background(), answer)
 		return answer, nil
 	}
 	var builder strings.Builder
@@ -87,7 +92,54 @@ func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, err
 	}
 	builder.WriteString("以上结论来自知识库检索，请结合当前告警、监控指标和变更记录确认后执行。")
 	answer.Answer = maskSensitiveText(builder.String())
+	_ = s.repo.SaveKnowledgeAnswer(context.Background(), answer)
 	return answer, nil
+}
+
+func (s *Service) SubmitKnowledgeAnswerFeedback(ctx context.Context, answerID string, input KnowledgeAnswerFeedback) (KnowledgeAnswer, error) {
+	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
+	if input.Status != "helpful" && input.Status != "not-helpful" && input.Status != "corrected" {
+		return KnowledgeAnswer{}, ErrValidation
+	}
+	item, err := s.repo.GetKnowledgeAnswer(ctx, answerID)
+	if err != nil {
+		return KnowledgeAnswer{}, err
+	}
+	input.CorrectedAnswer = maskSensitiveText(strings.TrimSpace(input.CorrectedAnswer))
+	input.Note = maskSensitiveText(strings.TrimSpace(input.Note))
+	input.Reviewer = strings.TrimSpace(input.Reviewer)
+	input.ReviewedAt = time.Now().Format("2006-01-02 15:04:05")
+	item.Feedback = &input
+	if err = s.repo.SaveKnowledgeAnswer(ctx, item); err != nil {
+		return KnowledgeAnswer{}, err
+	}
+	if input.Status == "corrected" && input.CorrectedAnswer != "" {
+		_, _ = s.CreateKnowledge(KnowledgeInput{Title: "RAG 纠正：" + item.Question, Category: "故障处理", Summary: item.Answer, Content: input.CorrectedAnswer, Tags: []string{"RAG修正", item.ID}, Status: "draft"}, input.Reviewer)
+	}
+	return item, nil
+}
+
+func (s *Service) KnowledgeAnswerFeedbackStats(ctx context.Context) (map[string]int, error) {
+	items, err := s.repo.LoadKnowledgeAnswers(ctx, 1000)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]int{"total": len(items), "helpful": 0, "notHelpful": 0, "corrected": 0, "pending": 0}
+	for _, item := range items {
+		if item.Feedback == nil {
+			result["pending"]++
+			continue
+		}
+		switch item.Feedback.Status {
+		case "helpful":
+			result["helpful"]++
+		case "not-helpful":
+			result["notHelpful"]++
+		case "corrected":
+			result["corrected"]++
+		}
+	}
+	return result, nil
 }
 
 func knowledgeSnippet(item Knowledge, question string) string {

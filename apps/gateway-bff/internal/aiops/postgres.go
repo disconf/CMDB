@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS aiops_knowledge_embeddings (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_embeddings_hnsw ON aiops_knowledge_embeddings USING hnsw (embedding vector_cosine_ops);
+CREATE TABLE IF NOT EXISTS aiops_knowledge_answers (
+  id text PRIMARY KEY, question text NOT NULL, answer text NOT NULL,
+  citations jsonb NOT NULL DEFAULT '[]', model text NOT NULL DEFAULT '',
+  created_by text NOT NULL DEFAULT '', generated_at timestamptz NOT NULL,
+  feedback jsonb NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_answers_time ON aiops_knowledge_answers(generated_at DESC);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   id text PRIMARY KEY,
   analysis_id text NOT NULL,
@@ -462,6 +469,69 @@ func parseKnowledgeVector(value string) []float32 {
 		}
 	}
 	return result
+}
+
+func (r *postgresRepository) SaveKnowledgeAnswer(ctx context.Context, item KnowledgeAnswer) error {
+	citations, _ := json.Marshal(item.Citations)
+	feedback, _ := json.Marshal(item.Feedback)
+	generated, err := parseAITime(item.GeneratedAt)
+	if err != nil {
+		generated = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge_answers(id,question,answer,citations,model,created_by,generated_at,feedback) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET answer=excluded.answer,citations=excluded.citations,model=excluded.model,feedback=excluded.feedback`, item.ID, item.Question, item.Answer, citations, item.Model, item.CreatedBy, generated, feedback)
+	return err
+}
+func (r *postgresRepository) GetKnowledgeAnswer(ctx context.Context, id string) (KnowledgeAnswer, error) {
+	var item KnowledgeAnswer
+	var citations, feedback []byte
+	var generated time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT id,question,answer,citations,model,created_by,generated_at,feedback FROM aiops_knowledge_answers WHERE id=$1`, id).Scan(&item.ID, &item.Question, &item.Answer, &citations, &item.Model, &item.CreatedBy, &generated, &feedback)
+	if err == sql.ErrNoRows {
+		return KnowledgeAnswer{}, ErrNotFound
+	}
+	if err != nil {
+		return KnowledgeAnswer{}, err
+	}
+	_ = json.Unmarshal(citations, &item.Citations)
+	if len(feedback) > 0 && string(feedback) != "{}" {
+		var value KnowledgeAnswerFeedback
+		_ = json.Unmarshal(feedback, &value)
+		if value.Status != "" {
+			item.Feedback = &value
+		}
+	}
+	item.GeneratedAt = generated.Local().Format("2006-01-02 15:04:05")
+	return item, nil
+}
+func (r *postgresRepository) LoadKnowledgeAnswers(ctx context.Context, limit int) ([]KnowledgeAnswer, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,question,answer,citations,model,created_by,generated_at,feedback FROM aiops_knowledge_answers ORDER BY generated_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeAnswer{}
+	for rows.Next() {
+		var item KnowledgeAnswer
+		var citations, feedback []byte
+		var generated time.Time
+		if err = rows.Scan(&item.ID, &item.Question, &item.Answer, &citations, &item.Model, &item.CreatedBy, &generated, &feedback); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(citations, &item.Citations)
+		if len(feedback) > 0 && string(feedback) != "{}" {
+			var value KnowledgeAnswerFeedback
+			_ = json.Unmarshal(feedback, &value)
+			if value.Status != "" {
+				item.Feedback = &value
+			}
+		}
+		item.GeneratedAt = generated.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
 }
 
 func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) error {
