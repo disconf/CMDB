@@ -3969,6 +3969,18 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "aiops.knowledge.answer.feedback", item.ID, input.Status)
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("GET /api/v1/aiops/knowledge/answers", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, err := aiopsService.KnowledgeAnswers(limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_ANSWERS_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge/feedback/stats", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

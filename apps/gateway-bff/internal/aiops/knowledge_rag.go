@@ -142,6 +142,10 @@ func (s *Service) SubmitKnowledgeAnswerFeedback(ctx context.Context, answerID st
 	return item, nil
 }
 
+func (s *Service) KnowledgeAnswers(limit int) ([]KnowledgeAnswer, error) {
+	return s.repo.LoadKnowledgeAnswers(context.Background(), limit)
+}
+
 func (s *Service) KnowledgeAnswerFeedbackStats(ctx context.Context) (map[string]int, error) {
 	items, err := s.repo.LoadKnowledgeAnswers(ctx, 1000)
 	if err != nil {
