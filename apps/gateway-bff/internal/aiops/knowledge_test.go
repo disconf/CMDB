@@ -114,6 +114,14 @@ func TestAskKnowledgeReturnsCitedAnswer(t *testing.T) {
 	}
 }
 
+func TestMaskSensitiveKnowledgeText(t *testing.T) {
+	value := "password=Secret123 token: abcdef Authorization: Bearer xyz.123"
+	masked := maskSensitiveText(value)
+	if strings.Contains(masked, "Secret123") || strings.Contains(masked, "abcdef") || strings.Contains(masked, "xyz.123") {
+		t.Fatalf("sensitive values were not masked: %s", masked)
+	}
+}
+
 func TestKnowledgeAttachmentLifecycle(t *testing.T) {
 	service := NewService()
 	store := &fakeKnowledgeStore{data: map[string][]byte{}}

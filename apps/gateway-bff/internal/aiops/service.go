@@ -55,6 +55,7 @@ type Service struct {
 	tools         ToolProvider
 	jobs          JobProvider
 	objectStore   knowledgeObjectStore
+	embedder      knowledgeEmbeddingProvider
 }
 
 func NewService() *Service {
@@ -64,6 +65,11 @@ func NewService() *Service {
 		panic(fmt.Sprintf("initialize AIOps object storage: %v", storeErr))
 	}
 	s.objectStore = store
+	embedder, embedderErr := newKnowledgeEmbeddingProvider()
+	if embedderErr != nil {
+		panic(fmt.Sprintf("initialize knowledge embedding provider: %v", embedderErr))
+	}
+	s.embedder = embedder
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
 		repo, err := openPostgres(databaseURL)
 		if err != nil {
@@ -872,7 +878,28 @@ func (s *Service) CreateKnowledgeFromAnalysis(analysisID, author string) (Knowle
 }
 
 func (s *Service) indexKnowledge(item Knowledge) error {
-	return s.repo.SaveKnowledgeEmbedding(context.Background(), item.ID, knowledgeEmbeddingModel, knowledgeEmbeddingDim, embedKnowledgeText(knowledgeEmbeddingText(item)))
+	vector, err := s.embedText(context.Background(), knowledgeEmbeddingText(item))
+	if err != nil {
+		return err
+	}
+	return s.repo.SaveKnowledgeEmbedding(context.Background(), item.ID, s.EmbeddingModel(), knowledgeEmbeddingDim, vector)
+}
+
+func (s *Service) embedText(ctx context.Context, value string) ([]float32, error) {
+	value = maskSensitiveText(value)
+	if s.embedder != nil {
+		if vector, err := s.embedder.Embed(ctx, value); err == nil {
+			return vector, nil
+		}
+	}
+	return embedKnowledgeText(value), nil
+}
+
+func (s *Service) EmbeddingModel() string {
+	if s.embedder == nil {
+		return knowledgeEmbeddingModel
+	}
+	return s.embedder.Name()
 }
 
 func (s *Service) SearchKnowledgeHybrid(query string, includeDrafts bool) []Knowledge {
@@ -880,7 +907,11 @@ func (s *Service) SearchKnowledgeHybrid(query string, includeDrafts bool) []Know
 	if strings.TrimSpace(query) == "" {
 		return lexical
 	}
-	matches, err := s.repo.SearchKnowledgeVector(context.Background(), embedKnowledgeText(query), 30)
+	queryVector, embedErr := s.embedText(context.Background(), query)
+	if embedErr != nil {
+		return lexical
+	}
+	matches, err := s.repo.SearchKnowledgeVector(context.Background(), queryVector, 30)
 	if err != nil || len(matches) == 0 {
 		return lexical
 	}

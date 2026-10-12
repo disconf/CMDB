@@ -1,10 +1,18 @@
 package aiops
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"hash/fnv"
 	"math"
+	"net/http"
+	"os"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -12,6 +20,97 @@ const (
 	knowledgeEmbeddingModel = "local-hash-v1"
 	knowledgeEmbeddingDim   = 256
 )
+
+type knowledgeEmbeddingProvider interface {
+	Name() string
+	Dimensions() int
+	Embed(context.Context, string) ([]float32, error)
+}
+
+type localKnowledgeEmbeddingProvider struct{}
+
+func (localKnowledgeEmbeddingProvider) Name() string    { return knowledgeEmbeddingModel }
+func (localKnowledgeEmbeddingProvider) Dimensions() int { return knowledgeEmbeddingDim }
+func (localKnowledgeEmbeddingProvider) Embed(_ context.Context, value string) ([]float32, error) {
+	return embedKnowledgeText(value), nil
+}
+
+type externalKnowledgeEmbeddingProvider struct {
+	baseURL string
+	apiKey  string
+	model   string
+	dims    int
+	client  *http.Client
+}
+
+func newKnowledgeEmbeddingProvider() (knowledgeEmbeddingProvider, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AI_EMBEDDING_BASE_URL")), "/")
+	model := strings.TrimSpace(os.Getenv("AI_EMBEDDING_MODEL"))
+	apiKey := strings.TrimSpace(os.Getenv("AI_EMBEDDING_API_KEY"))
+	if baseURL == "" || model == "" {
+		return localKnowledgeEmbeddingProvider{}, nil
+	}
+	dims := knowledgeEmbeddingDim
+	if value := strings.TrimSpace(os.Getenv("AI_EMBEDDING_DIMENSIONS")); value != "" {
+		if _, err := fmt.Sscanf(value, "%d", &dims); err != nil || dims != knowledgeEmbeddingDim {
+			return nil, errors.New("AI_EMBEDDING_DIMENSIONS must be 256 with the current pgvector schema")
+		}
+	}
+	return &externalKnowledgeEmbeddingProvider{baseURL: baseURL, apiKey: apiKey, model: model, dims: dims, client: &http.Client{Timeout: 20 * time.Second}}, nil
+}
+
+func (e *externalKnowledgeEmbeddingProvider) Name() string    { return e.model }
+func (e *externalKnowledgeEmbeddingProvider) Dimensions() int { return e.dims }
+func (e *externalKnowledgeEmbeddingProvider) Embed(ctx context.Context, value string) ([]float32, error) {
+	payload, err := json.Marshal(map[string]any{"model": e.model, "input": value, "dimensions": e.dims})
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if e.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+e.apiKey)
+	}
+	response, err := e.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	var document struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&document); err != nil {
+		return nil, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 || len(document.Data) == 0 {
+		return nil, fmt.Errorf("embedding provider returned %s", response.Status)
+	}
+	vector := document.Data[0].Embedding
+	if len(vector) != e.dims {
+		return nil, fmt.Errorf("embedding dimensions %d do not match schema %d", len(vector), e.dims)
+	}
+	return normalizeVector(vector), nil
+}
+
+func normalizeVector(vector []float32) []float32 {
+	var norm float64
+	for _, value := range vector {
+		norm += float64(value * value)
+	}
+	if norm == 0 {
+		return vector
+	}
+	norm = math.Sqrt(norm)
+	for index := range vector {
+		vector[index] = float32(float64(vector[index]) / norm)
+	}
+	return vector
+}
 
 func knowledgeEmbeddingText(item Knowledge) string {
 	parts := []string{

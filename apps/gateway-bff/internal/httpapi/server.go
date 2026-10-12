@@ -3915,7 +3915,7 @@ func NewServer() *Server {
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
 		auditService.Record(user.Username, "aiops.knowledge.reindex", "knowledge", fmt.Sprintf("count=%d", count))
-		writeJSON(w, http.StatusOK, map[string]any{"indexed": count, "model": "local-hash-v1"})
+		writeJSON(w, http.StatusOK, map[string]any{"indexed": count, "model": aiopsService.EmbeddingModel()})
 	})
 	mux.HandleFunc("POST /api/v1/aiops/knowledge/ask", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {

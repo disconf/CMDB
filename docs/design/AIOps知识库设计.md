@@ -89,3 +89,12 @@ AIOps 分析
 - 前端支持直接提问，并可点击引用回到对应知识详情。
 - 所有问答请求写入审计；当前不调用外部大模型，因此不会把知识正文或凭据发送到第三方。
 - 后续可在保持响应结构不变的前提下增加大模型总结、引用重排和答案反馈。
+
+## Embedding 模型适配与敏感信息脱敏
+
+- Embedding 通过统一 Provider 接口接入，默认使用离线 `local-hash-v1`。
+- 配置 `AI_EMBEDDING_BASE_URL`、`AI_EMBEDDING_MODEL`、`AI_EMBEDDING_API_KEY` 后切换为 OpenAI 兼容 `/embeddings` 接口。
+- 当前 pgvector 表固定 256 维，外部模型必须支持 `dimensions=256`；切换模型后执行重建索引。
+- 问题、知识索引文本和 RAG 答案在进入向量模型或返回前统一执行敏感信息脱敏。
+- 脱敏覆盖 password/token/secret/api-key 赋值、Bearer Token 和私钥块。
+- 外部模型失败时自动回退本地向量模型，保证检索可用。

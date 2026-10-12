@@ -15,6 +15,7 @@ func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, err
 	if question == "" {
 		return KnowledgeAnswer{}, ErrValidation
 	}
+	question = maskSensitiveText(question)
 	if limit <= 0 {
 		limit = 5
 	}
@@ -42,7 +43,8 @@ func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, err
 		}
 		scores[item.ID] = &scoredKnowledge{item: item, score: float64(len(byID)-index) * 1.5}
 	}
-	matches, _ := s.repo.SearchKnowledgeVector(context.Background(), embedKnowledgeText(question), 30)
+	queryVector, _ := s.embedText(context.Background(), question)
+	matches, _ := s.repo.SearchKnowledgeVector(context.Background(), queryVector, 30)
 	for _, match := range matches {
 		if match.Score < knowledgeRAGMinVectorScore {
 			continue
@@ -84,7 +86,7 @@ func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, err
 		builder.WriteString(fmt.Sprintf("%d. 《%s》（%s）：%s [%s]\n", index+1, item.item.Title, item.item.Category, snippet, item.item.ID))
 	}
 	builder.WriteString("以上结论来自知识库检索，请结合当前告警、监控指标和变更记录确认后执行。")
-	answer.Answer = builder.String()
+	answer.Answer = maskSensitiveText(builder.String())
 	return answer, nil
 }
 
