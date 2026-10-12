@@ -1,6 +1,27 @@
 package aiops
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+type fakeKnowledgeStore struct{ data map[string][]byte }
+
+func (f *fakeKnowledgeStore) Put(_ context.Context, key string, content []byte, _ string) (string, error) {
+	if f.data == nil {
+		f.data = map[string][]byte{}
+	}
+	f.data[key] = append([]byte(nil), content...)
+	return "etag", nil
+}
+func (f *fakeKnowledgeStore) Get(_ context.Context, key string) ([]byte, error) {
+	return append([]byte(nil), f.data[key]...), nil
+}
+func (f *fakeKnowledgeStore) Delete(_ context.Context, key string) error {
+	delete(f.data, key)
+	return nil
+}
+func (f *fakeKnowledgeStore) Bucket() string { return "test" }
 
 func TestKnowledgeCRUDAndAnalysisSynthesis(t *testing.T) {
 	service := NewService()
@@ -55,5 +76,33 @@ func TestKnowledgeSuggestionsPreferTitleAndTags(t *testing.T) {
 	items := service.knowledgeSuggestionsFor("磁盘空间耗尽风险", "磁盘使用率告警", 3)
 	if len(items) == 0 || items[0].ID != "kb-005" {
 		t.Fatalf("expected disk knowledge suggestion, got %#v", items)
+	}
+}
+
+func TestKnowledgeAttachmentLifecycle(t *testing.T) {
+	service := NewService()
+	store := &fakeKnowledgeStore{data: map[string][]byte{}}
+	service.objectStore = store
+	created, err := service.CreateKnowledge(KnowledgeInput{Title: "attachment knowledge", Category: "测试", Summary: "summary", Content: "content", Status: "published"}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := service.UploadKnowledgeAttachment(context.Background(), created.ID, "runbook.txt", "text/plain", []byte("payload"), "tester")
+	if err != nil || item.Filename != "runbook.txt" || item.Size != 7 {
+		t.Fatalf("upload attachment failed: %#v %v", item, err)
+	}
+	items, err := service.KnowledgeAttachments(created.ID)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list attachments failed: %#v %v", items, err)
+	}
+	_, content, err := service.DownloadKnowledgeAttachment(context.Background(), created.ID, item.ID)
+	if err != nil || string(content) != "payload" {
+		t.Fatalf("download attachment failed: %q %v", content, err)
+	}
+	if err = service.DeleteKnowledgeAttachment(context.Background(), created.ID, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.data) != 0 {
+		t.Fatalf("object was not deleted: %#v", store.data)
 	}
 }

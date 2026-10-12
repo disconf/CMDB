@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS aiops_knowledge_versions (
   UNIQUE(knowledge_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_versions_knowledge ON aiops_knowledge_versions(knowledge_id, version DESC);
+CREATE TABLE IF NOT EXISTS aiops_knowledge_attachments (
+  id text PRIMARY KEY,
+  knowledge_id text NOT NULL REFERENCES aiops_knowledge(id) ON DELETE CASCADE,
+  filename text NOT NULL,
+  content_type text NOT NULL DEFAULT 'application/octet-stream',
+  size bigint NOT NULL DEFAULT 0,
+  sha256 text NOT NULL DEFAULT '',
+  object_key text NOT NULL,
+  uploaded_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_attachments_knowledge ON aiops_knowledge_attachments(knowledge_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   id text PRIMARY KEY,
   analysis_id text NOT NULL,
@@ -346,6 +358,40 @@ func (r *postgresRepository) LoadKnowledgeVersions(ctx context.Context, knowledg
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveKnowledgeAttachment(ctx context.Context, item KnowledgeAttachment) error {
+	createdAt, err := parseAITime(item.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge_attachments(id,knowledge_id,filename,content_type,size,sha256,object_key,uploaded_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET filename=excluded.filename,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,object_key=excluded.object_key,uploaded_by=excluded.uploaded_by`,
+		item.ID, item.KnowledgeID, item.Filename, item.ContentType, item.Size, item.SHA256, item.Key, item.UploadedBy, createdAt)
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledgeAttachments(ctx context.Context, knowledgeID string) ([]KnowledgeAttachment, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,knowledge_id,filename,content_type,size,sha256,object_key,uploaded_by,created_at FROM aiops_knowledge_attachments WHERE knowledge_id=$1 ORDER BY created_at DESC`, knowledgeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeAttachment{}
+	for rows.Next() {
+		var item KnowledgeAttachment
+		var createdAt time.Time
+		if err = rows.Scan(&item.ID, &item.KnowledgeID, &item.Filename, &item.ContentType, &item.Size, &item.SHA256, &item.Key, &item.UploadedBy, &createdAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) DeleteKnowledgeAttachment(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM aiops_knowledge_attachments WHERE id=$1`, id)
+	return err
 }
 
 func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) error {

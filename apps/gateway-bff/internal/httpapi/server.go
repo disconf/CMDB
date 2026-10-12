@@ -3773,6 +3773,104 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "aiops.knowledge.restore", item.ID, fmt.Sprintf("version=%d", version))
 		writeJSON(w, http.StatusOK, item)
 	})
+	mux.HandleFunc("GET /api/v1/aiops/knowledge/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		items, err := aiopsService.KnowledgeAttachments(r.PathValue("id"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_ATTACHMENT_READ_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, (20<<20)+1024*1024)
+		if err := r.ParseMultipartForm(20 << 20); err != nil {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "ATTACHMENT_TOO_LARGE", "message": "附件不能超过 20MB"})
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "FILE_REQUIRED"})
+			return
+		}
+		defer file.Close()
+		content, err := io.ReadAll(io.LimitReader(file, (20<<20)+1))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "ATTACHMENT_READ_FAILED"})
+			return
+		}
+		if len(content) > 20<<20 {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "ATTACHMENT_TOO_LARGE", "message": "附件不能超过 20MB"})
+			return
+		}
+		contentType := header.Header.Get("Content-Type")
+		if strings.TrimSpace(contentType) == "" {
+			contentType = http.DetectContentType(content)
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.UploadKnowledgeAttachment(r.Context(), r.PathValue("id"), header.Filename, contentType, content, user.Username)
+		if errors.Is(err, aiops.ErrObjectStoreNotReady) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "OBJECT_STORAGE_NOT_READY", "message": "对象存储未配置"})
+			return
+		}
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "ATTACHMENT_INVALID", "message": "附件内容为空或超过限制"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "ATTACHMENT_UPLOAD_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.knowledge.attachment.upload", item.ID, item.Filename)
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("GET /api/v1/aiops/knowledge/{id}/attachments/{attachmentId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		item, content, err := aiopsService.DownloadKnowledgeAttachment(r.Context(), r.PathValue("id"), r.PathValue("attachmentId"))
+		if errors.Is(err, aiops.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ATTACHMENT_NOT_FOUND"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "ATTACHMENT_DOWNLOAD_FAILED", "message": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", item.ContentType)
+		w.Header().Set("Content-Length", strconv.FormatInt(int64(len(content)), 10))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", item.Filename))
+		_, _ = w.Write(content)
+	})
+	mux.HandleFunc("DELETE /api/v1/aiops/knowledge/{id}/attachments/{attachmentId}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		if err := aiopsService.DeleteKnowledgeAttachment(r.Context(), r.PathValue("id"), r.PathValue("attachmentId")); err != nil {
+			if errors.Is(err, aiops.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"code": "ATTACHMENT_NOT_FOUND"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "ATTACHMENT_DELETE_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "aiops.knowledge.attachment.delete", r.PathValue("attachmentId"), r.PathValue("id"))
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /api/v1/aiops/knowledge/synthesize", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:execute") {
 			return

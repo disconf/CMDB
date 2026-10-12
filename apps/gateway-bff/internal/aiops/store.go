@@ -14,6 +14,7 @@ type memoryRepository struct {
 	analyses      []Analysis
 	knowledge     []Knowledge
 	versions      []KnowledgeVersion
+	attachments   []KnowledgeAttachment
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
@@ -21,7 +22,7 @@ type memoryRepository struct {
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
 }
 
 func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {
@@ -59,6 +60,50 @@ func (r *memoryRepository) DeleteKnowledge(_ context.Context, id string) error {
 		}
 	}
 	r.versions = filtered
+	attachments := r.attachments[:0]
+	for _, item := range r.attachments {
+		if item.KnowledgeID != id {
+			attachments = append(attachments, item)
+		}
+	}
+	r.attachments = attachments
+	return nil
+}
+
+func (r *memoryRepository) LoadKnowledgeAttachments(_ context.Context, knowledgeID string) ([]KnowledgeAttachment, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := []KnowledgeAttachment{}
+	for _, item := range r.attachments {
+		if item.KnowledgeID == knowledgeID {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+func (r *memoryRepository) SaveKnowledgeAttachment(_ context.Context, item KnowledgeAttachment) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.attachments {
+		if r.attachments[i].ID == item.ID {
+			r.attachments[i] = item
+			return nil
+		}
+	}
+	r.attachments = append([]KnowledgeAttachment{item}, r.attachments...)
+	return nil
+}
+
+func (r *memoryRepository) DeleteKnowledgeAttachment(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.attachments {
+		if r.attachments[i].ID == id {
+			r.attachments = append(r.attachments[:i], r.attachments[i+1:]...)
+			return nil
+		}
+	}
 	return nil
 }
 

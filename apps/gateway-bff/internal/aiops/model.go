@@ -144,6 +144,18 @@ type KnowledgeVersion struct {
 	CreatedAt     string    `json:"createdAt"`
 }
 
+type KnowledgeAttachment struct {
+	ID          string `json:"id"`
+	KnowledgeID string `json:"knowledgeId"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	Key         string `json:"-"`
+	UploadedBy  string `json:"uploadedBy"`
+	CreatedAt   string `json:"createdAt"`
+}
+
 type ChangePlanStep struct {
 	Order  int    `json:"order"`
 	Title  string `json:"title"`
@@ -222,6 +234,9 @@ type repository interface {
 	DeleteKnowledge(context.Context, string) error
 	LoadKnowledgeVersions(context.Context, string) ([]KnowledgeVersion, error)
 	SaveKnowledgeVersion(context.Context, KnowledgeVersion) error
+	LoadKnowledgeAttachments(context.Context, string) ([]KnowledgeAttachment, error)
+	SaveKnowledgeAttachment(context.Context, KnowledgeAttachment) error
+	DeleteKnowledgeAttachment(context.Context, string) error
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
 	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)

@@ -2,27 +2,41 @@ package aiops
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"cmdb/gateway-bff/internal/monitor"
+	"cmdb/gateway-bff/internal/objectstore"
 	"cmdb/gateway-bff/internal/tickets"
 )
 
 var (
-	ErrNotFound        = errors.New("analysis not found")
-	ErrValidation      = errors.New("validation")
-	ErrNotReady        = errors.New("analysis dependencies not ready")
-	ErrNoEvidence      = errors.New("no new evidence")
-	ErrRunbookNotFound = errors.New("runbook not found")
-	ErrChangeDisabled  = errors.New("change runbooks disabled")
+	ErrNotFound            = errors.New("analysis not found")
+	ErrValidation          = errors.New("validation")
+	ErrNotReady            = errors.New("analysis dependencies not ready")
+	ErrNoEvidence          = errors.New("no new evidence")
+	ErrRunbookNotFound     = errors.New("runbook not found")
+	ErrChangeDisabled      = errors.New("change runbooks disabled")
+	ErrObjectStoreNotReady = errors.New("object storage not configured")
 )
+
+const knowledgeAttachmentMaxBytes = 20 << 20
+
+type knowledgeObjectStore interface {
+	Put(context.Context, string, []byte, string) (string, error)
+	Get(context.Context, string) ([]byte, error)
+	Delete(context.Context, string) error
+	Bucket() string
+}
 
 type Service struct {
 	mu            sync.RWMutex
@@ -40,10 +54,16 @@ type Service struct {
 	releases      ReleaseProvider
 	tools         ToolProvider
 	jobs          JobProvider
+	objectStore   knowledgeObjectStore
 }
 
 func NewService() *Service {
 	s := &Service{repo: newMemoryRepository(), knowledge: defaultKnowledge(), analyses: []Analysis{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	store, storeErr := objectstore.NewFromEnv()
+	if storeErr != nil {
+		panic(fmt.Sprintf("initialize AIOps object storage: %v", storeErr))
+	}
+	s.objectStore = store
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
 		repo, err := openPostgres(databaseURL)
 		if err != nil {
@@ -716,6 +736,100 @@ func (s *Service) saveKnowledgeVersion(item Knowledge, author, summary string) (
 		return KnowledgeVersion{}, err
 	}
 	return version, nil
+}
+
+func (s *Service) KnowledgeAttachments(id string) ([]KnowledgeAttachment, error) {
+	if _, ok := s.knowledgeExists(id); !ok {
+		return nil, ErrNotFound
+	}
+	return s.repo.LoadKnowledgeAttachments(context.Background(), id)
+}
+
+func (s *Service) UploadKnowledgeAttachment(ctx context.Context, knowledgeID, filename, contentType string, content []byte, uploader string) (KnowledgeAttachment, error) {
+	if _, ok := s.knowledgeExists(knowledgeID); !ok {
+		return KnowledgeAttachment{}, ErrNotFound
+	}
+	if s.objectStore == nil {
+		return KnowledgeAttachment{}, ErrObjectStoreNotReady
+	}
+	if len(content) == 0 || len(content) > knowledgeAttachmentMaxBytes {
+		return KnowledgeAttachment{}, ErrValidation
+	}
+	filename = sanitizeAttachmentFilename(filename)
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	sum := sha256.Sum256(content)
+	item := KnowledgeAttachment{ID: newID("kba"), KnowledgeID: knowledgeID, Filename: filename, ContentType: contentType, Size: int64(len(content)), SHA256: hex.EncodeToString(sum[:]), UploadedBy: strings.TrimSpace(uploader), CreatedAt: time.Now().Format("2006-01-02 15:04:05")}
+	item.Key = "knowledge/" + safeID(knowledgeID) + "/" + item.ID + attachmentExtension(filename)
+	if _, err := s.objectStore.Put(ctx, item.Key, content, contentType); err != nil {
+		return KnowledgeAttachment{}, err
+	}
+	if err := s.repo.SaveKnowledgeAttachment(ctx, item); err != nil {
+		_ = s.objectStore.Delete(ctx, item.Key)
+		return KnowledgeAttachment{}, err
+	}
+	return item, nil
+}
+
+func (s *Service) DownloadKnowledgeAttachment(ctx context.Context, knowledgeID, attachmentID string) (KnowledgeAttachment, []byte, error) {
+	if _, ok := s.knowledgeExists(knowledgeID); !ok {
+		return KnowledgeAttachment{}, nil, ErrNotFound
+	}
+	if s.objectStore == nil {
+		return KnowledgeAttachment{}, nil, ErrObjectStoreNotReady
+	}
+	items, err := s.repo.LoadKnowledgeAttachments(ctx, knowledgeID)
+	if err != nil {
+		return KnowledgeAttachment{}, nil, err
+	}
+	for _, item := range items {
+		if item.ID == attachmentID {
+			content, err := s.objectStore.Get(ctx, item.Key)
+			if err != nil {
+				return KnowledgeAttachment{}, nil, err
+			}
+			return item, content, nil
+		}
+	}
+	return KnowledgeAttachment{}, nil, ErrNotFound
+}
+
+func (s *Service) DeleteKnowledgeAttachment(ctx context.Context, knowledgeID, attachmentID string) error {
+	items, err := s.repo.LoadKnowledgeAttachments(ctx, knowledgeID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID != attachmentID {
+			continue
+		}
+		if s.objectStore != nil {
+			if err = s.objectStore.Delete(ctx, item.Key); err != nil {
+				return err
+			}
+		}
+		return s.repo.DeleteKnowledgeAttachment(ctx, attachmentID)
+	}
+	return ErrNotFound
+}
+
+func sanitizeAttachmentFilename(value string) string {
+	value = strings.TrimSpace(path.Base(strings.ReplaceAll(value, "\\", "/")))
+	value = strings.Trim(value, ". ")
+	if value == "" {
+		return "attachment"
+	}
+	return value
+}
+
+func attachmentExtension(filename string) string {
+	extension := strings.ToLower(path.Ext(filename))
+	if len(extension) > 16 {
+		return ""
+	}
+	return extension
 }
 
 func (s *Service) CreateKnowledgeFromAnalysis(analysisID, author string) (Knowledge, error) {
