@@ -63,6 +63,29 @@ func (s *Service) AskKnowledgeWithUser(question string, limit int, user string) 
 			scores[item.ID] = &scoredKnowledge{item: item, score: match.Score * 10}
 		}
 	}
+	adjustments := map[string]float64{}
+	if answers, err := s.repo.LoadKnowledgeAnswers(context.Background(), 1000); err == nil {
+		for _, answer := range answers {
+			if answer.Feedback == nil {
+				continue
+			}
+			delta := 0.0
+			switch answer.Feedback.Status {
+			case "helpful":
+				delta = 0.5
+			case "not-helpful":
+				delta = -1.5
+			case "corrected":
+				delta = -2.0
+			}
+			for _, citation := range answer.Citations {
+				adjustments[citation.KnowledgeID] += delta
+			}
+		}
+	}
+	for id, item := range scores {
+		item.score += adjustments[id]
+	}
 	ranked := make([]scoredKnowledge, 0, len(scores))
 	for _, item := range scores {
 		ranked = append(ranked, *item)
