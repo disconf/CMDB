@@ -161,6 +161,22 @@ type KnowledgeVectorMatch struct {
 	Score       float64 `json:"score"`
 }
 
+type KnowledgeCitation struct {
+	KnowledgeID string  `json:"knowledgeId"`
+	Title       string  `json:"title"`
+	Category    string  `json:"category"`
+	Snippet     string  `json:"snippet"`
+	Score       float64 `json:"score"`
+	UpdatedAt   string  `json:"updatedAt"`
+}
+
+type KnowledgeAnswer struct {
+	Question    string              `json:"question"`
+	Answer      string              `json:"answer"`
+	Citations   []KnowledgeCitation `json:"citations"`
+	GeneratedAt string              `json:"generatedAt"`
+}
+
 type ChangePlanStep struct {
 	Order  int    `json:"order"`
 	Title  string `json:"title"`

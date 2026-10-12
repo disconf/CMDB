@@ -3917,6 +3917,31 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "aiops.knowledge.reindex", "knowledge", fmt.Sprintf("count=%d", count))
 		writeJSON(w, http.StatusOK, map[string]any{"indexed": count, "model": "local-hash-v1"})
 	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/ask", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		var input struct {
+			Question string `json:"question"`
+			Limit    int    `json:"limit"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		answer, err := aiopsService.AskKnowledge(input.Question, input.Limit)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "QUESTION_REQUIRED", "message": "请输入知识库问题"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_ASK_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "aiops.knowledge.ask", "knowledge", input.Question)
+		writeJSON(w, http.StatusOK, answer)
+	})
 	mux.HandleFunc("GET /api/v1/aiops/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return

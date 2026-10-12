@@ -1,0 +1,132 @@
+package aiops
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+const knowledgeRAGMinVectorScore = 0.35
+
+func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return KnowledgeAnswer{}, ErrValidation
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 10 {
+		limit = 10
+	}
+	_ = s.reloadKnowledge()
+	s.mu.RLock()
+	byID := make(map[string]Knowledge, len(s.knowledge))
+	for _, item := range s.knowledge {
+		if item.Status == "published" {
+			byID[item.ID] = item
+		}
+	}
+	s.mu.RUnlock()
+
+	type scoredKnowledge struct {
+		item  Knowledge
+		score float64
+	}
+	scores := map[string]*scoredKnowledge{}
+	for index, item := range s.searchKnowledge(question, false) {
+		if _, ok := byID[item.ID]; !ok {
+			continue
+		}
+		scores[item.ID] = &scoredKnowledge{item: item, score: float64(len(byID)-index) * 1.5}
+	}
+	matches, _ := s.repo.SearchKnowledgeVector(context.Background(), embedKnowledgeText(question), 30)
+	for _, match := range matches {
+		if match.Score < knowledgeRAGMinVectorScore {
+			continue
+		}
+		item, ok := byID[match.KnowledgeID]
+		if !ok {
+			continue
+		}
+		if existing, ok := scores[item.ID]; ok {
+			existing.score += match.Score * 10
+		} else {
+			scores[item.ID] = &scoredKnowledge{item: item, score: match.Score * 10}
+		}
+	}
+	ranked := make([]scoredKnowledge, 0, len(scores))
+	for _, item := range scores {
+		ranked = append(ranked, *item)
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].item.Helpful > ranked[j].item.Helpful
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	answer := KnowledgeAnswer{Question: question, Citations: []KnowledgeCitation{}, GeneratedAt: time.Now().Format("2006-01-02 15:04:05")}
+	if len(ranked) == 0 {
+		answer.Answer = "知识库中暂未找到与该问题直接相关的已发布知识，建议补充故障现象、组件名称或错误关键词后重试。"
+		return answer, nil
+	}
+	var builder strings.Builder
+	builder.WriteString("根据知识库检索结果，建议优先参考以下排障知识：\n")
+	for index, item := range ranked {
+		snippet := knowledgeSnippet(item.item, question)
+		citation := KnowledgeCitation{KnowledgeID: item.item.ID, Title: item.item.Title, Category: item.item.Category, Snippet: snippet, Score: item.score, UpdatedAt: item.item.UpdatedAt}
+		answer.Citations = append(answer.Citations, citation)
+		builder.WriteString(fmt.Sprintf("%d. 《%s》（%s）：%s [%s]\n", index+1, item.item.Title, item.item.Category, snippet, item.item.ID))
+	}
+	builder.WriteString("以上结论来自知识库检索，请结合当前告警、监控指标和变更记录确认后执行。")
+	answer.Answer = builder.String()
+	return answer, nil
+}
+
+func knowledgeSnippet(item Knowledge, question string) string {
+	text := strings.TrimSpace(item.Summary)
+	if strings.TrimSpace(item.Content) != "" {
+		if text != "" {
+			text += "。"
+		}
+		text += strings.TrimSpace(item.Content)
+	}
+	if text == "" {
+		return "暂无摘要"
+	}
+	queryTokens := map[string]bool{}
+	for _, token := range knowledgeTokens(question) {
+		queryTokens[token] = true
+	}
+	parts := strings.FieldsFunc(text, func(r rune) bool { return r == '。' || r == '！' || r == '？' || r == '\n' || r == '；' })
+	best := ""
+	bestScore := -1
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		score := 0
+		for _, token := range knowledgeTokens(part) {
+			if queryTokens[token] {
+				score++
+			}
+		}
+		if score > bestScore {
+			best, bestScore = part, score
+		}
+	}
+	if best == "" {
+		best = text
+	}
+	runes := []rune(best)
+	if len(runes) > 180 {
+		return string(runes[:180]) + "…"
+	}
+	return best
+}

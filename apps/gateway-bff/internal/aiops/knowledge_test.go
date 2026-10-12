@@ -2,6 +2,7 @@ package aiops
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,27 @@ func TestKnowledgeEmbeddingAndHybridSearch(t *testing.T) {
 	items := service.SearchKnowledgeHybrid("磁盘空间清理", false)
 	if len(items) == 0 || items[0].ID != "kb-005" {
 		t.Fatalf("expected hybrid search to rank disk knowledge first, got %#v", items)
+	}
+}
+
+func TestAskKnowledgeReturnsCitedAnswer(t *testing.T) {
+	service := NewService()
+	answer, err := service.AskKnowledge("磁盘空间不足应该怎么处理", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Citations) == 0 || answer.Citations[0].KnowledgeID != "kb-005" || !strings.Contains(answer.Answer, "[kb-005]") {
+		t.Fatalf("unexpected knowledge answer: %#v", answer)
+	}
+	if _, err = service.AskKnowledge("   ", 3); err == nil {
+		t.Fatal("expected empty question to be rejected")
+	}
+	empty, err := service.AskKnowledge("完全不存在的量子网络故障", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Citations) != 0 {
+		t.Fatalf("expected unrelated question to return no citations, got %#v", empty.Citations)
 	}
 }
 
