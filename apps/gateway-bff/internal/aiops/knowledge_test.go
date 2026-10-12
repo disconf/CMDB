@@ -79,6 +79,19 @@ func TestKnowledgeSuggestionsPreferTitleAndTags(t *testing.T) {
 	}
 }
 
+func TestKnowledgeEmbeddingAndHybridSearch(t *testing.T) {
+	left := embedKnowledgeText("磁盘空间清理")
+	right := embedKnowledgeText("磁盘空间不足")
+	if similarity := cosineSimilarity(left, right); similarity < 0.4 {
+		t.Fatalf("expected similar phrases to share vector space, got %.3f", similarity)
+	}
+	service := NewService()
+	items := service.SearchKnowledgeHybrid("磁盘空间清理", false)
+	if len(items) == 0 || items[0].ID != "kb-005" {
+		t.Fatalf("expected hybrid search to rank disk knowledge first, got %#v", items)
+	}
+}
+
 func TestKnowledgeAttachmentLifecycle(t *testing.T) {
 	service := NewService()
 	store := &fakeKnowledgeStore{data: map[string][]byte{}}

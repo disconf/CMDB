@@ -85,6 +85,9 @@ func NewService() *Service {
 		if versions, err := s.repo.LoadKnowledgeVersions(ctx, item.ID); err == nil && len(versions) == 0 {
 			_, _ = s.saveKnowledgeVersion(item, "system", "初始化版本")
 		}
+		if vector, err := s.repo.LoadKnowledgeEmbedding(ctx, item.ID); err == nil && len(vector) == 0 {
+			_ = s.indexKnowledge(item)
+		}
 	}
 	if analyses, err := s.repo.LoadAnalyses(ctx); err == nil {
 		s.analyses = analyses
@@ -496,7 +499,7 @@ func (s *Service) knowledgeSuggestionsFor(rootCause, alertTitle string, limit in
 		if query == "" {
 			continue
 		}
-		for _, item := range s.SearchKnowledge(query) {
+		for _, item := range s.SearchKnowledgeHybrid(query, false) {
 			if seen[item.ID] {
 				continue
 			}
@@ -564,6 +567,7 @@ func (s *Service) CreateKnowledge(input KnowledgeInput, author string) (Knowledg
 	s.mu.Lock()
 	s.knowledge = append([]Knowledge{item}, s.knowledge...)
 	s.mu.Unlock()
+	_ = s.indexKnowledge(item)
 	_, _ = s.saveKnowledgeVersion(item, author, "创建知识")
 	return item, nil
 }
@@ -600,6 +604,7 @@ func (s *Service) UpdateKnowledge(id string, input KnowledgeInput, author string
 	if err = s.repo.SaveKnowledge(context.Background(), updated); err != nil {
 		return Knowledge{}, err
 	}
+	_ = s.indexKnowledge(updated)
 	_, _ = s.saveKnowledgeVersion(updated, author, "编辑知识")
 	return updated, nil
 }
@@ -695,6 +700,7 @@ func (s *Service) RestoreKnowledge(id string, version int, author string) (Knowl
 	if err = s.repo.SaveKnowledge(context.Background(), restored); err != nil {
 		return Knowledge{}, err
 	}
+	_ = s.indexKnowledge(restored)
 	s.mu.Lock()
 	for index := range s.knowledge {
 		if s.knowledge[index].ID == id {
@@ -861,7 +867,46 @@ func (s *Service) CreateKnowledgeFromAnalysis(analysisID, author string) (Knowle
 	if err = s.repo.SaveKnowledge(context.Background(), item); err != nil {
 		return Knowledge{}, err
 	}
+	_ = s.indexKnowledge(item)
 	return item, nil
+}
+
+func (s *Service) indexKnowledge(item Knowledge) error {
+	return s.repo.SaveKnowledgeEmbedding(context.Background(), item.ID, knowledgeEmbeddingModel, knowledgeEmbeddingDim, embedKnowledgeText(knowledgeEmbeddingText(item)))
+}
+
+func (s *Service) SearchKnowledgeHybrid(query string, includeDrafts bool) []Knowledge {
+	lexical := s.searchKnowledge(query, includeDrafts)
+	if strings.TrimSpace(query) == "" {
+		return lexical
+	}
+	matches, err := s.repo.SearchKnowledgeVector(context.Background(), embedKnowledgeText(query), 30)
+	if err != nil || len(matches) == 0 {
+		return lexical
+	}
+	_ = s.reloadKnowledge()
+	s.mu.RLock()
+	byID := make(map[string]Knowledge, len(s.knowledge))
+	for _, item := range s.knowledge {
+		if includeDrafts || item.Status == "published" {
+			byID[item.ID] = item
+		}
+	}
+	s.mu.RUnlock()
+	return mergeKnowledgeHybrid(lexical, matches, byID, 30)
+}
+
+func (s *Service) ReindexKnowledge() (int, error) {
+	_ = s.reloadKnowledge()
+	s.mu.RLock()
+	items := append([]Knowledge(nil), s.knowledge...)
+	s.mu.RUnlock()
+	for _, item := range items {
+		if err := s.indexKnowledge(item); err != nil {
+			return 0, err
+		}
+	}
+	return len(items), nil
 }
 
 func normalizeKnowledgeInput(existing Knowledge, input KnowledgeInput) (Knowledge, error) {

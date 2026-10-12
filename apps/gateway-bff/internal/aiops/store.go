@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -15,6 +16,7 @@ type memoryRepository struct {
 	knowledge     []Knowledge
 	versions      []KnowledgeVersion
 	attachments   []KnowledgeAttachment
+	embeddings    map[string][]float32
 	executions    []Execution
 	runbooks      []RunbookPolicy
 	changeControl ChangeControl
@@ -22,7 +24,7 @@ type memoryRepository struct {
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, embeddings: map[string][]float32{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
 }
 
 func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {
@@ -67,7 +69,39 @@ func (r *memoryRepository) DeleteKnowledge(_ context.Context, id string) error {
 		}
 	}
 	r.attachments = attachments
+	delete(r.embeddings, id)
 	return nil
+}
+
+func (r *memoryRepository) SaveKnowledgeEmbedding(_ context.Context, knowledgeID, _ string, _ int, vector []float32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.embeddings[knowledgeID] = append([]float32(nil), vector...)
+	return nil
+}
+
+func (r *memoryRepository) LoadKnowledgeEmbedding(_ context.Context, knowledgeID string) ([]float32, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	vector, ok := r.embeddings[knowledgeID]
+	if !ok {
+		return nil, nil
+	}
+	return append([]float32(nil), vector...), nil
+}
+
+func (r *memoryRepository) SearchKnowledgeVector(_ context.Context, vector []float32, limit int) ([]KnowledgeVectorMatch, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := []KnowledgeVectorMatch{}
+	for knowledgeID, candidate := range r.embeddings {
+		result = append(result, KnowledgeVectorMatch{KnowledgeID: knowledgeID, Score: cosineSimilarity(vector, candidate)})
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Score > result[j].Score })
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }
 
 func (r *memoryRepository) LoadKnowledgeAttachments(_ context.Context, knowledgeID string) ([]KnowledgeAttachment, error) {

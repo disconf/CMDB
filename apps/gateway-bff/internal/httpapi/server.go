@@ -3637,11 +3637,20 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
+		semantic := r.URL.Query().Get("semantic") == "1"
 		if r.URL.Query().Get("all") == "1" {
 			if !authorize(w, r, authService, "aiops:execute") {
 				return
 			}
+			if semantic {
+				writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeHybrid(r.URL.Query().Get("q"), true))
+				return
+			}
 			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeAll(r.URL.Query().Get("q")))
+			return
+		}
+		if semantic {
+			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeHybrid(r.URL.Query().Get("q"), false))
 			return
 		}
 		writeJSON(w, http.StatusOK, aiopsService.SearchKnowledge(r.URL.Query().Get("q")))
@@ -3894,6 +3903,19 @@ func NewServer() *Server {
 		}
 		auditService.Record(user.Username, "aiops.knowledge.from_analysis", item.ID, item.SourceID)
 		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("POST /api/v1/aiops/knowledge/reindex", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		count, err := aiopsService.ReindexKnowledge()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_REINDEX_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "aiops.knowledge.reindex", "knowledge", fmt.Sprintf("count=%d", count))
+		writeJSON(w, http.StatusOK, map[string]any{"indexed": count, "model": "local-hash-v1"})
 	})
 	mux.HandleFunc("GET /api/v1/aiops/executions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {

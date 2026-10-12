@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -94,6 +96,14 @@ CREATE TABLE IF NOT EXISTS aiops_knowledge_attachments (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_attachments_knowledge ON aiops_knowledge_attachments(knowledge_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS aiops_knowledge_embeddings (
+  knowledge_id text PRIMARY KEY REFERENCES aiops_knowledge(id) ON DELETE CASCADE,
+  model text NOT NULL,
+  dimensions integer NOT NULL,
+  embedding vector(256) NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_embeddings_hnsw ON aiops_knowledge_embeddings USING hnsw (embedding vector_cosine_ops);
 CREATE TABLE IF NOT EXISTS aiops_execution_requests (
   id text PRIMARY KEY,
   analysis_id text NOT NULL,
@@ -392,6 +402,66 @@ func (r *postgresRepository) LoadKnowledgeAttachments(ctx context.Context, knowl
 func (r *postgresRepository) DeleteKnowledgeAttachment(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM aiops_knowledge_attachments WHERE id=$1`, id)
 	return err
+}
+
+func (r *postgresRepository) SaveKnowledgeEmbedding(ctx context.Context, knowledgeID, model string, dimensions int, vector []float32) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge_embeddings(knowledge_id,model,dimensions,embedding,updated_at) VALUES($1,$2,$3,$4::vector,now()) ON CONFLICT(knowledge_id) DO UPDATE SET model=excluded.model,dimensions=excluded.dimensions,embedding=excluded.embedding,updated_at=now()`, knowledgeID, model, dimensions, formatKnowledgeVector(vector))
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledgeEmbedding(ctx context.Context, knowledgeID string) ([]float32, error) {
+	var raw string
+	if err := r.db.QueryRowContext(ctx, `SELECT embedding::text FROM aiops_knowledge_embeddings WHERE knowledge_id=$1`, knowledgeID).Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return parseKnowledgeVector(raw), nil
+}
+
+func (r *postgresRepository) SearchKnowledgeVector(ctx context.Context, vector []float32, limit int) ([]KnowledgeVectorMatch, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT knowledge_id,1-(embedding <=> $1::vector) AS score FROM aiops_knowledge_embeddings ORDER BY embedding <=> $1::vector LIMIT $2`, formatKnowledgeVector(vector), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeVectorMatch{}
+	for rows.Next() {
+		var item KnowledgeVectorMatch
+		if err = rows.Scan(&item.KnowledgeID, &item.Score); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func formatKnowledgeVector(vector []float32) string {
+	parts := make([]string, 0, len(vector))
+	for _, value := range vector {
+		parts = append(parts, strconv.FormatFloat(float64(value), 'f', 6, 32))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func parseKnowledgeVector(value string) []float32 {
+	value = strings.Trim(strings.TrimSpace(value), "[]")
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]float32, 0, len(parts))
+	for _, part := range parts {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(part), 32)
+		if err == nil {
+			result = append(result, float32(parsed))
+		}
+	}
+	return result
 }
 
 func (r *postgresRepository) SaveExecution(ctx context.Context, item Execution) error {

@@ -156,6 +156,11 @@ type KnowledgeAttachment struct {
 	CreatedAt   string `json:"createdAt"`
 }
 
+type KnowledgeVectorMatch struct {
+	KnowledgeID string  `json:"knowledgeId"`
+	Score       float64 `json:"score"`
+}
+
 type ChangePlanStep struct {
 	Order  int    `json:"order"`
 	Title  string `json:"title"`
@@ -237,6 +242,9 @@ type repository interface {
 	LoadKnowledgeAttachments(context.Context, string) ([]KnowledgeAttachment, error)
 	SaveKnowledgeAttachment(context.Context, KnowledgeAttachment) error
 	DeleteKnowledgeAttachment(context.Context, string) error
+	SaveKnowledgeEmbedding(context.Context, string, string, int, []float32) error
+	LoadKnowledgeEmbedding(context.Context, string) ([]float32, error)
+	SearchKnowledgeVector(context.Context, []float32, int) ([]KnowledgeVectorMatch, error)
 	LoadExecutions(context.Context) ([]Execution, error)
 	SaveExecution(context.Context, Execution) error
 	LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error)
