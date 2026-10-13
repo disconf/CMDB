@@ -3,6 +3,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -15,7 +18,7 @@ import (
 	"time"
 )
 
-const version = "0.1.2"
+const version = "0.1.3"
 
 type report struct {
 	AgentID        string `json:"agentId"`
@@ -101,6 +104,15 @@ func send(client *http.Client, url, token string, value report) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	if key := strings.TrimSpace(os.Getenv("CMDB_AGENT_SIGNING_KEY")); key != "" {
+		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		mac := hmac.New(sha256.New, []byte(key))
+		_, _ = mac.Write([]byte(timestamp))
+		_, _ = mac.Write([]byte("\n"))
+		_, _ = mac.Write(body)
+		req.Header.Set("X-Agent-Timestamp", timestamp)
+		req.Header.Set("X-Agent-Signature", hex.EncodeToString(mac.Sum(nil)))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

@@ -24,4 +24,12 @@ $payload = @{
   virtualization = $virtualization
 } | ConvertTo-Json -Compress
 $headers = @{ Authorization = "Bearer $($config.AgentToken)"; 'Content-Type' = 'application/json' }
+if ($config.SigningKey) {
+  $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+  $hmac = New-Object System.Security.Cryptography.HMACSHA256
+  $hmac.Key = [Text.Encoding]::UTF8.GetBytes([string]$config.SigningKey)
+  $signature = [Convert]::ToHexString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($timestamp + "`n" + $payload))).ToLower()
+  $headers['X-Agent-Timestamp'] = $timestamp
+  $headers['X-Agent-Signature'] = $signature
+}
 Invoke-RestMethod -Method Post -Uri "$($config.GatewayURL.TrimEnd('/'))/api/v1/agent/report" -Headers $headers -Body $payload -TimeoutSec 30 | Out-Host
