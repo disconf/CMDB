@@ -32,6 +32,7 @@ import (
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/networkautomation"
 	"cmdb/gateway-bff/internal/projection"
+	"cmdb/gateway-bff/internal/redfish"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/system"
 	"cmdb/gateway-bff/internal/tickets"
@@ -75,6 +76,7 @@ func NewServer() *Server {
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()
 	projectionService := projection.NewFromEnv()
+	redfishService := redfish.Client{}
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
 	aiopsService.SetAlertProvider(monitorService)
@@ -4112,6 +4114,28 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, projectionService.Status())
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/redfish/test", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			Address  string `json:"address"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Address) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		result, err := redfishService.Test(r.Context(), input.Address, input.Username, input.Password)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "REDFISH_TEST_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "cmdb.redfish.test", input.Address, fmt.Sprintf("systems=%d", len(result.Systems)))
+		writeJSON(w, http.StatusOK, result)
 	})
 	mux.HandleFunc("POST /api/v1/system/projections/rebuild", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
