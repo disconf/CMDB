@@ -56,6 +56,7 @@ type Service struct {
 	jobs          JobProvider
 	objectStore   knowledgeObjectStore
 	embedder      knowledgeEmbeddingProvider
+	llm           knowledgeLLMProvider
 }
 
 func NewService() *Service {
@@ -70,6 +71,7 @@ func NewService() *Service {
 		panic(fmt.Sprintf("initialize knowledge embedding provider: %v", embedderErr))
 	}
 	s.embedder = embedder
+	s.llm = newKnowledgeLLMProvider()
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
 		repo, err := openPostgres(databaseURL)
 		if err != nil {

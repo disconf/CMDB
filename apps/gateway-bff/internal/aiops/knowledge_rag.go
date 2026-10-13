@@ -115,6 +115,18 @@ func (s *Service) AskKnowledgeWithUser(question string, limit int, user string) 
 	}
 	builder.WriteString("以上结论来自知识库检索，请结合当前告警、监控指标和变更记录确认后执行。")
 	answer.Answer = maskSensitiveText(builder.String())
+	answer.Generator = "extractive"
+	if s.llm != nil {
+		var contextBuilder strings.Builder
+		for _, citation := range answer.Citations {
+			contextBuilder.WriteString(fmt.Sprintf("[%s] %s：%s\n", citation.KnowledgeID, citation.Title, citation.Snippet))
+		}
+		prompt := fmt.Sprintf("问题：%s\n\n知识上下文：\n%s\n请生成简洁排障步骤，并保留引用编号。", question, contextBuilder.String())
+		if generated, err := s.llm.Generate(context.Background(), prompt); err == nil && strings.TrimSpace(generated) != "" {
+			answer.Answer = maskSensitiveText(generated)
+			answer.Generator = s.llm.Name()
+		}
+	}
 	_ = s.repo.SaveKnowledgeAnswer(context.Background(), answer)
 	return answer, nil
 }

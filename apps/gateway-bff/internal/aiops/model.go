@@ -177,6 +177,7 @@ type KnowledgeAnswer struct {
 	Citations   []KnowledgeCitation      `json:"citations"`
 	GeneratedAt string                   `json:"generatedAt"`
 	Model       string                   `json:"model"`
+	Generator   string                   `json:"generator"`
 	CreatedBy   string                   `json:"createdBy"`
 	Feedback    *KnowledgeAnswerFeedback `json:"feedback,omitempty"`
 }
