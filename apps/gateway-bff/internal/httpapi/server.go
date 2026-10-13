@@ -4142,6 +4142,29 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "cmdb.redfish.test", input.Address, fmt.Sprintf("systems=%d", len(result.Systems)))
 		writeJSON(w, http.StatusOK, result)
 	})
+	mux.HandleFunc("POST /api/v1/cmdb/redfish/reconcile", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var input struct {
+			Address  string `json:"address"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+			AssetID  string `json:"assetId"`
+		}
+		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Address) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		assets, err := reconcileRedfishAsset(r.Context(), cmdbService, redfishService, input.Address, input.Username, input.Password, input.AssetID, user.Username)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "REDFISH_RECONCILE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "cmdb.redfish.reconcile", input.Address, fmt.Sprintf("assets=%d", len(assets)))
+		writeJSON(w, http.StatusOK, map[string]any{"assets": assets, "count": len(assets)})
+	})
 	mux.HandleFunc("POST /api/v1/system/projections/rebuild", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
 			return
