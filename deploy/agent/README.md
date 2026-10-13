@@ -36,3 +36,7 @@ CMDB_REPORT_INTERVAL=60s
 - 卸载：`sudo ./uninstall.sh`
 - 离线：主机停止上报超过 `AGENT_OFFLINE_AFTER`（默认 3 分钟）后，网关会把该 Agent 与其
   CMDB 资产标为离线（`cmdb_assets.status='offline'`）。
+
+## Windows Agent
+
+Windows 主机使用 `windows/install-agent.ps1` 注册每分钟运行的 CMDB-Agent 计划任务，采集主机信息并上报 `/api/v1/agent/report`。详细说明见 `windows/README.md`。
