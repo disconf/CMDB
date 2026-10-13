@@ -31,6 +31,7 @@ import (
 	"cmdb/gateway-bff/internal/k8s"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/networkautomation"
+	"cmdb/gateway-bff/internal/projection"
 	"cmdb/gateway-bff/internal/releases"
 	"cmdb/gateway-bff/internal/system"
 	"cmdb/gateway-bff/internal/tickets"
@@ -73,6 +74,7 @@ func NewServer() *Server {
 	go ticketsService.RunSLAEscalation(context.Background(), time.Minute)
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()
+	projectionService := projection.NewFromEnv()
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
 	aiopsService.SetAlertProvider(monitorService)
@@ -4104,6 +4106,39 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, systemService.ProductionReadiness(r.Context()))
+	})
+	mux.HandleFunc("GET /api/v1/system/projections", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, projectionService.Status())
+	})
+	mux.HandleFunc("POST /api/v1/system/projections/rebuild", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		assets := []projection.Asset{}
+		for page := 1; ; page++ {
+			result := cmdbService.ListAssets(cmdb.AssetQuery{Page: page, PageSize: 200, ScopeAll: true})
+			for _, asset := range result.Data {
+				item := projection.Asset{ID: asset.ID, Name: asset.Name, Type: asset.Type, Status: asset.Status, Environment: asset.Environment, ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, IP: asset.IP, Location: asset.Location}
+				for _, relation := range asset.Relations {
+					item.Relations = append(item.Relations, map[string]string{"type": relation.Type, "targetId": relation.TargetID, "targetName": relation.TargetName})
+				}
+				assets = append(assets, item)
+			}
+			if result.Meta.TotalPages == 0 || page >= result.Meta.TotalPages {
+				break
+			}
+		}
+		neo4jCount, openSearchCount, err := projectionService.ProjectAssets(r.Context(), assets)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "PROJECTION_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "system.projection.rebuild", "assets", fmt.Sprintf("neo4j=%d opensearch=%d", neo4jCount, openSearchCount))
+		writeJSON(w, http.StatusOK, map[string]int{"assets": len(assets), "neo4j": neo4jCount, "openSearch": openSearchCount})
 	})
 	mux.HandleFunc("POST /api/v1/system/users/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
