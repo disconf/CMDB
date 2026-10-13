@@ -4099,6 +4099,12 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, systemService.Settings())
 	})
+	mux.HandleFunc("GET /api/v1/system/production-readiness", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, systemService.ProductionReadiness(r.Context()))
+	})
 	mux.HandleFunc("POST /api/v1/system/users/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
 			return
