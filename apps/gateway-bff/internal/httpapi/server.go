@@ -223,8 +223,13 @@ func NewServer() *Server {
 		writeJSON(w, http.StatusAccepted, map[string]int{"accepted": accepted})
 	})
 	mux.HandleFunc("POST /api/v1/agent/report", func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if readErr != nil || !verifyAgentSignature(r, body) {
+			writeJSON(w, 401, map[string]string{"code": "INVALID_AGENT_SIGNATURE"})
+			return
+		}
 		var in discovery.AgentReport
-		if decodeJSON(r, &in) != nil {
+		if json.Unmarshal(body, &in) != nil {
 			writeJSON(w, 400, map[string]string{"code": "INVALID_REPORT"})
 			return
 		}
