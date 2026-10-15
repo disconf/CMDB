@@ -28,6 +28,7 @@ func defaultModules() []Module {
 		{Code: "monitor", Name: "监控告警", Enabled: true, Order: 4, Permission: "monitor:view"},
 		{Code: "jobs", Name: "任务管理", Enabled: true, Order: 5, Permission: "job:view"},
 		{Code: "aiops", Name: "AI 运维", Enabled: true, Order: 10, Permission: "aiops:view"},
+		{Code: "knowledge", Name: "知识库", Enabled: true, Order: 11, Permission: "aiops:view"},
 	}
 }
 

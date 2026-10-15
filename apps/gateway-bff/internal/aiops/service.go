@@ -191,7 +191,7 @@ func (s *Service) Summary() Summary {
 func (s *Service) Analyses() []Analysis {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := append([]Analysis(nil), s.analyses...)
+	result := append([]Analysis{}, s.analyses...)
 	sort.SliceStable(result, func(i, j int) bool { return result[i].CreatedAt > result[j].CreatedAt })
 	return result
 }
@@ -403,7 +403,7 @@ func (s *Service) SetFeedback(ctx context.Context, analysisID string, in Feedbac
 func (s *Service) Knowledge() []Knowledge {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := append([]Knowledge(nil), s.knowledge...)
+	result := append([]Knowledge{}, s.knowledge...)
 	sort.SliceStable(result, func(i, j int) bool { return result[i].UpdatedAt > result[j].UpdatedAt })
 	return result
 }

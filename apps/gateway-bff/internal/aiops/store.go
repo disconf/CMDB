@@ -31,7 +31,7 @@ func newMemoryRepository() *memoryRepository {
 func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]Knowledge(nil), r.knowledge...), nil
+	return append([]Knowledge{}, r.knowledge...), nil
 }
 
 func (r *memoryRepository) SaveKnowledge(_ context.Context, item Knowledge) error {
@@ -201,7 +201,7 @@ func (r *memoryRepository) SaveKnowledgeVersion(_ context.Context, item Knowledg
 func (r *memoryRepository) LoadAnalyses(context.Context) ([]Analysis, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]Analysis(nil), r.analyses...), nil
+	return append([]Analysis{}, r.analyses...), nil
 }
 
 func (r *memoryRepository) SaveAnalysis(_ context.Context, item Analysis) error {
@@ -220,7 +220,7 @@ func (r *memoryRepository) SaveAnalysis(_ context.Context, item Analysis) error 
 func (r *memoryRepository) LoadExecutions(context.Context) ([]Execution, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]Execution(nil), r.executions...), nil
+	return append([]Execution{}, r.executions...), nil
 }
 
 func (r *memoryRepository) SaveExecution(_ context.Context, item Execution) error {
@@ -239,7 +239,7 @@ func (r *memoryRepository) SaveExecution(_ context.Context, item Execution) erro
 func (r *memoryRepository) LoadRunbookPolicies(context.Context) ([]RunbookPolicy, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]RunbookPolicy(nil), r.runbooks...), nil
+	return append([]RunbookPolicy{}, r.runbooks...), nil
 }
 
 func (r *memoryRepository) SaveRunbookPolicy(_ context.Context, item RunbookPolicy) error {
@@ -271,7 +271,7 @@ func (r *memoryRepository) SaveChangeControl(_ context.Context, item ChangeContr
 func (r *memoryRepository) LoadCanaryValidations(context.Context) ([]CanaryValidation, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]CanaryValidation(nil), r.canaries...), nil
+	return append([]CanaryValidation{}, r.canaries...), nil
 }
 
 func (r *memoryRepository) SaveCanaryValidation(_ context.Context, item CanaryValidation) error {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Activity, BellRing, Bot, Box, Building2, ChevronDown, ClipboardCheck, Database, FileUp, Gauge, LayoutDashboard, LogOut, Maximize2, Network, Play, Radar, RadioTower, Rocket, Search, Server, Settings, ShieldAlert, ShieldCheck, Terminal, TicketCheck, Wrench } from 'lucide-vue-next'
+import { Activity, BellRing, BookOpen, Bot, Box, Building2, ChevronDown, ClipboardCheck, Database, FileUp, Gauge, LayoutDashboard, LogOut, Maximize2, Network, Play, Radar, RadioTower, Rocket, Search, Server, Settings, ShieldAlert, ShieldCheck, Terminal, TicketCheck, Wrench } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import DashboardPanel from '@/components/DashboardPanel.vue'
 import LoginPage from '@/components/LoginPage.vue'
@@ -17,6 +17,7 @@ import ReleasesPage from '@/components/ReleasesPage.vue'
 import ToolboxPage from '@/components/ToolboxPage.vue'
 import AiopsPage from '@/components/AiopsPage.vue'
 import SystemPage from '@/components/SystemPage.vue'
+import KnowledgePanel from '@/components/KnowledgePanel.vue'
 import TrendChart from '@/components/TrendChart.vue'
 import { useDashboardStore } from '@/stores/useDashboardStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -25,7 +26,7 @@ import { remoteSections, resolveRemoteSection } from '@/features/remote/remoteNa
 
 const store = useDashboardStore(); const auth=useAuthStore(); const route=useRoute(); const router=useRouter()
 const iconMap = { Database, RadioTower, BellRing, ClipboardCheck }
-const navigationIcons={LayoutDashboard,Database,Building2,Network,Radar,BellRing,ClipboardCheck,TicketCheck,Rocket,Wrench,Bot,Settings,Terminal}
+const navigationIcons={LayoutDashboard,Database,Building2,Network,Radar,BellRing,ClipboardCheck,TicketCheck,Rocket,Wrench,Bot,Settings,Terminal,BookOpen}
 const remoteSectionIcons={overview:LayoutDashboard,sessions:Terminal,files:FileUp,execution:Play,approvals:ShieldAlert,security:ShieldCheck}
 const remoteExpanded=ref(route.path.startsWith('/remote'))
 const remoteSection=computed(()=>resolveRemoteSection(route.path))
@@ -77,7 +78,7 @@ async function signOut(){await auth.signOut();await router.replace('/login')}
       <TicketsPage v-else-if="route.path==='/tickets'" />
       <ReleasesPage v-else-if="route.path==='/releases'" />
       <ToolboxPage v-else-if="route.path==='/toolbox'" />
-      <AiopsPage v-else-if="route.path==='/aiops'" />
+      <AiopsPage v-else-if="route.path==='/aiops'" /><KnowledgePanel v-else-if="route.path==='/knowledge'" />
       <SystemPage v-else-if="route.path==='/system'" />
       <ModulePage v-else />
     </main>

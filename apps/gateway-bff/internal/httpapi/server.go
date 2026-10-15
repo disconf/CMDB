@@ -4030,6 +4030,30 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "aiops.knowledge.ask", "knowledge", input.Question)
 		writeJSON(w, http.StatusOK, answer)
 	})
+	mux.HandleFunc("POST /api/v1/aiops/agent/query", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		var input struct {
+			Question string `json:"question"`
+		}
+		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.Question) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		answer, err := aiopsService.AgentQuery(r.Context(), input.Question, user.Username)
+		if errors.Is(err, aiops.ErrValidation) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "QUESTION_REQUIRED"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "AGENT_QUERY_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "aiops.agent.query", "cmdb", input.Question)
+		writeJSON(w, http.StatusOK, answer)
+	})
 	mux.HandleFunc("POST /api/v1/aiops/knowledge/answers/{id}/feedback", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:execute") {
 			return

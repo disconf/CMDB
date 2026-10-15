@@ -4,6 +4,7 @@ import { BookOpen, Bot, BrainCircuit, CheckCircle2, Clock3, FileSearch, GitBranc
 import { useAuthStore } from '@/stores/useAuthStore'
 import { confidenceTone, riskLabel } from '@/features/aiops/aiopsModel'
 import KnowledgePanel from './KnowledgePanel.vue'
+import AIAgentPanel from './AIAgentPanel.vue'
 
 type Alert = { id:string; title:string; severity:string; status:string; target:string; message:string; startedAt:string; duration:string; owner:string }
 type Evidence = { type:string; source?:string; title:string; detail:string; weight:number }
@@ -50,7 +51,7 @@ const canaries = ref<CanaryValidation[]>([])
 const canaryPendingID = ref('')
 const selected = ref<Analysis>()
 const query = ref('')
-const tab = ref<'analysis'|'knowledge'|'runbooks'>('analysis')
+const tab = ref<'analysis'|'knowledge'|'runbooks'|'agent'>('analysis')
 const message = ref('')
 const error = ref('')
 const loading = ref(false)
@@ -72,15 +73,15 @@ async function load() {
     if (responses.some(response => !response.ok)) throw new Error('AIOps 数据加载失败')
     const [summaryData, alertData, analysisData, knowledgeData, executionData, executionStatsData, feedbackStatsData, runbookData, changeControlData, canaryData] = await Promise.all(responses.map(response => response.json()))
     summary.value = summaryData
-    alerts.value = alertData
-    analyses.value = analysisData
-    knowledge.value = knowledgeData
-    executions.value = executionData
-    executionStats.value = executionStatsData
-    feedbackStats.value = feedbackStatsData
-    runbooks.value = runbookData
-    changeControl.value = changeControlData
-    canaries.value = canaryData
+    alerts.value = Array.isArray(alertData) ? alertData : []
+    analyses.value = Array.isArray(analysisData) ? analysisData : []
+    knowledge.value = Array.isArray(knowledgeData) ? knowledgeData : []
+    executions.value = Array.isArray(executionData) ? executionData : []
+    executionStats.value = executionStatsData || undefined
+    feedbackStats.value = feedbackStatsData || undefined
+    runbooks.value = Array.isArray(runbookData) ? runbookData : []
+    changeControl.value = changeControlData || undefined
+    canaries.value = Array.isArray(canaryData) ? canaryData : []
     selectedRunbook.value = runbooks.value.find(item => item.runbookId===selectedRunbook.value?.runbookId) || runbooks.value[0]
     selected.value = analyses.value.find(item => item.id === selected.value?.id) || analyses.value[0]
     if (!selectedAlertID.value && alerts.value.length) selectedAlertID.value = alerts.value[0].id
@@ -393,9 +394,9 @@ onMounted(load)
       <header><div><h3><GitBranch/>执行审计统计</h3><p>演练与真实执行分开统计，回滚申请仍走独立审批。</p></div><b>完成成功率 {{ executionStats.successRate }}% · {{ executionStats.total }} 次</b></header>
       <div><article><span>演练执行</span><strong>{{ executionStats.simulated }}</strong></article><article><span>真实执行</span><strong>{{ executionStats.live }}</strong></article><article><span>待审批</span><strong>{{ executionStats.pendingApproval }}</strong></article><article><span>运行中</span><strong>{{ executionStats.running }}</strong></article><article><span>成功</span><strong>{{ executionStats.success }}</strong></article><article><span>失败</span><strong>{{ executionStats.failed }}</strong></article></div>
     </section>
-    <nav class="aiops-tabs"><button :class="{active:tab==='analysis'}" @click="tab='analysis'">智能分析</button><button :class="{active:tab==='runbooks'}" @click="tab='runbooks'">Runbook 策略</button><button :class="{active:tab==='knowledge'}" @click="tab='knowledge'">知识库</button></nav>
+    <nav class="aiops-tabs"><button :class="{active:tab==='agent'}" @click="tab='agent'">AI Agent</button><button :class="{active:tab==='analysis'}" @click="tab='analysis'">智能分析</button><button :class="{active:tab==='runbooks'}" @click="tab='runbooks'">Runbook 策略</button><button :class="{active:tab==='knowledge'}" @click="tab='knowledge'">知识库</button></nav>
 
-    <div v-if="tab==='analysis'" class="aiops-workspace">
+    <AIAgentPanel v-if="tab==='agent'" /><div v-else-if="tab==='analysis'" class="aiops-workspace">
       <aside class="analysis-list">
         <header><span>分析记录</span><b>{{ analyses.length }}</b></header>
         <button v-for="item in analyses" :key="item.id" :class="{active:selected?.id===item.id}" @click="selected=item">

@@ -321,7 +321,7 @@ func (s *Service) refreshExecutions() []Execution {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Execution(nil), s.executions...)
+	return append([]Execution{}, s.executions...)
 }
 
 func (s *Service) findExecutionByTicket(ticketID string) (Execution, bool) {
