@@ -1,0 +1,158 @@
+# ops-qa Prometheus 工作负载（kubectl get 导出，人工维护）
+# 2026-10-16 从 2.32.1 升级到 v3.13.4；镜像固定到具体版本号，不再使用 latest。
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "annotations": {
+      "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{},\"name\":\"prometheus\",\"namespace\":\"monitoring\"},\"spec\":{\"replicas\":1,\"selector\":{\"matchLabels\":{\"app\":\"prometheus\"}},\"strategy\":{\"type\":\"Recreate\"},\"template\":{\"metadata\":{\"labels\":{\"app\":\"prometheus\"}},\"spec\":{\"containers\":[{\"args\":[\"--config.file=/etc/prometheus/prometheus.yml\",\"--storage.tsdb.path=/prometheus\",\"--web.enable-lifecycle\"],\"image\":\"harbor.qa.bcavt.com/library/prom/prometheus:latest\",\"livenessProbe\":{\"httpGet\":{\"path\":\"/-/healthy\",\"port\":9090},\"initialDelaySeconds\":20,\"periodSeconds\":15},\"name\":\"prometheus\",\"ports\":[{\"containerPort\":9090,\"name\":\"http\"}],\"readinessProbe\":{\"httpGet\":{\"path\":\"/-/ready\",\"port\":9090},\"initialDelaySeconds\":10,\"periodSeconds\":10},\"resources\":{\"limits\":{\"cpu\":1,\"memory\":\"1Gi\"},\"requests\":{\"cpu\":\"100m\",\"memory\":\"256Mi\"}},\"volumeMounts\":[{\"mountPath\":\"/etc/prometheus\",\"name\":\"config\"},{\"mountPath\":\"/etc/prometheus/rules\",\"name\":\"rules\"},{\"mountPath\":\"/etc/prometheus/token\",\"name\":\"agent-token\"},{\"mountPath\":\"/prometheus\",\"name\":\"data\"}]}],\"imagePullSecrets\":[{\"name\":\"cmdb-registry\"}],\"securityContext\":{\"fsGroup\":65534},\"serviceAccountName\":\"default\",\"volumes\":[{\"configMap\":{\"name\":\"prometheus-config\"},\"name\":\"config\"},{\"configMap\":{\"name\":\"prometheus-rules\"},\"name\":\"rules\"},{\"name\":\"agent-token\",\"secret\":{\"secretName\":\"prometheus-cmdb-token\"}},{\"name\":\"data\",\"persistentVolumeClaim\":{\"claimName\":\"prometheus-data\"}}]}}}}\n"
+    },
+    "name": "prometheus",
+    "namespace": "monitoring"
+  },
+  "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+      "matchLabels": {
+        "app": "prometheus"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
+    "template": {
+      "metadata": {
+        "annotations": {
+          "kubectl.kubernetes.io/restartedAt": "2026-09-21T08:36:14+08:00"
+        },
+        "labels": {
+          "app": "prometheus"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "args": [
+              "--config.file=/etc/prometheus/prometheus.yml",
+              "--storage.tsdb.path=/prometheus",
+              "--web.enable-lifecycle"
+            ],
+            "image": "harbor.qa.bcavt.com/library/prom/prometheus:v3.13.4",
+            "imagePullPolicy": "IfNotPresent",
+            "livenessProbe": {
+              "failureThreshold": 6,
+              "httpGet": {
+                "path": "/-/healthy",
+                "port": 9090,
+                "scheme": "HTTP"
+              },
+              "initialDelaySeconds": 120,
+              "periodSeconds": 15,
+              "successThreshold": 1,
+              "timeoutSeconds": 3
+            },
+            "name": "prometheus",
+            "ports": [
+              {
+                "containerPort": 9090,
+                "name": "http",
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "failureThreshold": 3,
+              "httpGet": {
+                "path": "/-/ready",
+                "port": 9090,
+                "scheme": "HTTP"
+              },
+              "initialDelaySeconds": 10,
+              "periodSeconds": 10,
+              "successThreshold": 1,
+              "timeoutSeconds": 1
+            },
+            "resources": {
+              "limits": {
+                "cpu": "2",
+                "memory": "4Gi"
+              },
+              "requests": {
+                "cpu": "200m",
+                "memory": "1Gi"
+              }
+            },
+            "startupProbe": {
+              "failureThreshold": 60,
+              "httpGet": {
+                "path": "/-/ready",
+                "port": 9090,
+                "scheme": "HTTP"
+              },
+              "periodSeconds": 10,
+              "successThreshold": 1,
+              "timeoutSeconds": 3
+            },
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File",
+            "volumeMounts": [
+              {
+                "mountPath": "/etc/prometheus",
+                "name": "config"
+              },
+              {
+                "mountPath": "/etc/prometheus/rules",
+                "name": "rules"
+              },
+              {
+                "mountPath": "/etc/prometheus/token",
+                "name": "agent-token"
+              },
+              {
+                "mountPath": "/prometheus",
+                "name": "data"
+              }
+            ]
+          }
+        ],
+        "imagePullSecrets": [
+          {
+            "name": "cmdb-registry"
+          }
+        ],
+        "serviceAccount": "default",
+        "serviceAccountName": "default",
+        "volumes": [
+          {
+            "configMap": {
+              "defaultMode": 420,
+              "name": "prometheus-config"
+            },
+            "name": "config"
+          },
+          {
+            "configMap": {
+              "defaultMode": 420,
+              "name": "prometheus-rules"
+            },
+            "name": "rules"
+          },
+          {
+            "name": "agent-token",
+            "secret": {
+              "defaultMode": 420,
+              "secretName": "prometheus-cmdb-token"
+            }
+          },
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "prometheus-data"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
