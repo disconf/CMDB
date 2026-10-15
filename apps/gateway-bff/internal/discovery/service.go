@@ -154,6 +154,7 @@ type Service struct {
 	objectStore       *objectstore.Store
 	agentToken        string
 	agentSeen         map[string]time.Time
+	revokedAgents     map[string]string
 	offlineAfter      time.Duration
 	credResolver      func(id string) (string, string, error)
 	events            map[string][]TaskEvent
@@ -192,6 +193,7 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	}
 	s.agentToken = os.Getenv("AGENT_SHARED_TOKEN")
 	s.agentSeen = map[string]time.Time{}
+	s.revokedAgents = map[string]string{}
 	s.events = map[string][]TaskEvent{}
 	s.nextEvent = time.Now().UnixNano()
 	s.remoteExecutions = []RemoteExecution{}
@@ -223,6 +225,9 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 		}
 		s.db = db
 		s.tasks = tasks
+		if err := s.loadAgentIsolation(); err != nil {
+			panic(fmt.Sprintf("load agent isolation: %v", err))
+		}
 		if err := s.loadRemoteExecutions(); err != nil {
 			panic(fmt.Sprintf("load remote executions: %v", err))
 		}
@@ -290,6 +295,9 @@ func (s *Service) Report(token string, in AgentReport) (cmdb.Asset, error) {
 	}
 	if s.cmdb == nil || in.AgentID == "" || in.Hostname == "" {
 		return cmdb.Asset{}, errors.New("validation")
+	}
+	if reason, revoked := s.agentRevoked(in.AgentID); revoked {
+		return cmdb.Asset{}, fmt.Errorf("agent revoked: %s", reason)
 	}
 	asset, err := s.cmdb.UpsertAgentAsset(cmdb.AgentAssetInput{ID: in.AgentID, Type: in.Type, Hostname: in.Hostname, IP: in.IP, OS: in.OS, Kernel: in.Kernel, Architecture: in.Architecture, CPUCount: in.CPUCount, MemoryBytes: in.MemoryBytes, DiskBytes: in.DiskBytes, BootTime: in.BootTime, AgentVersion: in.Version, Virtualization: in.Virtualization})
 	if err != nil {

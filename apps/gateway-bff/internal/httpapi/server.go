@@ -1816,6 +1816,40 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, agent)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-isolation", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.AgentIsolation())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agents/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input struct {
+			Reason string `json:"reason"`
+		}
+		_ = decodeJSON(r, &input)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := discoveryService.RevokeAgent(r.PathValue("id"), input.Reason, user.Username); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "AGENT_REVOKE_FAILED"})
+			return
+		}
+		auditService.Record(user.Username, "discovery.agent.revoke", r.PathValue("id"), input.Reason)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agents/{id}/restore", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		if err := discoveryService.RestoreAgent(r.PathValue("id")); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "AGENT_RESTORE_FAILED"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "discovery.agent.restore", r.PathValue("id"), "")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+	})
 	mux.HandleFunc("GET /api/v1/k8s/status", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
