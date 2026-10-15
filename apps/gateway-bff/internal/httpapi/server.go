@@ -233,6 +233,10 @@ func NewServer() *Server {
 			writeJSON(w, 400, map[string]string{"code": "INVALID_REPORT"})
 			return
 		}
+		if !discoveryService.AgentCertificateAllowed(in.AgentID, r.Header.Get("X-Agent-Cert-Fingerprint")) {
+			writeJSON(w, 401, map[string]string{"code": "INVALID_AGENT_CERTIFICATE"})
+			return
+		}
 		asset, err := discoveryService.Report(bearerToken(r), in)
 		if err != nil {
 			if err.Error() == "unauthorized" {
@@ -1821,6 +1825,30 @@ func NewServer() *Server {
 			return
 		}
 		writeJSON(w, http.StatusOK, discoveryService.AgentIsolation())
+	})
+	mux.HandleFunc("GET /api/v1/discovery/agent-certificates", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, discoveryService.AgentCertificates())
+	})
+	mux.HandleFunc("POST /api/v1/discovery/agents/{id}/certificate", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		var input discovery.AgentCertificate
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		input.AgentID = r.PathValue("id")
+		if err := discoveryService.RegisterAgentCertificate(input); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "CERTIFICATE_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "discovery.agent.certificate", input.AgentID, input.Fingerprint)
+		writeJSON(w, http.StatusOK, input)
 	})
 	mux.HandleFunc("POST /api/v1/discovery/agents/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {

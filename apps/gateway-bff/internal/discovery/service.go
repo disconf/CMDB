@@ -155,6 +155,7 @@ type Service struct {
 	agentToken        string
 	agentSeen         map[string]time.Time
 	revokedAgents     map[string]string
+	agentCertificates map[string]AgentCertificate
 	offlineAfter      time.Duration
 	credResolver      func(id string) (string, string, error)
 	events            map[string][]TaskEvent
@@ -194,6 +195,7 @@ func NewServiceWithCMDB(cmdbService *cmdb.Service) *Service {
 	s.agentToken = os.Getenv("AGENT_SHARED_TOKEN")
 	s.agentSeen = map[string]time.Time{}
 	s.revokedAgents = map[string]string{}
+	s.agentCertificates = map[string]AgentCertificate{}
 	s.events = map[string][]TaskEvent{}
 	s.nextEvent = time.Now().UnixNano()
 	s.remoteExecutions = []RemoteExecution{}
