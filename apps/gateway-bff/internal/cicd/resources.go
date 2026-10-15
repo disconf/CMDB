@@ -386,9 +386,17 @@ func normalizeArgoStatus(value string) string {
 
 func cloneResourceOverview(value ResourceOverview) ResourceOverview {
 	copyValue := value
-	copyValue.Harbor.RecentRepositories = append([]HarborRepository(nil), value.Harbor.RecentRepositories...)
-	copyValue.ArgoCD.Items = append([]ArgoApplication(nil), value.ArgoCD.Items...)
-	copyValue.GitLab.RecentProjects = make([]GitLabProject, len(value.GitLab.RecentProjects))
-	copy(copyValue.GitLab.RecentProjects, value.GitLab.RecentProjects)
+	copyValue.Harbor.RecentRepositories = cloneSlice(value.Harbor.RecentRepositories)
+	copyValue.ArgoCD.Items = cloneSlice(value.ArgoCD.Items)
+	copyValue.GitLab.RecentProjects = cloneSlice(value.GitLab.RecentProjects)
 	return copyValue
+}
+
+// cloneSlice always returns a non-nil slice so an empty list is encoded as []
+// instead of null. The portal reads .length on these arrays, and a null value
+// aborts the whole page render.
+func cloneSlice[T any](in []T) []T {
+	out := make([]T, len(in))
+	copy(out, in)
+	return out
 }

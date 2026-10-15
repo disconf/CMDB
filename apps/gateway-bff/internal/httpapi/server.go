@@ -121,6 +121,7 @@ func NewServer() *Server {
 	toolboxService.SetKubernetesDiagnoser(k8sService)
 	toolboxService.SetTopologyGraphProvider(topologyService)
 	auditService := audit.NewService()
+	service.SetActivitySources(jobsService, auditService)
 	cicdService := cicd.NewService()
 	argoSyncCoordinator := newArgoSyncCoordinator(cicdService, cmdbService, releasesService, monitorService, ticketsService, auditService)
 	go argoSyncCoordinator.Run(context.Background(), argoSyncInterval())
@@ -255,6 +256,11 @@ func NewServer() *Server {
 		writeJSON(w, 200, asset)
 	})
 	mux.HandleFunc("GET /api/v1/dashboard/overview", func(w http.ResponseWriter, r *http.Request) {
+		// Without a token the scope filter below blanks every metric, which looks
+		// like a healthy empty platform. Require authentication instead.
+		if !authorize(w, r, authService, "dashboard:view") {
+			return
+		}
 		overview := service.Overview()
 		user, _ := authService.CurrentUser(bearerToken(r))
 		scope := newUserScope(cmdbService, user)
@@ -1083,7 +1089,7 @@ func NewServer() *Server {
 		}
 		list, err := credentialsService.List()
 		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "VAULT_UNAVAILABLE", "message": err.Error()})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "VAULT_UNAVAILABLE", "message": credentialErrorMessage(err)})
 			return
 		}
 		writeJSON(w, http.StatusOK, list)
@@ -4406,6 +4412,19 @@ func NewServer() *Server {
 		handler = tracingMiddleware(handler)
 	}
 	return &Server{handler: handler, discovery: discoveryService, monitor: monitorService, assetEvents: assetEventConsumer, cmdb: cmdbService, topology: topologyService}
+}
+
+// credentialErrorMessage turns a Vault transport error into something an
+// operator can act on instead of a bare status line.
+func credentialErrorMessage(err error) string {
+	message := err.Error()
+	if strings.Contains(message, "403") || strings.Contains(strings.ToLower(message), "permission denied") {
+		return "Vault 拒绝了该请求，通常是 VAULT_TOKEN 已过期或权限不足，请重新签发令牌并更新 Secret cmdb-gateway-env（" + message + "）"
+	}
+	if strings.Contains(message, "vault not configured") {
+		return "未配置 VAULT_ADDR / VAULT_TOKEN，凭据中心不可用"
+	}
+	return message
 }
 
 // projectionAsset maps a CMDB asset onto the projection model.

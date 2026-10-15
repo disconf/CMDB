@@ -145,6 +145,17 @@ async function syncArgoApplications() {
   }
 }
 
+// The gateway encodes empty Go slices as [] since the null fix, but a stale
+// gateway or a partial payload would still break every .length read below.
+function normalizeResources(payload:CICDResources):CICDResources {
+  return {
+    ...payload,
+    harbor: { ...payload.harbor, recentRepositories: payload.harbor?.recentRepositories || [] },
+    argoCD: { ...payload.argoCD, items: payload.argoCD?.items || [] },
+    gitlab: { ...payload.gitlab, recentProjects: payload.gitlab?.recentProjects || [] },
+  }
+}
+
 async function loadResources(force=false) {
   resourcesLoading.value = true
   error.value = ''
@@ -153,7 +164,7 @@ async function loadResources(force=false) {
       force ? request<CICDResources>('/api/v1/cicd/resources/refresh', { method:'POST' }) : request<CICDResources>('/api/v1/cicd/resources'),
       request<ArgoSyncStatus>('/api/v1/cicd/argocd/sync/status'),
     ])
-    resources.value = nextResources
+    resources.value = normalizeResources(nextResources)
     argoSyncStatus.value = nextSyncStatus
     message.value = `CI/CD 资源数据已更新：${formatCheckedAt(resources.value.generatedAt)}`
   } catch (reason) {
@@ -166,7 +177,7 @@ async function loadResources(force=false) {
 function openTab(next:Tab) {
   tab.value = next
   if (next === 'resources' && !resources.value) void loadResources()
-  if (next === 'relations' && !relations.value.length) void loadRelations()
+  if (next === 'relations' && !(relations.value || []).length) void loadRelations()
   if (next === 'monitoring') void loadMonitorTargets()
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -49,7 +50,7 @@ func (s *Service) ProductionReadiness(ctx context.Context) ReadinessReport {
 	checks = append(checks, readinessAnyEnv("redis", "Redis 缓存", "数据", true, "REDIS_URL", "REDIS_CLUSTER_ADDRS", "REMOTE_TERMINAL_REDIS_URL"))
 	checks = append(checks, readinessEnv("kafka", "Kafka 事件总线", "数据", true, "KAFKA_BROKERS"))
 	checks = append(checks, readinessAnyEnv("keycloak", "Keycloak 认证", "安全", true, "KEYCLOAK_ISSUER_URL", "KEYCLOAK_BASE_URL", "KEYCLOAK_ADMIN_URL"))
-	checks = append(checks, readinessEnv("vault", "Vault 凭据中心", "安全", true, "VAULT_ADDR"))
+	checks = append(checks, readinessVault(ctx, envValue("VAULT_ADDR"), envValue("VAULT_TOKEN")))
 	checks = append(checks, readinessEnv("object_storage", "MinIO/S3 对象存储", "存储", true, "S3_ENDPOINT_URL", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"))
 	checks = append(checks, readinessHTTP(ctx, "loki", "Loki 日志", "可观测性", false, envValue("LOKI_URL"), "/ready"))
 	checks = append(checks, readinessHTTP(ctx, "neo4j", "Neo4j 图数据库", "拓扑", false, envValue("NEO4J_URL"), "/"))
@@ -123,6 +124,40 @@ func readinessOptionalEnv(key, name, category, env string) ReadinessCheck {
 	}
 	return readinessPass(key, name, category, false, "配置完整")
 }
+// readinessVault verifies that Vault answers and that the configured token is
+// still valid. A presence-only check hides expired tokens, which silently break
+// the credential centre and every task that needs a stored SSH login.
+func readinessVault(ctx context.Context, addr, token string) ReadinessCheck {
+	if strings.TrimSpace(addr) == "" {
+		return readinessFail("vault", "Vault 凭据中心", "安全", true, "VAULT_ADDR 未配置")
+	}
+	if strings.TrimSpace(token) == "" {
+		return readinessFail("vault", "Vault 凭据中心", "安全", true, "VAULT_TOKEN 未配置")
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, strings.TrimRight(addr, "/")+"/v1/auth/token/lookup-self", nil)
+	if err != nil {
+		return readinessFail("vault", "Vault 凭据中心", "安全", true, err.Error())
+	}
+	request.Header.Set("X-Vault-Token", token)
+	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	response, err := client.Do(request)
+	if err != nil {
+		return readinessFail("vault", "Vault 凭据中心", "安全", true, "无法连接 Vault："+err.Error())
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	switch {
+	case response.StatusCode == http.StatusOK:
+		return readinessPass("vault", "Vault 凭据中心", "安全", true, "连接与令牌校验通过")
+	case response.StatusCode == http.StatusForbidden:
+		return readinessFail("vault", "Vault 凭据中心", "安全", true, "VAULT_TOKEN 无效或已过期，请重新签发令牌并更新 Secret cmdb-gateway-env")
+	default:
+		return readinessFail("vault", "Vault 凭据中心", "安全", true, fmt.Sprintf("Vault 返回 HTTP %d", response.StatusCode))
+	}
+}
+
 func readinessHTTP(ctx context.Context, key, name, category string, required bool, baseURL, endpoint string) ReadinessCheck {
 	if strings.TrimSpace(baseURL) == "" {
 		return readinessWarning(key, name, category, required, "服务地址未配置")

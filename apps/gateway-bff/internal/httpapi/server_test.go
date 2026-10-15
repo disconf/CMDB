@@ -166,11 +166,33 @@ func TestInstallExporterCreatesAuditedRunnerJob(t *testing.T) {
 	}
 }
 
-func TestDashboardOverviewEndpoint(t *testing.T) {
+func TestDashboardOverviewEndpointRequiresToken(t *testing.T) {
 	server := NewServer()
-	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", nil))
 
+	anonymous := httptest.NewRecorder()
+	server.Handler().ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", nil))
+	// Answering anonymous callers with a zeroed payload looks like an empty
+	// platform, so the endpoint must refuse them outright.
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without a token, got %d", anonymous.Code)
+	}
+
+	login := httptest.NewRecorder()
+	server.Handler().ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"admin123"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("expected login 200, got %d", login.Code)
+	}
+	var session struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&session); err != nil {
+		t.Fatalf("decode login: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", nil)
+	request.Header.Set("Authorization", "Bearer "+session.Token)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}

@@ -52,7 +52,7 @@ spec:
           envFrom:
             - secretRef:
                 name: "cmdb-gateway-env"
-          image: "harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.216"
+          image: "harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.219"
           imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 5
@@ -171,7 +171,7 @@ spec:
               value: cmdb
             - name: KEYCLOAK_CLIENT_ID
               value: "cmdb-web"
-          image: "harbor.qa.bcavt.com/cmdb/web-portal:1.0.165"
+          image: "harbor.qa.bcavt.com/cmdb/web-portal:1.0.167"
           imagePullPolicy: Always
           livenessProbe:
             failureThreshold: 3

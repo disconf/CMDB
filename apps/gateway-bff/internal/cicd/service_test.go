@@ -292,3 +292,23 @@ func TestBuildAutoResourcesIncludesEnabledToolTypes(t *testing.T) {
 		t.Fatalf("unexpected auto resource ids: %#v", resources)
 	}
 }
+
+func TestCloneResourceOverviewKeepsEmptySlicesNonNull(t *testing.T) {
+	cloned := cloneResourceOverview(ResourceOverview{ArgoCD: ArgoCDResources{Available: true, Status: StatusConnected}})
+	if cloned.ArgoCD.Items == nil {
+		t.Fatal("empty Argo CD items must stay a non-nil slice so JSON encodes [] instead of null")
+	}
+	if cloned.Harbor.RecentRepositories == nil {
+		t.Fatal("empty Harbor repositories must stay a non-nil slice")
+	}
+	if cloned.GitLab.RecentProjects == nil {
+		t.Fatal("empty GitLab projects must stay a non-nil slice")
+	}
+	payload, err := json.Marshal(cloned)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if strings.Contains(string(payload), `"items":null`) {
+		t.Fatalf("argo items must not be encoded as null: %s", string(payload))
+	}
+}
