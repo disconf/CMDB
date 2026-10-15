@@ -61,6 +61,7 @@ func main() {
 	}
 	runContext, stopPublisher := context.WithCancel(context.Background())
 	go api.MonitorService().RunEscalations(runContext)
+	go api.RunAssetCacheRefresh(runContext)
 	go api.DiscoveryService().RunAgentHealth(runContext)
 	go api.DiscoveryService().AutoScanLoops(runContext)
 	go api.DiscoveryService().RunCollectionSchedules(runContext)

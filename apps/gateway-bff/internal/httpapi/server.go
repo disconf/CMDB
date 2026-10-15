@@ -45,6 +45,8 @@ type Server struct {
 	discovery   *discovery.Service
 	monitor     *monitor.Service
 	assetEvents *events.AssetEventConsumer
+	cmdb        *cmdb.Service
+	topology    *topology.Service
 }
 
 func NewServer() *Server {
@@ -53,14 +55,18 @@ func NewServer() *Server {
 	discoveryService := discovery.NewServiceWithCMDB(cmdbService)
 	monitorService := monitor.NewService()
 	topologyService := topology.NewServiceWithCMDB(cmdbService)
+	projectionService := projection.NewFromEnv()
 	var assetEventConsumer *events.AssetEventConsumer
 	if brokers := os.Getenv("KAFKA_BROKERS"); strings.TrimSpace(brokers) != "" {
 		var consumerErr error
-		assetEventConsumer, consumerErr = events.NewAssetEventConsumer(brokers, func(ctx context.Context, _ string, _ []byte) error {
+		assetEventConsumer, consumerErr = events.NewAssetEventConsumer(brokers, func(ctx context.Context, topic string, payload []byte) error {
 			if err := cmdbService.ReloadFromDatabase(ctx); err != nil {
 				return err
 			}
 			topologyService.Invalidate()
+			if assetID, ok := assetEventTarget(topic, payload); ok {
+				syncAssetProjection(ctx, cmdbService, projectionService, assetID)
+			}
 			return nil
 		})
 		if consumerErr != nil {
@@ -75,7 +81,6 @@ func NewServer() *Server {
 	go ticketsService.RunSLAEscalation(context.Background(), time.Minute)
 	toolboxService := toolbox.NewService()
 	systemService := system.NewService()
-	projectionService := projection.NewFromEnv()
 	redfishService := redfish.Client{}
 	aiopsService := aiops.NewService()
 	releasesService := releases.NewService()
@@ -4310,11 +4315,7 @@ func NewServer() *Server {
 		for page := 1; ; page++ {
 			result := cmdbService.ListAssets(cmdb.AssetQuery{Page: page, PageSize: 200, ScopeAll: true})
 			for _, asset := range result.Data {
-				item := projection.Asset{ID: asset.ID, Name: asset.Name, Type: asset.Type, Status: asset.Status, Environment: asset.Environment, ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, IP: asset.IP, Location: asset.Location}
-				for _, relation := range asset.Relations {
-					item.Relations = append(item.Relations, map[string]string{"type": relation.Type, "targetId": relation.TargetID, "targetName": relation.TargetName})
-				}
-				assets = append(assets, item)
+				assets = append(assets, projectionAsset(asset))
 			}
 			if result.Meta.TotalPages == 0 || page >= result.Meta.TotalPages {
 				break
@@ -4399,7 +4400,102 @@ func NewServer() *Server {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND", "message": "接口不存在"})
 	})
-	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService, assetEvents: assetEventConsumer}
+	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService, assetEvents: assetEventConsumer, cmdb: cmdbService, topology: topologyService}
+}
+
+// projectionAsset maps a CMDB asset onto the projection model.
+func projectionAsset(asset cmdb.Asset) projection.Asset {
+	item := projection.Asset{ID: asset.ID, Name: asset.Name, Type: asset.Type, Status: asset.Status, Environment: asset.Environment, ProjectGroup: asset.ProjectGroup, Owner: asset.Owner, IP: asset.IP, Location: asset.Location}
+	for _, relation := range asset.Relations {
+		item.Relations = append(item.Relations, map[string]string{"type": relation.Type, "targetId": relation.TargetID, "targetName": relation.TargetName})
+	}
+	return item
+}
+
+// assetEventTarget reads the asset identifier out of a CMDB asset event.
+// Events are published by insertAssetEvents with the asset payload under
+// data.asset, and status events carry a flat data.assetId.
+func assetEventTarget(topic string, payload []byte) (string, bool) {
+	switch strings.TrimSpace(topic) {
+	case "cmdb.asset.changed.v1":
+		var envelope struct {
+			Data struct {
+				Asset struct {
+					ID string `json:"id"`
+				} `json:"asset"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(payload, &envelope) != nil {
+			return "", false
+		}
+		identifier := strings.TrimSpace(envelope.Data.Asset.ID)
+		return identifier, identifier != ""
+	case "cmdb.asset.status.v1":
+		var envelope struct {
+			Data struct {
+				AssetID string `json:"assetId"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(payload, &envelope) != nil {
+			return "", false
+		}
+		identifier := strings.TrimSpace(envelope.Data.AssetID)
+		return identifier, identifier != ""
+	}
+	return "", false
+}
+
+// syncAssetProjection keeps Neo4j and OpenSearch in step with a single asset
+// change so the graph and search index never drift from PostgreSQL.
+func syncAssetProjection(ctx context.Context, cmdbService *cmdb.Service, projectionService *projection.Service, assetID string) {
+	if projectionService == nil || !projectionService.Enabled() || strings.TrimSpace(assetID) == "" {
+		return
+	}
+	asset, err := cmdbService.GetAsset(assetID)
+	if err == nil {
+		if _, _, projectErr := projectionService.UpsertAssets(ctx, []projection.Asset{projectionAsset(asset)}); projectErr != nil {
+			slog.Error("project asset change", "asset_id", assetID, "error", projectErr)
+		}
+		return
+	}
+	if errors.Is(err, cmdb.ErrNotFound) {
+		if deleteErr := projectionService.DeleteAssets(ctx, []string{assetID}); deleteErr != nil {
+			slog.Error("remove asset projection", "asset_id", assetID, "error", deleteErr)
+		}
+		return
+	}
+	slog.Error("load asset for projection", "asset_id", assetID, "error", err)
+}
+
+// RunAssetCacheRefresh periodically reloads the asset cache from PostgreSQL.
+// Asset change events are consumed by whichever gateway replica owns the Kafka
+// partition, so without this loop a replica can serve stale data indefinitely.
+func (s *Server) RunAssetCacheRefresh(ctx context.Context) {
+	if s == nil || s.cmdb == nil {
+		return
+	}
+	interval := 60 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("CMDB_ASSET_RELOAD_INTERVAL_SEC")); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 5 && seconds <= 3600 {
+			interval = time.Duration(seconds) * time.Second
+		}
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.cmdb.ReloadFromDatabase(ctx); err != nil {
+				slog.Error("refresh asset cache", "error", err)
+				continue
+			}
+			if s.topology != nil {
+				s.topology.Invalidate()
+			}
+		}
+	}
 }
 
 func (s *Server) RunAssetEventConsumer(ctx context.Context) {
