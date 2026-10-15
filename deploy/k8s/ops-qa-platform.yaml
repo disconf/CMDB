@@ -52,7 +52,7 @@ spec:
           envFrom:
             - secretRef:
                 name: "cmdb-gateway-env"
-          image: "harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.214"
+          image: "harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.215"
           imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 5

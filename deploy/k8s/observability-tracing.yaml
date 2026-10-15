@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: tempo-config, namespace: ops-qa}
+data:
+  tempo.yaml: |
+    stream_over_http_enabled: true
+    server:
+      http_listen_port: 3200
+      log_level: info
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc: {endpoint: 0.0.0.0:4317}
+            http: {endpoint: 0.0.0.0:4318}
+    ingester:
+      max_block_duration: 5m
+    compactor:
+      compaction:
+        block_retention: 72h
+    storage:
+      trace:
+        backend: local
+        local: {path: /var/tempo/traces}
+        wal: {path: /var/tempo/wal}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tempo
+  namespace: ops-qa
+  labels: {app: tempo, tier: observability}
+spec:
+  serviceName: tempo
+  replicas: 1
+  selector: {matchLabels: {app: tempo}}
+  template:
+    metadata: {labels: {app: tempo, tier: observability}}
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets: [{name: cmdb-registry}]
+      securityContext: {fsGroup: 10001, runAsUser: 10001, runAsGroup: 10001}
+      containers:
+      - name: tempo
+        image: harbor.qa.bcavt.com/cmdb/tempo:2.8.1
+        args: ["-config.file=/etc/tempo/tempo.yaml"]
+        ports:
+        - {name: http, containerPort: 3200}
+        - {name: otlp-grpc, containerPort: 4317}
+        - {name: otlp-http, containerPort: 4318}
+        volumeMounts:
+        - {name: config, mountPath: /etc/tempo}
+        - {name: data, mountPath: /var/tempo}
+        readinessProbe: {httpGet: {path: /ready, port: 3200}, initialDelaySeconds: 20, periodSeconds: 10, failureThreshold: 12}
+        livenessProbe: {httpGet: {path: /ready, port: 3200}, initialDelaySeconds: 60, periodSeconds: 20, failureThreshold: 6}
+        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      volumes:
+      - name: config
+        configMap: {name: tempo-config}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec: {accessModes: [ReadWriteOnce], storageClassName: longhorn, resources: {requests: {storage: 20Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: ops-qa
+  labels: {app: tempo}
+spec:
+  selector: {app: tempo}
+  ports:
+  - {name: http, port: 3200, targetPort: 3200}
+  - {name: otlp-grpc, port: 4317, targetPort: 4317}
+  - {name: otlp-http, port: 4318, targetPort: 4318}

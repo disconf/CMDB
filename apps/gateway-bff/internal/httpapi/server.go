@@ -31,6 +31,7 @@ import (
 	"cmdb/gateway-bff/internal/k8s"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/networkautomation"
+	"cmdb/gateway-bff/internal/observability"
 	"cmdb/gateway-bff/internal/projection"
 	"cmdb/gateway-bff/internal/redfish"
 	"cmdb/gateway-bff/internal/releases"
@@ -4400,7 +4401,11 @@ func NewServer() *Server {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND", "message": "接口不存在"})
 	})
-	return &Server{handler: requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))), discovery: discoveryService, monitor: monitorService, assetEvents: assetEventConsumer, cmdb: cmdbService, topology: topologyService}
+	handler := http.Handler(requestLogger(platformMetrics.Instrument(cors(auditTrail(mux, authService, auditService)))))
+	if tracingMiddleware := observability.Middleware(); tracingMiddleware != nil {
+		handler = tracingMiddleware(handler)
+	}
+	return &Server{handler: handler, discovery: discoveryService, monitor: monitorService, assetEvents: assetEventConsumer, cmdb: cmdbService, topology: topologyService}
 }
 
 // projectionAsset maps a CMDB asset onto the projection model.

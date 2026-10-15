@@ -16,6 +16,7 @@ import (
 
 	"cmdb/gateway-bff/internal/events"
 	"cmdb/gateway-bff/internal/httpapi"
+	"cmdb/gateway-bff/internal/observability"
 )
 
 func main() {
@@ -32,6 +33,11 @@ func main() {
 		_ = response.Body.Close()
 		return
 	}
+	shutdownTracing, tracingErr := observability.SetupTracing(context.Background())
+	if tracingErr != nil {
+		slog.Error("initialize tracing", "error", tracingErr)
+	}
+
 	api := httpapi.NewServer()
 	server := &http.Server{Addr: addr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	var mtlsServer *http.Server
@@ -104,4 +110,7 @@ func main() {
 		_ = mtlsServer.Shutdown(ctx)
 	}
 	api.DiscoveryService().ShutdownRemoteSessions()
+	if err := shutdownTracing(context.Background()); err != nil {
+		slog.Error("shutdown tracing", "error", err)
+	}
 }
