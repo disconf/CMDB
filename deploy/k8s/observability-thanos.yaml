@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: Secret
+metadata: {name: thanos-objstore, namespace: ops-qa}
+type: Opaque
+stringData:
+  objstore.yaml: |
+    type: S3
+    config:
+      bucket: thanos
+      endpoint: minio.ops-qa.svc.cluster.local
+      insecure: false
+      http_config:
+        insecure_skip_verify: true
+      access_key: admin
+      secret_key: Admin@2024
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-receive
+  namespace: ops-qa
+  labels: {app: thanos-receive}
+spec:
+  clusterIP: None
+  selector: {app: thanos-receive}
+  ports:
+  - {name: grpc, port: 10901, targetPort: 10901}
+  - {name: http, port: 19291, targetPort: 19291}
+  - {name: remote-write, port: 19292, targetPort: 19292}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-receive
+  namespace: ops-qa
+  labels: {app: thanos-receive, tier: observability}
+spec:
+  serviceName: thanos-receive
+  replicas: 1
+  selector: {matchLabels: {app: thanos-receive}}
+  template:
+    metadata: {labels: {app: thanos-receive, tier: observability}}
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets: [{name: cmdb-registry}]
+      securityContext: {fsGroup: 10001, runAsUser: 10001, runAsGroup: 10001}
+      containers:
+      - name: thanos-receive
+        image: harbor.qa.bcavt.com/cmdb/thanos:v0.39.2
+        args:
+        - receive
+        - --http-address=0.0.0.0:19291
+        - --remote-write.address=0.0.0.0:19292
+        - --grpc-address=0.0.0.0:10901
+        - --tsdb.path=/var/thanos/receive
+        - --tsdb.retention=15d
+        - --label=receive_replica="ops-qa-0"
+        - --objstore.config-file=/etc/thanos/objstore.yaml
+        ports: [{name: grpc, containerPort: 10901}, {name: http, containerPort: 19291}, {name: remote-write, containerPort: 19292}]
+        volumeMounts:
+        - {name: objstore, mountPath: /etc/thanos, readOnly: true}
+        - {name: data, mountPath: /var/thanos/receive}
+        readinessProbe: {httpGet: {path: /-/ready, port: 19291}, initialDelaySeconds: 20, periodSeconds: 10, failureThreshold: 12}
+        livenessProbe: {httpGet: {path: /-/healthy, port: 19291}, initialDelaySeconds: 60, periodSeconds: 20, failureThreshold: 6}
+        resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+      volumes:
+      - name: objstore
+        secret: {secretName: thanos-objstore}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec: {accessModes: [ReadWriteOnce], storageClassName: longhorn, resources: {requests: {storage: 20Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-store
+  namespace: ops-qa
+  labels: {app: thanos-store}
+spec:
+  clusterIP: None
+  selector: {app: thanos-store}
+  ports:
+  - {name: grpc, port: 10901, targetPort: 10901}
+  - {name: http, port: 10902, targetPort: 10902}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-store
+  namespace: ops-qa
+  labels: {app: thanos-store, tier: observability}
+spec:
+  serviceName: thanos-store
+  replicas: 1
+  selector: {matchLabels: {app: thanos-store}}
+  template:
+    metadata: {labels: {app: thanos-store, tier: observability}}
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets: [{name: cmdb-registry}]
+      securityContext: {fsGroup: 10001, runAsUser: 10001, runAsGroup: 10001}
+      containers:
+      - name: thanos-store
+        image: harbor.qa.bcavt.com/cmdb/thanos:v0.39.2
+        args:
+        - store
+        - --grpc-address=0.0.0.0:10901
+        - --http-address=0.0.0.0:10902
+        - --data-dir=/var/thanos/store
+        - --objstore.config-file=/etc/thanos/objstore.yaml
+        ports: [{name: grpc, containerPort: 10901}, {name: http, containerPort: 10902}]
+        volumeMounts:
+        - {name: objstore, mountPath: /etc/thanos, readOnly: true}
+        - {name: data, mountPath: /var/thanos/store}
+        readinessProbe: {httpGet: {path: /-/ready, port: 10902}, initialDelaySeconds: 15, periodSeconds: 10, failureThreshold: 12}
+        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      volumes:
+      - name: objstore
+        secret: {secretName: thanos-objstore}
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-query
+  namespace: ops-qa
+  labels: {app: thanos-query}
+spec:
+  selector: {app: thanos-query}
+  ports:
+  - {name: http, port: 9090, targetPort: 9090}
+  - {name: grpc, port: 10901, targetPort: 10901}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thanos-query
+  namespace: ops-qa
+  labels: {app: thanos-query, tier: observability}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: thanos-query}}
+  template:
+    metadata: {labels: {app: thanos-query, tier: observability}}
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets: [{name: cmdb-registry}]
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001}
+      containers:
+      - name: thanos-query
+        image: harbor.qa.bcavt.com/cmdb/thanos:v0.39.2
+        args:
+        - query
+        - --http-address=0.0.0.0:9090
+        - --grpc-address=0.0.0.0:10901
+        - --endpoint=thanos-receive.ops-qa.svc.cluster.local:10901
+        - --endpoint=thanos-store.ops-qa.svc.cluster.local:10901
+        - --query.replica-label=receive_replica
+        ports: [{name: http, containerPort: 9090}, {name: grpc, containerPort: 10901}]
+        readinessProbe: {httpGet: {path: /-/ready, port: 9090}, initialDelaySeconds: 10, periodSeconds: 10, failureThreshold: 12}
+        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-compact
+  namespace: ops-qa
+  labels: {app: thanos-compact, tier: observability}
+spec:
+  serviceName: thanos-compact
+  replicas: 1
+  selector: {matchLabels: {app: thanos-compact}}
+  template:
+    metadata: {labels: {app: thanos-compact, tier: observability}}
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets: [{name: cmdb-registry}]
+      securityContext: {fsGroup: 10001, runAsUser: 10001, runAsGroup: 10001}
+      containers:
+      - name: thanos-compact
+        image: harbor.qa.bcavt.com/cmdb/thanos:v0.39.2
+        args:
+        - compact
+        - --http-address=0.0.0.0:10902
+        - --data-dir=/var/thanos/compact
+        - --objstore.config-file=/etc/thanos/objstore.yaml
+        - --wait
+        - --retention.resolution-raw=30d
+        - --retention.resolution-5m=180d
+        - --retention.resolution-1h=365d
+        - --delete-delay=48h
+        ports: [{name: http, containerPort: 10902}]
+        volumeMounts:
+        - {name: objstore, mountPath: /etc/thanos, readOnly: true}
+        - {name: data, mountPath: /var/thanos/compact}
+        resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+      volumes:
+      - name: objstore
+        secret: {secretName: thanos-objstore}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec: {accessModes: [ReadWriteOnce], storageClassName: longhorn, resources: {requests: {storage: 10Gi}}}

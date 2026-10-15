@@ -55,7 +55,7 @@ func (s *Service) ProductionReadiness(ctx context.Context) ReadinessReport {
 	checks = append(checks, readinessHTTP(ctx, "neo4j", "Neo4j 图数据库", "拓扑", false, envValue("NEO4J_URL"), "/"))
 	checks = append(checks, readinessHTTP(ctx, "opensearch", "OpenSearch 搜索", "检索", false, envValue("OPENSEARCH_URL"), "/_cluster/health"))
 	checks = append(checks, readinessOptionalEnv("temporal", "Temporal 工作流", "流程", "TEMPORAL_ADDRESS"))
-	checks = append(checks, readinessOptionalEnv("thanos", "Thanos 长期存储", "可观测性", "THANOS_URL"))
+	checks = append(checks, readinessHTTP(ctx, "thanos", "Thanos 长期存储", "可观测性", false, envValue("THANOS_URL"), "/-/ready"))
 	checks = append(checks, readinessHTTP(ctx, "tempo", "Tempo 链路追踪", "可观测性", false, envValue("TEMPO_URL"), "/ready"))
 	checks = append(checks, readinessHTTP(ctx, "otel", "OpenTelemetry 链路导出", "可观测性", false, envValue("OTEL_EXPORTER_OTLP_ENDPOINT"), "/"))
 	checks = append(checks, readinessHTTP(ctx, "prometheus", "Prometheus", "监控", true, envValue("PROMETHEUS_URL"), "/-/healthy"))

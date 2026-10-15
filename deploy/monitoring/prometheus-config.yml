@@ -1,0 +1,115 @@
+# ops-qa Prometheus 抓取配置（线上 ConfigMap prometheus-config 的当前内容，人工维护）
+# 修改后需要 kubectl apply 该 ConfigMap 并重启 prometheus Pod：
+#   reload 只会重新加载抓取配置，不会启动新加入的 remote_write 队列。
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: jzq-cluster
+    environment: ops-qa
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager.monitoring.svc.cluster.local:9093"]
+
+remote_write:
+  - url: http://thanos-receive.ops-qa.svc.cluster.local:19292/api/v1/receive
+    queue_config:
+      max_samples_per_send: 2000
+      capacity: 10000
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels: {service: prometheus}
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager.monitoring.svc.cluster.local:9093"]
+        labels: {service: alertmanager}
+
+  - job_name: cmdb-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway.ops-qa.svc.cluster.local:8080"]
+        labels: {service: gateway-bff}
+
+  - job_name: postgresql
+    static_configs:
+      - targets: ["postgres-metrics.ops-qa.svc.cluster.local:9187"]
+        labels: {service: postgresql}
+
+  - job_name: keycloak
+    static_configs:
+      - targets: ["keycloak-metrics.ops-qa.svc.cluster.local:9000"]
+        labels: {service: keycloak}
+
+  - job_name: cmdb-node-exporter
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/node-exporter
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance
+
+  - job_name: cmdb-exporter
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/exporters
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance
+      - source_labels: [asset_type]
+        target_label: asset_type
+      - source_labels: [exporter]
+        target_label: exporter
+  - job_name: cmdb-cicd-linked
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/cicd
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: instance
+      - source_labels: [asset_type]
+        target_label: asset_type
+      - source_labels: [exporter]
+        target_label: exporter
+      - source_labels: [cicd_resource_type]
+        target_label: cicd_resource_type
+      - source_labels: [cicd_resource_id]
+        target_label: cicd_resource_id
+      - source_labels: [cicd_relation]
+        target_label: cicd_relation
+  - job_name: cmdb-snmp
+    metrics_path: /snmp
+    params:
+      auth: [public_v2]
+    http_sd_configs:
+      - url: http://gateway.ops-qa.svc.cluster.local:8080/api/v1/monitor/service-discovery/snmp
+        refresh_interval: 30s
+        bearer_token_file: /etc/prometheus/token/agent-token
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: snmp-exporter.monitoring.svc.cluster.local:9116
+      - source_labels: [asset_id]
+        target_label: cmdb_asset_id
+      - source_labels: [asset_name]
+        target_label: asset_name
