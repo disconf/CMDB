@@ -51,7 +51,7 @@ kubectl -n ops-qa rollout status statefulset/opensearch
 
 ## 3. 网关注入
 
-网关 Deployment 需要以下环境变量（`ops-qa` 已配置）：
+网关通过 Secret `cmdb-gateway-env` 读取以下变量（`envFrom` 注入，不在 Deployment 里明文写凭据）：
 
 ```
 NEO4J_URL=http://neo4j.ops-qa.svc.cluster.local:7474
@@ -97,3 +97,8 @@ kubectl -n ops-qa exec neo4j-0 -- cypher-shell -u neo4j -p ops_platform_neo4j "M
 | Neo4j Pod `CrashLoopBackOff` | Service 环境变量被解析成配置 | 设置 `enableServiceLinks: false` |
 | OpenSearch 启动报权限错误 | Longhorn 卷属主为 root | 设置 `fsGroup/runAsUser/runAsGroup: 1000` |
 | 索引健康状态 yellow | 单节点 + 1 副本 | `PUT /cmdb-assets/_settings {"index":{"number_of_replicas":0}}` |
+
+## 7. 运维入口
+
+系统管理中心的「拓扑投影」页签展示两个存储的配置地址与已投影数量，并提供「重建投影」按钮，
+重建结果会以提示条形式返回（资产条数 / Neo4j 节点数 / OpenSearch 文档数）。
