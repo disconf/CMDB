@@ -2124,6 +2124,40 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "remote.session.close", r.PathValue("id"), "")
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /api/v1/discovery/remote-sessions/{id}/{kind}/export", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		id, kind := r.PathValue("id"), r.PathValue("kind")
+		switch kind {
+		case "terminal-recording":
+			recording, err := discoveryService.TerminalRecording(id, user.Username, user.Roles)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"code": "REMOTE_EXPORT_FAILED", "message": err.Error()})
+				return
+			}
+			content, _ := json.MarshalIndent(recording, "", "  ")
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", "attachment; filename=terminal-recording.json")
+			_, _ = w.Write(content)
+		case "command-log":
+			session, err := discoveryService.RemoteSessionReplay(id, user.Username, user.Roles)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"code": "REMOTE_EXPORT_FAILED", "message": err.Error()})
+				return
+			}
+			var builder strings.Builder
+			for _, item := range session.Logs {
+				builder.WriteString(fmt.Sprintf("%s [%s] %s\n", item.Time, item.Kind, item.Message))
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Disposition", "attachment; filename=command-log.txt")
+			_, _ = w.Write([]byte(builder.String()))
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "UNSUPPORTED_EXPORT"})
+		}
+	})
 	mux.HandleFunc("GET /api/v1/discovery/remote-host-keys", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:view") {
 			return
