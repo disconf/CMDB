@@ -1850,6 +1850,23 @@ func NewServer() *Server {
 		auditService.Record(user.Username, "discovery.agent.certificate", input.AgentID, input.Fingerprint)
 		writeJSON(w, http.StatusOK, input)
 	})
+	mux.HandleFunc("POST /api/v1/discovery/agents/{id}/certificate/issue", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "discovery:manage") {
+			return
+		}
+		if !discovery.AgentCAConfigured() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "AGENT_CA_NOT_CONFIGURED", "message": "AGENT_MTLS_CA_CERT 和 AGENT_MTLS_CA_KEY 未配置"})
+			return
+		}
+		issued, err := discoveryService.IssueAgentCertificate(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "AGENT_CERTIFICATE_ISSUE_FAILED", "message": err.Error()})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		auditService.Record(user.Username, "discovery.agent.certificate.issue", r.PathValue("id"), issued.Fingerprint)
+		writeJSON(w, http.StatusCreated, issued)
+	})
 	mux.HandleFunc("POST /api/v1/discovery/agents/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "discovery:manage") {
 			return
