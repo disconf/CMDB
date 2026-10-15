@@ -4255,7 +4255,7 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "system:manage") {
 			return
 		}
-		writeJSON(w, http.StatusOK, projectionService.Status())
+		writeJSON(w, http.StatusOK, projectionService.Inspect(r.Context()))
 	})
 	mux.HandleFunc("POST /api/v1/cmdb/redfish/test", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:manage") {
