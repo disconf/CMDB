@@ -3,6 +3,9 @@ import {computed,onMounted,reactive,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {Activity,Boxes,Cable,ChevronLeft,ChevronRight,Database,Download,ExternalLink,Filter,GitFork,HardDrive,LayoutDashboard,Layers3,Network,Plus,RefreshCw,Search,Server,Settings,ShieldCheck,Tag,Waypoints,X,History,Pencil} from 'lucide-vue-next'
 import {useCmdbStore} from '@/stores/useCmdbStore'
+import {useAuthStore} from '@/stores/useAuthStore'
+import {fetchProjectGroups,fetchUnregisteredProjectGroups} from '@/api/cmdb'
+import type {GroupCount,ProjectGroup} from '@/features/cmdb/types'
 import {statusLabel} from '@/features/cmdb/cmdbModel'
 import AssetEditor from './AssetEditor.vue'
 import ServerBatchConfig from './ServerBatchConfig.vue'
@@ -39,6 +42,45 @@ const showServerBatch=ref(false)
 const showNetworkLinkEditor=ref(false)
 const showModels=ref(false)
 const showProjectGroups=ref(false)
+const auth=useAuthStore()
+// 资产清单的项目组筛选必须来自「系统配置 → 项目组管理」，不再写死演示选项
+const projectGroups=ref<ProjectGroup[]>([])
+const unregisteredGroups=ref<GroupCount[]>([])
+async function loadProjectGroups(){
+  try{
+    const [registered,pending]=await Promise.all([fetchProjectGroups(auth.token),fetchUnregisteredProjectGroups(auth.token)])
+    projectGroups.value=registered
+    unregisteredGroups.value=pending
+  }catch{
+    // 项目组接口不可用时保持空列表，不影响资产列表本身
+    projectGroups.value=[]
+    unregisteredGroups.value=[]
+  }
+}
+const projectGroupOptions=computed(()=>{
+  const known=new Set(projectGroups.value.map(item=>item.code))
+  const registered=projectGroups.value
+    .filter(item=>item.enabled||item.code===filters.projectGroup)
+    .map(item=>({code:item.code,label:item.name===item.code?item.name:item.name+'（'+item.code+'）'}))
+  const pending=unregisteredGroups.value
+    .filter(item=>!known.has(item.group)&&item.group!==filters.projectGroup)
+    .map(item=>({code:item.group,label:item.group+'（未纳管，'+item.count+' 个资产）'}))
+  const listed=new Set([...registered,...pending].map(item=>item.code))
+  // 兜底：项目组接口暂时不可用时，至少让当前已加载资产里出现的取值可以继续筛选
+  const fallback:string[]=[]
+  for(const asset of store.assets){
+    const code=(asset.projectGroup||'').trim()
+    if(code&&!listed.has(code)&&code!==filters.projectGroup){listed.add(code);fallback.push(code)}
+  }
+  return [...registered,...pending,...fallback.map(code=>({code,label:code+'（未纳管）'}))]
+})
+function projectGroupLabel(code:string){
+  if(!code) return '未设置'
+  const match=projectGroups.value.find(item=>item.code===code)
+  if(!match) return code+'（未纳管）'
+  return match.name===code?match.name:match.name+'（'+code+'）'
+}
+async function afterProjectGroupChange(){await loadProjectGroups();await store.initialize({...filters})}
 const modelByCode=computed(()=>Object.fromEntries((store.models||[]).map(model=>[model.code,model])))
 // 停用模型后其入口与资产一起隐藏；没有任何模型定义的类型保持可用
 const modelEnabled=(...codes:string[])=>codes.some(code=>{const model=modelByCode.value[code];return !model||model.enabled})
@@ -56,7 +98,7 @@ function openSection(value:typeof section.value){section.value=value;if(value===
 function page(delta:number){const next=filters.page+delta;if(next>0&&next<=store.meta.totalPages){filters.page=next;void store.search({...filters})}}
 async function save(input:AssetInput){editorSaving.value=true;editorError.value='';try{if(editorMode.value==='create')await store.create(input,{...filters});else if(store.selected)await store.update(store.selected.id,input,{...filters});editorMode.value=''}catch(reason){editorError.value=reason instanceof Error?reason.message:'保存失败，请检查字段或机房U位占用'}finally{editorSaving.value=false}}
 async function importRows(rows:AssetInput[],upsert:boolean){importResult.value=await store.importRows(rows,upsert,{...filters})}
-onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRooms();const asset=typeof route.query.asset==='string'?route.query.asset:'';if(asset)await store.select(asset)})
+onMounted(async()=>{await store.initialize({...filters});void loadProjectGroups();await store.loadIdcRooms();const asset=typeof route.query.asset==='string'?route.query.asset:'';if(asset)await store.select(asset)})
 </script>
 
 <template>
@@ -80,13 +122,13 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
     <div v-if="resourceSections.includes(section)" class="cmdb-workspace">
       <aside class="model-tree"><header><strong>CI 模型 / 资源视图</strong><span>{{store.models.length}}</span></header><button :class="{active:view==='assets'&&!filters.type}" @click="chooseType('')"><Boxes/><span>全部资产</span><b>{{store.summary?.total}}</b></button><button v-if="modelEnabled('physical-server','virtual-machine','k8s-node')" :class="{active:view==='assets'&&filters.type==='server'}" @click="chooseServers"><Server/><span>服务器</span></button><button v-if="modelEnabled('k8s-cluster')" :class="{active:view==='k8s'}" @click="chooseK8s"><Boxes/><span>K8s 集群</span></button><button v-if="modelEnabled('middleware')" :class="{active:view==='assets'&&filters.type==='middleware'}" @click="chooseType('middleware')"><Layers3/><span>中间件</span></button><button v-if="modelEnabled('database')" :class="{active:view==='assets'&&filters.type==='database'}" @click="chooseType('database')"><Database/><span>数据库</span></button><button v-if="modelEnabled('network-device')" :class="{active:view==='assets'&&filters.type==='network-device'}" @click="chooseType('network-device')"><Network/><span>网络设备</span></button><button v-if="modelEnabled('storage-device')" :class="{active:view==='assets'&&filters.type==='storage-device'}" @click="chooseType('storage-device')"><HardDrive/><span>存储设备</span></button><button v-if="modelEnabled('security-device')" :class="{active:view==='assets'&&filters.type==='security-device'}" @click="chooseType('security-device')"><ShieldCheck/><span>安全设备</span></button><button v-if="modelEnabled('load-balancer')" :class="{active:view==='assets'&&filters.type==='load-balancer'}" @click="chooseType('load-balancer')"><GitFork/><span>负载均衡</span></button><button v-for="model in regularModels.filter(item=>item.enabled)" :key="model.code" :class="{active:view==='assets'&&filters.type===model.code}" @click="chooseType(model.code)"><Server/><span>{{model.name}}</span><b>{{model.count}}</b></button></aside>
       <main class="asset-register"><NetworkInventoryPanel v-if="section==='network'"/><K8sAssetBrowser v-else-if="view==='k8s'" @select="store.select"/><template v-else>
-        <div class="asset-toolbar"><div class="search-box"><Search/><input v-model="filters.search" placeholder="搜索资产名称、编号或 IP" @keyup.enter="apply"><button @click="apply">搜索</button></div><select v-model="filters.status" @change="apply"><option value="">全部状态</option><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select><select v-model="filters.projectGroup" @change="apply"><option value="">全部项目组</option><option>核心系统组</option><option>电商业务组</option><option>容器平台组</option><option>基础设施组</option><option>数据平台组</option><option>研发效能组</option></select><button class="icon-button" aria-label="刷新" @click="store.search({...filters})"><RefreshCw/></button><button class="icon-button" aria-label="筛选"><Filter/></button><button v-if="filters.type==='server'" class="batch-config-button" @click="showServerBatch=true">批量配置</button></div>
+        <div class="asset-toolbar"><div class="search-box"><Search/><input v-model="filters.search" placeholder="搜索资产名称、编号或 IP" @keyup.enter="apply"><button @click="apply">搜索</button></div><select v-model="filters.status" @change="apply"><option value="">全部状态</option><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select><select v-model="filters.projectGroup" @change="apply"><option value="">全部项目组</option><option v-for="item in projectGroupOptions" :key="item.code" :value="item.code">{{item.label}}</option></select><button class="icon-button" aria-label="刷新" @click="store.search({...filters})"><RefreshCw/></button><button class="icon-button" aria-label="筛选"><Filter/></button><button v-if="filters.type==='server'" class="batch-config-button" @click="showServerBatch=true">批量配置</button></div>
         <div v-if="store.error" class="cmdb-error">{{store.error}}</div>
-        <div class="asset-table"><div class="asset-row asset-head"><span>资产名称</span><span>类型</span><span>状态</span><span>IP 地址</span><span>环境</span><span>项目组</span><span>负责人</span><span>数据来源</span></div><button v-for="asset in store.assets" :key="asset.id" class="asset-row" @click="store.select(asset.id)"><span><Server/><i><strong>{{asset.name}}</strong><small>{{asset.id}}</small></i></span><span>{{asset.typeName}}</span><span><b class="status-pill" :data-status="asset.status">{{statusLabel(asset.status)}}</b></span><span class="mono">{{asset.ip}}</span><span>{{asset.environment}}</span><span>{{asset.projectGroup}}</span><span>{{asset.owner}}</span><span>{{asset.source}}</span></button><div v-if="store.isLoading" class="table-loading">正在读取资产数据…</div></div>
+        <div class="asset-table"><div class="asset-row asset-head"><span>资产名称</span><span>类型</span><span>状态</span><span>IP 地址</span><span>环境</span><span>项目组</span><span>负责人</span><span>数据来源</span></div><button v-for="asset in store.assets" :key="asset.id" class="asset-row" @click="store.select(asset.id)"><span><Server/><i><strong>{{asset.name}}</strong><small>{{asset.id}}</small></i></span><span>{{asset.typeName}}</span><span><b class="status-pill" :data-status="asset.status">{{statusLabel(asset.status)}}</b></span><span class="mono">{{asset.ip}}</span><span>{{asset.environment}}</span><span>{{projectGroupLabel(asset.projectGroup)}}</span><span>{{asset.owner}}</span><span>{{asset.source}}</span></button><div v-if="store.isLoading" class="table-loading">正在读取资产数据…</div></div>
         <footer class="table-footer"><span>共 {{store.meta.total}} 条资产</span><div><button :disabled="store.meta.page<=1" @click="page(-1)"><ChevronLeft/></button><b>{{store.meta.page}} / {{store.meta.totalPages||1}}</b><button :disabled="store.meta.page>=store.meta.totalPages" @click="page(1)"><ChevronRight/></button></div></footer></template>
       </main>
     </div>
-    <div v-if="store.selected" class="drawer-backdrop" @click.self="store.closeDetail"><aside class="asset-drawer"><header><div><span>资产详情</span><h2>{{store.selected.name}}</h2><small>{{store.selected.id}}</small></div><div class="drawer-actions"><button v-if="['physical-server','network-device','load-balancer'].includes(store.selected.type)" class="link-action" @click="showNetworkLinkEditor=true"><Cable/>{{store.selected.type==='physical-server'?'关联交换机端口':'交换机互联绑定'}}</button><button aria-label="编辑" @click="editorMode='edit';editorError=''"><Pencil/></button><button aria-label="关闭" @click="showNetworkLinkEditor=false;store.closeDetail()"><X/></button></div></header><section class="asset-identity"><Server/><div><strong>{{store.selected.typeName}}</strong><span><b class="status-pill" :data-status="store.selected.status">{{statusLabel(store.selected.status)}}</b> {{store.selected.environment}}</span></div></section><section><h3>基础信息</h3><dl><div><dt>IP 地址</dt><dd>{{store.selected.ip}}</dd></div><div><dt>负责人</dt><dd>{{store.selected.owner}}</dd></div><div><dt>项目组</dt><dd>{{store.selected.projectGroup}}</dd></div><div><dt>位置</dt><dd>{{store.selected.location}}</dd></div><div><dt>数据来源</dt><dd>{{store.selected.source}}</dd></div><div><dt>最后发现</dt><dd>{{store.selected.lastSeenAt}}</dd></div></dl></section><section><h3>标签</h3><div class="asset-tags"><span v-for="tag in store.selected.tags" :key="tag">{{tag}}</span></div></section><section><h3><History/>变更历史</h3><div class="history-list"><div v-if="!store.history.length">暂无人工变更</div><article v-for="entry in store.history" :key="entry.id"><strong>{{entry.action==='created'?'创建资产':'更新资产'}}</strong><span>{{entry.operator}} · {{entry.occurredAt}}</span><small v-for="change in entry.changes" :key="change.field">{{change.field}}：{{change.before}} → {{change.after}}</small></article></div></section></aside></div>
+    <div v-if="store.selected" class="drawer-backdrop" @click.self="store.closeDetail"><aside class="asset-drawer"><header><div><span>资产详情</span><h2>{{store.selected.name}}</h2><small>{{store.selected.id}}</small></div><div class="drawer-actions"><button v-if="['physical-server','network-device','load-balancer'].includes(store.selected.type)" class="link-action" @click="showNetworkLinkEditor=true"><Cable/>{{store.selected.type==='physical-server'?'关联交换机端口':'交换机互联绑定'}}</button><button aria-label="编辑" @click="editorMode='edit';editorError=''"><Pencil/></button><button aria-label="关闭" @click="showNetworkLinkEditor=false;store.closeDetail()"><X/></button></div></header><section class="asset-identity"><Server/><div><strong>{{store.selected.typeName}}</strong><span><b class="status-pill" :data-status="store.selected.status">{{statusLabel(store.selected.status)}}</b> {{store.selected.environment}}</span></div></section><section><h3>基础信息</h3><dl><div><dt>IP 地址</dt><dd>{{store.selected.ip}}</dd></div><div><dt>负责人</dt><dd>{{store.selected.owner}}</dd></div><div><dt>项目组</dt><dd>{{projectGroupLabel(store.selected.projectGroup)}}</dd></div><div><dt>位置</dt><dd>{{store.selected.location}}</dd></div><div><dt>数据来源</dt><dd>{{store.selected.source}}</dd></div><div><dt>最后发现</dt><dd>{{store.selected.lastSeenAt}}</dd></div></dl></section><section><h3>标签</h3><div class="asset-tags"><span v-for="tag in store.selected.tags" :key="tag">{{tag}}</span></div></section><section><h3><History/>变更历史</h3><div class="history-list"><div v-if="!store.history.length">暂无人工变更</div><article v-for="entry in store.history" :key="entry.id"><strong>{{entry.action==='created'?'创建资产':'更新资产'}}</strong><span>{{entry.operator}} · {{entry.occurredAt}}</span><small v-for="change in entry.changes" :key="change.field">{{change.field}}：{{change.before}} → {{change.after}}</small></article></div></section></aside></div>
     <div v-if="showNetworkLinkEditor && store.selected" class="network-link-modal" @click.self="showNetworkLinkEditor=false"><section class="network-link-dialog"><header><div><Cable/><span><strong>关联交换机端口</strong><small>{{store.selected.name}} · {{store.selected.ip}}</small></span></div><button aria-label="关闭" @click="showNetworkLinkEditor=false"><X/></button></header><NetworkInterfacesPanel :asset-id="store.selected.id"/></section></div>
     <CollectedAttributes v-if="store.selected" :attributes="store.selected.attributes"/>
     <HostMonitoring v-if="store.selected" :asset-id="store.selected.id"/>
@@ -95,7 +137,7 @@ onMounted(async()=>{await store.initialize({...filters});await store.loadIdcRoom
     <AssetImport v-if="showImport" :result="importResult" :models="store.models" @close="showImport=false" @import="importRows"/>
     <div v-if="showAnalytics" class="modal-backdrop"><section class="analytics-panel"><header><div><span>REPORTS</span><h2>CMDB 数据报表</h2></div><button @click="showAnalytics=false">✕</button></header><div class="analytics-body"><article><h3>资产状态</h3><dl><dt>总资产</dt><dd>{{store.analytics?.status.total}}</dd><dt>在线</dt><dd>{{store.analytics?.status.online}}</dd><dt>异常</dt><dd>{{store.analytics?.status.warning}}</dd><dt>离线</dt><dd>{{store.analytics?.status.offline}}</dd></dl></article><article><h3>按类型</h3><ul><li v-for="t in store.analytics?.byType" :key="t.code">{{t.name}}（{{t.count}}）</li></ul></article><article><h3>按项目组</h3><ul><li v-for="g in store.analytics?.byGroup" :key="g.group">{{g.group}}（{{g.count}}）</li></ul></article><article><h3>按来源</h3><ul><li v-for="s in store.analytics?.bySource" :key="s.source">{{s.source}}（{{s.count}}）</li></ul></article><article class="wide"><h3>字段完整度</h3><ul><li v-for="f in store.analytics?.completeness" :key="f.field">{{f.label}}：缺失 {{f.missing}} / {{f.total}}（{{Math.round((f.rate)*100)}}%）</li></ul></article></div></section></div>
 
-<ProjectGroupManager v-if="showProjectGroups" @close="showProjectGroups=false" @changed="store.initialize({...filters})"/>
+<ProjectGroupManager v-if="showProjectGroups" @close="showProjectGroups=false" @changed="afterProjectGroupChange"/>
     <ModelManager v-if="showModels" :models="store.models" @close="showModels=false" @changed="store.initialize({...filters})"/>
   </section>
 </template>
