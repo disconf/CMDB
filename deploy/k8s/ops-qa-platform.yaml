@@ -171,7 +171,7 @@ spec:
               value: cmdb
             - name: KEYCLOAK_CLIENT_ID
               value: "cmdb-web"
-          image: "harbor.qa.bcavt.com/cmdb/web-portal:1.0.172"
+          image: "harbor.qa.bcavt.com/cmdb/web-portal:1.0.173"
           imagePullPolicy: Always
           livenessProbe:
             failureThreshold: 3

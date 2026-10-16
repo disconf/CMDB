@@ -59,3 +59,22 @@
 .pg-form footer button.primary{background:#0b6da5;border-color:#1a93c8;color:#fff}
 .spin{animation:spin .9s linear infinite}
 
+
+
+/* 字段行：6 列固定布局，选项输入常驻，避免 select 类型把删除按钮挤到下一行 */
+.model-manager .field-row{display:grid;grid-template-columns:1.1fr 1.1fr 96px 1.4fr 62px 38px;gap:6px;align-items:center;margin:0;padding:7px 0;border-bottom:1px solid #12324a}
+.model-manager .field-row:hover{background:#062033}
+.model-manager .field-row label.field-required{display:flex;align-items:center;gap:4px;color:#7894a7;font-size:11px;white-space:nowrap}
+.model-manager .field-row label.field-required input{width:auto;padding:0}
+.model-manager .field-row input:disabled{opacity:.45;cursor:not-allowed}
+.model-manager .field-row button.field-delete{display:flex;align-items:center;justify-content:center;padding:6px;border:1px solid #5c2634;background:#2a1420;color:#ff8a9b}
+.model-manager .field-row button.field-delete:hover{background:#3d1a28}
+.model-manager aside article{grid-template-columns:1fr 50px 38px;gap:5px}
+.model-manager aside article button.danger{padding:6px;border:1px solid #5c2634;background:#2a1420;color:#ff8a9b}
+.model-manager aside article button.danger:disabled{opacity:.35}
+.model-manager form>header h3{font-size:12px;color:#9fb8c8;margin:14px 0 6px}
+
+
+/* 按当前模型新增资产的入口 */
+.asset-toolbar .add-model-button{display:inline-flex;align-items:center;gap:4px;border:1px solid #1ba8c4;background:#087f99;color:#fff;border-radius:6px;padding:7px 11px;font-size:11px;cursor:pointer;white-space:nowrap}
+.asset-toolbar .add-model-button svg{width:13px}

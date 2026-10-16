@@ -7,7 +7,7 @@ import { fetchAssetOptions } from '@/api/cmdb'
 import { useAuthStore } from '@/stores/useAuthStore'
 import ResponsibilityEditor from './ResponsibilityEditor.vue'
 
-const props = defineProps<{ asset?: Asset; models: CiModel[]; idcRooms?: IdcRoom[]; saving?: boolean; serverError?: string }>()
+const props = defineProps<{ asset?: Asset; models: CiModel[]; idcRooms?: IdcRoom[]; saving?: boolean; serverError?: string; defaultType?: string }>()
 const emit = defineEmits<{ close: []; save: [value: AssetInput] }>()
 const errors = ref<string[]>([])
 const errorBox = ref<HTMLElement>()
@@ -16,7 +16,8 @@ const isEdit = computed(() => Boolean(props.asset))
 const form = reactive<{ id: string; name: string; type: string; status: string; ip: string; environment: string; projectGroup: string; owner: string; location: string; source: string; tags: string[] }>({
   id: props.asset?.id ?? '',
   name: props.asset?.name ?? '',
-  type: props.asset?.type ?? 'physical-server',
+  // 从「中间件 / 数据库」等模型视图点新增时，直接把模型带进来
+  type: props.asset?.type ?? props.defaultType ?? 'physical-server',
   status: props.asset?.status ?? 'online',
   ip: props.asset?.ip ?? '',
   environment: props.asset?.environment ?? '生产',
