@@ -23,6 +23,7 @@ import { useDashboardStore } from '@/stores/useDashboardStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { formatUpdateTime } from '@/features/dashboard/dashboardModel'
 import { remoteSections, resolveRemoteSection } from '@/features/remote/remoteNavigation'
+import { clearAuthFragment } from '@/auth/keycloak'
 
 const store = useDashboardStore(); const auth=useAuthStore(); const route=useRoute(); const router=useRouter()
 const iconMap = { Database, RadioTower, BellRing, ClipboardCheck }
@@ -36,7 +37,7 @@ const currentTime = computed(()=>store.overview ? formatUpdateTime(store.overvie
 let timer: ReturnType<typeof setInterval> | undefined; let controller: AbortController | undefined
 function refresh(){ controller?.abort(); controller=new AbortController(); void store.load(controller.signal) }
 async function fullscreen(){ if(!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen() }
-onMounted(()=>{ if(auth.isReady&&auth.isAuthenticated) refresh(); timer=setInterval(()=>{if(auth.isReady&&auth.isAuthenticated)refresh()},30000) }); onBeforeUnmount(()=>{controller?.abort(); if(timer) clearInterval(timer)})
+onMounted(()=>{ clearAuthFragment(); if(auth.isReady&&auth.isAuthenticated) refresh(); timer=setInterval(()=>{if(auth.isReady&&auth.isAuthenticated)refresh()},30000) }); onBeforeUnmount(()=>{controller?.abort(); if(timer) clearInterval(timer)})
 async function signOut(){await auth.signOut();await router.replace('/login')}
 </script>
 

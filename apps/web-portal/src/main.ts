@@ -20,8 +20,9 @@ import './styles/releases.css'
 import './styles/toolbox.css'
 import './styles/aiops.css'
 import './styles/system.css'
+import { clearAuthFragment } from '@/auth/keycloak'
 
 const pinia=createPinia()
 const router=createAppRouter(pinia)
 const app=createApp(App).use(pinia).use(router)
-void router.isReady().finally(()=>app.mount('#app'))
+void router.isReady().finally(()=>{app.mount('#app');clearAuthFragment()})

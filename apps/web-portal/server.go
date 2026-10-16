@@ -71,7 +71,14 @@ func main() {
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
+		if r.URL.Path == "/silent-check-sso.html" {
+			// 该页面由平台自身的隐藏 iframe 加载以完成 SSO 静默校验，
+			// 必须允许同源嵌入；其余页面继续用 DENY 防点击劫持。
+			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+			w.Header().Set("Cache-Control", "no-store")
+		} else {
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
