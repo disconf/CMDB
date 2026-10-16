@@ -378,6 +378,9 @@ func NewServer() *Server {
 			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "模型或字段定义无效"})
 			return
 		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "cmdb.model.create", item.Code, item.Name)
+		}
 		writeJSON(w, 201, item)
 	})
 	mux.HandleFunc("PUT /api/v1/cmdb/models/{code}", func(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +401,9 @@ func NewServer() *Server {
 			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR"})
 			return
 		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "cmdb.model.update", item.Code, fmt.Sprintf("fields=%d", len(item.Fields)))
+		}
 		writeJSON(w, 200, item)
 	})
 	mux.HandleFunc("POST /api/v1/cmdb/models/{code}/toggle", func(w http.ResponseWriter, r *http.Request) {
@@ -409,7 +415,124 @@ func NewServer() *Server {
 			writeJSON(w, 404, map[string]string{"code": "MODEL_NOT_FOUND"})
 			return
 		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			state := "enabled"
+			if !item.Enabled {
+				state = "disabled"
+			}
+			// 停用会让该模型下的资产从清单和监控目标里全局隐藏，必须留痕
+			auditService.Record(user.Username, "cmdb.model."+state, item.Code, fmt.Sprintf("assets=%d", item.Count))
+		}
 		writeJSON(w, 200, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/cmdb/models/{code}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		code := r.PathValue("code")
+		if err := cmdbService.DeleteModel(code); err != nil {
+			if errors.Is(err, cmdb.ErrNotFound) {
+				writeJSON(w, 404, map[string]string{"code": "MODEL_NOT_FOUND"})
+				return
+			}
+			if errors.Is(err, cmdb.ErrConflict) {
+				writeJSON(w, 409, map[string]string{"code": "MODEL_IN_USE", "message": err.Error()})
+				return
+			}
+			writeJSON(w, 500, map[string]string{"code": "MODEL_DELETE_FAILED", "message": err.Error()})
+			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "cmdb.model.delete", code, "")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/project-groups", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.ProjectGroups())
+	})
+	mux.HandleFunc("GET /api/v1/cmdb/project-groups/unregistered", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		writeJSON(w, http.StatusOK, cmdbService.UnregisteredProjectGroups())
+	})
+	mux.HandleFunc("POST /api/v1/cmdb/project-groups", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in cmdb.ProjectGroupInput
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := cmdbService.CreateProjectGroup(in, user.Username)
+		if errors.Is(err, cmdb.ErrConflict) {
+			writeJSON(w, 409, map[string]string{"code": "PROJECT_GROUP_CONFLICT", "message": "项目组编码已存在"})
+			return
+		}
+		if errors.Is(err, cmdb.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "项目组编码与名称不能为空"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "PROJECT_GROUP_CREATE_FAILED", "message": err.Error()})
+			return
+		}
+		auditService.Record(user.Username, "cmdb.project_group.create", item.Code, item.Name)
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/cmdb/project-groups/{code}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		var in cmdb.ProjectGroupInput
+		if decodeJSON(r, &in) != nil {
+			writeJSON(w, 400, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := cmdbService.UpdateProjectGroup(r.PathValue("code"), in)
+		if errors.Is(err, cmdb.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"code": "PROJECT_GROUP_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, cmdb.ErrValidation) {
+			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "项目组编码与名称不能为空"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"code": "PROJECT_GROUP_UPDATE_FAILED", "message": err.Error()})
+			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "cmdb.project_group.update", item.Code, item.Name)
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/cmdb/project-groups/{code}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:manage") {
+			return
+		}
+		code := r.PathValue("code")
+		if err := cmdbService.DeleteProjectGroup(code); err != nil {
+			if errors.Is(err, cmdb.ErrNotFound) {
+				writeJSON(w, 404, map[string]string{"code": "PROJECT_GROUP_NOT_FOUND"})
+				return
+			}
+			if errors.Is(err, cmdb.ErrConflict) {
+				writeJSON(w, 409, map[string]string{"code": "PROJECT_GROUP_IN_USE", "message": err.Error()})
+				return
+			}
+			writeJSON(w, 500, map[string]string{"code": "PROJECT_GROUP_DELETE_FAILED", "message": err.Error()})
+			return
+		}
+		if user, _ := authService.CurrentUser(bearerToken(r)); user.Username != "" {
+			auditService.Record(user.Username, "cmdb.project_group.delete", code, "")
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/v1/cmdb/kubernetes", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {

@@ -38,6 +38,7 @@ type Service struct {
 	models        []Model
 	history       map[string][]HistoryEntry
 	snapshots     []TopologySnapshot
+	projectGroups []ProjectGroup
 	anomalyStates map[string]NetworkAnomalyState
 	integrations  map[string]IntegrationConfig
 	db            *sql.DB
@@ -94,6 +95,11 @@ func NewService() *Service {
 			panic(fmt.Sprintf("load integration configs: %v", integrationErr))
 		}
 		service.integrations = integrations
+		groups, groupErr := loadProjectGroups(context.Background(), service.db)
+		if groupErr != nil {
+			panic(fmt.Sprintf("load project groups: %v", groupErr))
+		}
+		service.projectGroups = groups
 	}
 	return service
 }
@@ -132,12 +138,17 @@ func (s *Service) ReloadFromDatabase(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload CMDB topology snapshots: %w", err)
 	}
+	groups, err := loadProjectGroups(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("reload CMDB project groups: %w", err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.assets = assets
 	s.models = withModelCounts(models, assets)
 	s.history = history
 	s.snapshots = snapshots
+	s.projectGroups = groups
 	return nil
 }
 
@@ -320,6 +331,16 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "run_user", Label: "启动用户", Type: "text"},
 		{Name: "exporter_address", Label: "Exporter地址", Type: "text"},
 		{Name: "exporter_port", Label: "Exporter端口", Type: "text"},
+		{Name: "deploy_mode", Label: "部署模式", Type: "select", Options: []string{"单机", "集群"}},
+		{Name: "version", Label: "版本号", Type: "text"},
+		{Name: "config_path", Label: "配置文件路径", Type: "text"},
+		{Name: "start_command", Label: "启动命令", Type: "text"},
+		{Name: "stop_command", Label: "关闭命令", Type: "text"},
+		{Name: "maintainer", Label: "维护人", Type: "text"},
+		{Name: "maintainer_phone", Label: "维护人手机号", Type: "text"},
+		{Name: "application", Label: "所属应用", Type: "text"},
+		{Name: "sla_level", Label: "SLA 等级", Type: "select", Options: []string{"核心", "重要", "一般"}},
+		{Name: "is_core", Label: "是否核心", Type: "select", Options: []string{"是", "否"}},
 	},
 	"database": {
 		{Name: "database_type", Label: "数据库类型", Type: "text"},
@@ -333,6 +354,17 @@ var modelFieldPresets = map[string][]ModelField{
 		{Name: "cluster_name", Label: "集群名称", Type: "text"},
 		{Name: "exporter_address", Label: "Exporter地址", Type: "text"},
 		{Name: "exporter_port", Label: "Exporter端口", Type: "text"},
+		{Name: "deploy_mode", Label: "部署模式", Type: "select", Options: []string{"单机", "主从", "集群", "分片"}},
+		{Name: "config_path", Label: "配置文件路径", Type: "text"},
+		{Name: "start_command", Label: "启动命令", Type: "text"},
+		{Name: "stop_command", Label: "关闭命令", Type: "text"},
+		{Name: "charset", Label: "字符集", Type: "text"},
+		{Name: "timezone", Label: "时区", Type: "text"},
+		{Name: "maintainer", Label: "维护人", Type: "text"},
+		{Name: "maintainer_phone", Label: "维护人手机号", Type: "text"},
+		{Name: "application", Label: "所属应用", Type: "text"},
+		{Name: "sla_level", Label: "SLA 等级", Type: "select", Options: []string{"核心", "重要", "一般"}},
+		{Name: "is_core", Label: "是否核心", Type: "select", Options: []string{"是", "否"}},
 	},
 }
 
@@ -458,7 +490,62 @@ func asset(id, name, typ, typeName, status, ip, env, group, owner, location, sou
 func (s *Service) Models() []Model {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Model(nil), s.models...)
+	out := append([]Model(nil), s.models...)
+	counts := make(map[string]int, len(out))
+	for _, asset := range s.assets {
+		counts[asset.Type]++
+	}
+	for index := range out {
+		out[index].Count = counts[out[index].Code]
+	}
+	return out
+}
+
+// HiddenAssetCount reports how many assets are currently hidden because their
+// model is disabled.
+func (s *Service) HiddenAssetCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.models) == 0 {
+		return 0
+	}
+	state := s.enabledModelTypes()
+	count := 0
+	for _, asset := range s.assets {
+		if !assetVisibleWith(state, asset.Type) {
+			count++
+		}
+	}
+	return count
+}
+
+// DeleteModel removes a model, but only while no asset uses it. Assets are never
+// deleted implicitly; the operator has to move or remove them first.
+func (s *Service) DeleteModel(code string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.models {
+		if s.models[index].Code != code {
+			continue
+		}
+		count := 0
+		for _, asset := range s.assets {
+			if asset.Type == code {
+				count++
+			}
+		}
+		if count > 0 {
+			return fmt.Errorf("模型 %s 下还有 %d 个资产，请先迁移或删除这些资产: %w", code, count, ErrConflict)
+		}
+		if s.db != nil {
+			if _, err := s.db.ExecContext(context.Background(), `DELETE FROM cmdb_models WHERE code=$1`, code); err != nil {
+				return err
+			}
+		}
+		s.models = append(s.models[:index], s.models[index+1:]...)
+		return nil
+	}
+	return ErrNotFound
 }
 func (s *Service) CreateModel(in ModelInput) (Model, error) {
 	if err := validateModel(in); err != nil {
@@ -545,12 +632,205 @@ func (s *Service) Summary() Summary {
 	return s.SummaryFor(AssetQuery{})
 }
 
+// ProjectGroups lists the registered groups together with the number of assets
+// currently assigned to each code.
+func (s *Service) ProjectGroups() []ProjectGroup {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.projectGroupsWithCountsLocked()
+}
+
+func (s *Service) projectGroupsWithCountsLocked() []ProjectGroup {
+	counts := map[string]int{}
+	for _, asset := range s.assets {
+		if code := strings.TrimSpace(asset.ProjectGroup); code != "" {
+			counts[code]++
+		}
+	}
+	// 始终保持非 nil：前端会对返回值直接调用数组方法，null 会让页面渲染崩溃
+	out := make([]ProjectGroup, len(s.projectGroups))
+	copy(out, s.projectGroups)
+	for index := range out {
+		out[index].Count = counts[out[index].Code]
+	}
+	return out
+}
+
+// UnregisteredProjectGroups lists project group values found on assets that have
+// not been registered yet, so they can be adopted with one click.
+func (s *Service) UnregisteredProjectGroups() []GroupCount {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	known := make(map[string]bool, len(s.projectGroups))
+	for _, group := range s.projectGroups {
+		known[group.Code] = true
+	}
+	counts := map[string]int{}
+	for _, asset := range s.assets {
+		code := strings.TrimSpace(asset.ProjectGroup)
+		if code == "" || known[code] {
+			continue
+		}
+		counts[code]++
+	}
+	out := make([]GroupCount, 0, len(counts))
+	for _, code := range sortedKeys(counts) {
+		out = append(out, GroupCount{Group: code, Count: counts[code]})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
+func normalizeProjectGroupInput(in ProjectGroupInput) (ProjectGroup, error) {
+	code := strings.TrimSpace(in.Code)
+	name := strings.TrimSpace(in.Name)
+	if code == "" || name == "" {
+		return ProjectGroup{}, ErrValidation
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	return ProjectGroup{
+		Code:        code,
+		Name:        name,
+		Description: strings.TrimSpace(in.Description),
+		Owner:       strings.TrimSpace(in.Owner),
+		OwnerPhone:  strings.TrimSpace(in.OwnerPhone),
+		Enabled:     enabled,
+	}, nil
+}
+
+func (s *Service) CreateProjectGroup(in ProjectGroupInput, operator string) (ProjectGroup, error) {
+	item, err := normalizeProjectGroupInput(in)
+	if err != nil {
+		return ProjectGroup{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.projectGroups {
+		if existing.Code == item.Code {
+			return ProjectGroup{}, ErrConflict
+		}
+	}
+	item.CreatedBy = operator
+	if s.db != nil {
+		if err := upsertProjectGroup(context.Background(), s.db, item); err != nil {
+			return ProjectGroup{}, err
+		}
+		if groups, err := loadProjectGroups(context.Background(), s.db); err == nil {
+			s.projectGroups = groups
+			for _, group := range s.projectGroups {
+				if group.Code == item.Code {
+					return group, nil
+				}
+			}
+		}
+	}
+	s.projectGroups = append(s.projectGroups, item)
+	return item, nil
+}
+
+func (s *Service) UpdateProjectGroup(code string, in ProjectGroupInput) (ProjectGroup, error) {
+	code = strings.TrimSpace(code)
+	in.Code = code
+	item, err := normalizeProjectGroupInput(in)
+	if err != nil {
+		return ProjectGroup{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.projectGroups {
+		if s.projectGroups[index].Code != code {
+			continue
+		}
+		item.CreatedBy = s.projectGroups[index].CreatedBy
+		item.CreatedAt = s.projectGroups[index].CreatedAt
+		if s.db != nil {
+			if err := upsertProjectGroup(context.Background(), s.db, item); err != nil {
+				return ProjectGroup{}, err
+			}
+		}
+		s.projectGroups[index] = item
+		return item, nil
+	}
+	return ProjectGroup{}, ErrNotFound
+}
+
+// DeleteProjectGroup refuses to delete a group while assets still reference it.
+func (s *Service) DeleteProjectGroup(code string) error {
+	code = strings.TrimSpace(code)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.projectGroups {
+		if s.projectGroups[index].Code != code {
+			continue
+		}
+		count := 0
+		for _, asset := range s.assets {
+			if strings.TrimSpace(asset.ProjectGroup) == code {
+				count++
+			}
+		}
+		if count > 0 {
+			return fmt.Errorf("项目组 %s 下还有 %d 个资产，请先调整这些资产的项目组: %w", code, count, ErrConflict)
+		}
+		if s.db != nil {
+			if err := deleteProjectGroupRow(context.Background(), s.db, code); err != nil {
+				return err
+			}
+		}
+		s.projectGroups = append(s.projectGroups[:index], s.projectGroups[index+1:]...)
+		return nil
+	}
+	return ErrNotFound
+}
+
+// Callers must hold at least a read lock.
+func (s *Service) enabledModelTypes() map[string]bool {
+	state := make(map[string]bool, len(s.models))
+	for _, model := range s.models {
+		state[model.Code] = model.Enabled
+	}
+	return state
+}
+
+// assetVisibleWith reports whether an asset may appear in listings. Assets whose
+// type has no model at all stay visible so a newly discovered resource type is
+// never silently dropped.
+func assetVisibleWith(state map[string]bool, assetType string) bool {
+	enabled, known := state[assetType]
+	if !known {
+		return true
+	}
+	return enabled
+}
+
+// visibleAssets returns the assets that may appear in listings, statistics and
+// monitoring targets. Assets belonging to a disabled model are hidden globally;
+// the records stay in the database so re-enabling the model restores them.
+// Callers must hold at least a read lock.
+func (s *Service) visibleAssets() []Asset {
+	if len(s.models) == 0 {
+		return s.assets
+	}
+	state := s.enabledModelTypes()
+	out := make([]Asset, 0, len(s.assets))
+	for _, asset := range s.assets {
+		if !assetVisibleWith(state, asset.Type) {
+			continue
+		}
+		out = append(out, asset)
+	}
+	return out
+}
+
 func (s *Service) SummaryFor(q AssetQuery) Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := Summary{Models: len(s.models)}
 	groups := map[string]struct{}{}
-	for _, a := range s.assets {
+	for _, a := range s.visibleAssets() {
 		if !assetMatchesScope(a, q) {
 			continue
 		}
@@ -580,7 +860,7 @@ func (s *Service) ListAssets(q AssetQuery) AssetPage {
 		q.PageSize = 20
 	}
 	filtered := make([]Asset, 0)
-	for _, a := range s.assets {
+	for _, a := range s.visibleAssets() {
 		search := strings.ToLower(q.Search)
 		if search != "" && !strings.Contains(strings.ToLower(a.Name+" "+a.ID+" "+a.IP), search) {
 			continue
@@ -627,7 +907,7 @@ func (s *Service) PrometheusTargetGroups(port string) []PrometheusTargetGroup {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	groups := make([]PrometheusTargetGroup, 0)
-	for _, a := range s.assets {
+	for _, a := range s.visibleAssets() {
 		if a.Status != "online" || strings.TrimSpace(a.IP) == "" {
 			continue
 		}
@@ -662,7 +942,7 @@ func (s *Service) MonitorTargetsFor(q AssetQuery) []MonitorTarget {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]MonitorTarget, 0)
-	for _, asset := range s.assets {
+	for _, asset := range s.visibleAssets() {
 		if !isMonitorableAsset(asset.Type) || !assetMatchesScope(asset, q) {
 			continue
 		}
@@ -682,7 +962,7 @@ func (s *Service) PrometheusExporterTargetGroups() []PrometheusTargetGroup {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	groups := make([]PrometheusTargetGroup, 0)
-	for _, asset := range s.assets {
+	for _, asset := range s.visibleAssets() {
 		if asset.Status == "offline" {
 			continue
 		}
@@ -762,8 +1042,9 @@ func exporterLabel(assetType string) string {
 func (s *Service) InventoryAssets() []Asset {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	assets := make([]Asset, 0, len(s.assets))
-	for _, asset := range s.assets {
+	visible := s.visibleAssets()
+	assets := make([]Asset, 0, len(visible))
+	for _, asset := range visible {
 		assets = append(assets, cloneAsset(asset))
 	}
 	return assets
@@ -772,7 +1053,7 @@ func (s *Service) MonitoringAssets() []Asset {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	assets := make([]Asset, 0)
-	for _, asset := range s.assets {
+	for _, asset := range s.visibleAssets() {
 		if asset.Source == "linux-agent" {
 			assets = append(assets, cloneAsset(asset))
 		}
@@ -797,7 +1078,7 @@ func (s *Service) PrometheusSNMPTargetGroups() []PrometheusTargetGroup {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	groups := make([]PrometheusTargetGroup, 0)
-	for _, a := range s.assets {
+	for _, a := range s.visibleAssets() {
 		if a.Status != "online" || strings.TrimSpace(a.IP) == "" {
 			continue
 		}
@@ -1609,11 +1890,12 @@ func clusterForAsset(clusters map[string]*K8sClusterInventory, asset Asset) *K8s
 func (s *Service) Analytics() Analytics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := Analytics{Status: Summary{Total: len(s.assets), Models: len(s.models)}}
+	visible := s.visibleAssets()
+	out := Analytics{Status: Summary{Total: len(visible), Models: len(s.models)}}
 	typeCounts := map[string]int{}
 	groupCounts := map[string]int{}
 	sourceCounts := map[string]int{}
-	for _, a := range s.assets {
+	for _, a := range visible {
 		typeCounts[a.Type]++
 		groupCounts[a.ProjectGroup]++
 		sourceCounts[a.Source]++
@@ -1634,11 +1916,11 @@ func (s *Service) Analytics() Analytics {
 	for _, src := range sortedKeys(sourceCounts) {
 		out.BySource = append(out.BySource, SourceCount{Source: src, Count: sourceCounts[src]})
 	}
-	total := len(s.assets)
+	total := len(visible)
 	if total > 0 {
 		for _, spec := range [][2]string{{"owner", "负责人"}, {"location", "位置"}, {"ip", "IP地址"}, {"projectGroup", "项目组"}} {
 			missing := 0
-			for _, a := range s.assets {
+			for _, a := range visible {
 				value := strings.TrimSpace(assetString(a, spec[0]))
 				if value == "" || value == "待分配" || value == "自动发现" {
 					missing++
@@ -1750,7 +2032,7 @@ func (s *Service) RemoteTargetOptions() RemoteTargetOptions {
 	defer s.mu.RUnlock()
 	groups := map[string]bool{}
 	tags := map[string]bool{}
-	for _, asset := range s.assets {
+	for _, asset := range s.visibleAssets() {
 		if !remoteEligibleAsset(asset) {
 			continue
 		}
@@ -1774,7 +2056,7 @@ func (s *Service) ResolveRemoteTargets(projectGroups, tags, assetIDs, ips []stri
 	idSet := stringSet(assetIDs)
 	ipPatterns := trimmedStrings(ips)
 	result := []Asset{}
-	for _, asset := range s.assets {
+	for _, asset := range s.visibleAssets() {
 		if !remoteEligibleAsset(asset) {
 			continue
 		}
@@ -1897,8 +2179,12 @@ func (s *Service) AnalyticsFor(q AssetQuery) Analytics {
 	groupCounts := map[string]int{}
 	sourceCounts := map[string]int{}
 	visible := make([]Asset, 0, len(s.assets))
+	modelState := s.enabledModelTypes()
 	groups := map[string]struct{}{}
 	for _, asset := range s.assets {
+		if !assetVisibleWith(modelState, asset.Type) {
+			continue
+		}
 		if !assetMatchesScope(asset, q) {
 			continue
 		}
@@ -1953,7 +2239,11 @@ func (s *Service) InventoryAssetsFor(q AssetQuery) []Asset {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]Asset, 0, len(s.assets))
+	modelState := s.enabledModelTypes()
 	for _, asset := range s.assets {
+		if !assetVisibleWith(modelState, asset.Type) {
+			continue
+		}
 		if assetMatchesScope(asset, q) {
 			result = append(result, cloneAsset(asset))
 		}
@@ -1966,7 +2256,11 @@ func (s *Service) RemoteTargetOptionsFor(q AssetQuery) RemoteTargetOptions {
 	defer s.mu.RUnlock()
 	groups := map[string]bool{}
 	tags := map[string]bool{}
+	modelState := s.enabledModelTypes()
 	for _, asset := range s.assets {
+		if !assetVisibleWith(modelState, asset.Type) {
+			continue
+		}
 		if !remoteEligibleAsset(asset) || !assetMatchesScope(asset, q) {
 			continue
 		}
@@ -1988,7 +2282,11 @@ func (s *Service) ResolveRemoteTargetsFor(q AssetQuery, projectGroups, tags, ass
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := []Asset{}
+	modelState := s.enabledModelTypes()
 	for _, asset := range s.assets {
+		if !assetVisibleWith(modelState, asset.Type) {
+			continue
+		}
 		if !remoteEligibleAsset(asset) || !assetMatchesScope(asset, q) {
 			continue
 		}

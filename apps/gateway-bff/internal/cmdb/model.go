@@ -18,6 +18,31 @@ type ModelField struct {
 	DefaultValue string   `json:"defaultValue"`
 	Options      []string `json:"options"`
 }
+// ProjectGroup is an operator maintained grouping used to classify assets.
+// The asset field ProjectGroup keeps storing the code, so existing records stay
+// valid and a group can be registered later without touching assets.
+type ProjectGroup struct {
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Owner       string `json:"owner"`
+	OwnerPhone  string `json:"ownerPhone"`
+	Enabled     bool   `json:"enabled"`
+	Count       int    `json:"count"`
+	CreatedBy   string `json:"createdBy"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type ProjectGroupInput struct {
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Owner       string `json:"owner"`
+	OwnerPhone  string `json:"ownerPhone"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
 type ModelInput struct {
 	Code        string       `json:"code"`
 	Name        string       `json:"name"`

@@ -1,4 +1,4 @@
-import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview,AssetGovernanceRule,AssetGovernanceRuleInput,AssetGovernanceRuleReport,AssetGovernanceBulkResult,BatchUpdateAssetInput,BatchUpdateAssetResult } from '@/features/cmdb/types'
+import type { Analytics,Asset,AssetFilters,AssetInput,AssetPage,AssetSummary,CiModel,HistoryEntry,IdcRoom,ImportResult,NetworkDeviceInventory,NetworkInterface,NetworkLink,NetworkPort,PhysicalGraph,TopologySnapshot,NetworkLinkHistoryEntry,VLANInventory,NetworkAnomaly,NetworkAutomationPolicy,NetworkAutomationLifecycle,NetworkAutomationReport,NetworkDiff,ComplianceRule,ComplianceDecision,OnboardingRequest,AssetGovernanceIssue,AssetGovernanceReport,AssetGovernanceReview,AssetGovernanceRule,AssetGovernanceRuleInput,AssetGovernanceRuleReport,AssetGovernanceBulkResult,BatchUpdateAssetInput,BatchUpdateAssetResult,ProjectGroup,ProjectGroupInput,GroupCount } from '@/features/cmdb/types'
 import { buildAssetQuery } from '@/features/cmdb/cmdbModel'
 async function get<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error(response.status===401?'登录状态已失效':'CMDB 数据请求失败');return response.json() as Promise<T>}
 export const fetchModels=(token:string)=>get<CiModel[]>('/api/v1/cmdb/models',token)
@@ -15,6 +15,12 @@ export const fetchModelTemplate=(token:string,code:string)=>fetch(`/api/v1/cmdb/
 export const fetchIdcRooms=(token:string)=>get<IdcRoom[]>('/api/v1/idc/rooms',token)
 
 async function del<T>(path:string,token:string):Promise<T>{const response=await fetch(path,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error('删除失败');return undefined as unknown as T}
+export const deleteModel=(token:string,code:string)=>del<void>(`/api/v1/cmdb/models/${encodeURIComponent(code)}`,token)
+export const fetchProjectGroups=(token:string)=>get<ProjectGroup[]>('/api/v1/cmdb/project-groups',token)
+export const fetchUnregisteredProjectGroups=(token:string)=>get<GroupCount[]>('/api/v1/cmdb/project-groups/unregistered',token)
+export const createProjectGroup=(token:string,input:ProjectGroupInput)=>send<ProjectGroup>('/api/v1/cmdb/project-groups',token,'POST',input)
+export const updateProjectGroup=(token:string,code:string,input:ProjectGroupInput)=>send<ProjectGroup>(`/api/v1/cmdb/project-groups/${encodeURIComponent(code)}`,token,'PUT',input)
+export const deleteProjectGroup=(token:string,code:string)=>del<void>(`/api/v1/cmdb/project-groups/${encodeURIComponent(code)}`,token)
 export const deleteIdcRack=(token:string,rackId:string)=>del<void>(`/api/v1/idc/racks/${encodeURIComponent(rackId)}`,token)
 export const deleteIdcModule=(token:string,moduleId:string)=>del<void>(`/api/v1/idc/modules/${encodeURIComponent(moduleId)}`,token)
 

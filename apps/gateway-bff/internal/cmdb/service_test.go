@@ -437,3 +437,164 @@ func TestCreateAssetRejectsOverlappingRackRange(t *testing.T) {
 		t.Fatalf("adjacent slot should be available: %v", err)
 	}
 }
+
+func TestDisabledModelHidesItsAssetsEverywhere(t *testing.T) {
+	service := NewService()
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "visible-host", Name: "visible-host", Type: "physical-server", Status: "online", IP: "10.99.0.1", Environment: "test", ProjectGroup: "core", Owner: "ops"}, "tester"); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "hidden-ns", Name: "hidden-ns", Type: "k8s-namespace", Status: "online", Environment: "test", ProjectGroup: "core", Owner: "ops"}, "tester"); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	before := service.ListAssets(AssetQuery{Page: 1, PageSize: 100, ScopeAll: true}).Meta.Total
+	if before < 2 {
+		t.Fatalf("expected both new assets listed, got %d", before)
+	}
+
+	// 停用模型的资产必须从清单、统计与采集目标里全局消失
+	if _, err := service.ToggleModel("k8s-namespace"); err != nil {
+		t.Fatalf("toggle model: %v", err)
+	}
+	page := service.ListAssets(AssetQuery{Page: 1, PageSize: 100, ScopeAll: true})
+	if page.Meta.Total != before-1 {
+		t.Fatalf("expected exactly one asset hidden, before=%d after=%d", before, page.Meta.Total)
+	}
+	for _, asset := range page.Data {
+		if asset.ID == "hidden-ns" {
+			t.Fatal("asset of a disabled model must not be listed")
+		}
+	}
+	if summary := service.Summary(); summary.Total != before-1 {
+		t.Fatalf("summary must skip hidden assets, got %d want %d", summary.Total, before-1)
+	}
+	if _, err := service.GetAsset("hidden-ns"); err != nil {
+		t.Fatalf("hidden asset must still be readable by id: %v", err)
+	}
+	if count := service.HiddenAssetCount(); count < 1 {
+		t.Fatalf("expected at least one hidden asset, got %d", count)
+	}
+	for _, asset := range service.InventoryAssets() {
+		if asset.ID == "hidden-ns" {
+			t.Fatal("inventory must skip hidden assets")
+		}
+	}
+
+	if _, err := service.ToggleModel("k8s-namespace"); err != nil {
+		t.Fatalf("toggle model: %v", err)
+	}
+	if page := service.ListAssets(AssetQuery{Page: 1, PageSize: 100, ScopeAll: true}); page.Meta.Total != before {
+		t.Fatalf("re-enabling must restore the assets, got %d want %d", page.Meta.Total, before)
+	}
+	if count := service.HiddenAssetCount(); count != 0 {
+		t.Fatalf("nothing should stay hidden after re-enabling, got %d", count)
+	}
+}
+
+func TestModelListReportsAssetCounts(t *testing.T) {
+	service := NewService()
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "counted-host", Name: "counted-host", Type: "physical-server", Status: "online", Environment: "test", ProjectGroup: "core", Owner: "ops"}, "tester"); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	counts := map[string]int{}
+	for _, model := range service.Models() {
+		counts[model.Code] = model.Count
+	}
+	if counts["physical-server"] < 1 {
+		t.Fatalf("physical-server must report its assets, got %+v", counts)
+	}
+	if counts["security-device"] != 0 {
+		t.Fatalf("an unused model must report zero, got %d", counts["security-device"])
+	}
+}
+
+func TestDeleteModelOnlyAllowsEmptyModels(t *testing.T) {
+	service := NewService()
+	if _, err := service.CreateModel(ModelInput{Code: "codex-tmp-model", Name: "临时模型", Category: "测试"}); err != nil {
+		t.Fatalf("create model: %v", err)
+	}
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "delete-guard-host", Name: "guard", Type: "physical-server", Status: "online", Environment: "test", ProjectGroup: "core", Owner: "ops"}, "tester"); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+
+	if err := service.DeleteModel("physical-server"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a model with assets must not be deleted, got %v", err)
+	}
+	if err := service.DeleteModel("codex-tmp-model"); err != nil {
+		t.Fatalf("an empty model must be deletable, got %v", err)
+	}
+	if err := service.DeleteModel("codex-tmp-model"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleting twice must report not found, got %v", err)
+	}
+	for _, model := range service.Models() {
+		if model.Code == "codex-tmp-model" {
+			t.Fatal("deleted model must disappear from the list")
+		}
+	}
+}
+
+func TestProjectGroupLifecycle(t *testing.T) {
+	service := NewService()
+	if _, err := service.CreateAsset(CreateAssetInput{ID: "pg-host-1", Name: "pg-host-1", Type: "physical-server", Status: "online", Environment: "test", ProjectGroup: "codex-core", Owner: "ops"}, "tester"); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+
+	// 未纳管的取值可以被识别出来，便于一键纳管
+	unregistered := service.UnregisteredProjectGroups()
+	found := false
+	for _, item := range unregistered {
+		if item.Group == "codex-core" && item.Count >= 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected codex-core to be reported as unregistered, got %+v", unregistered)
+	}
+
+	group, err := service.CreateProjectGroup(ProjectGroupInput{Code: "codex-core", Name: "核心系统组", Owner: "张三", OwnerPhone: "13800000000"}, "tester")
+	if err != nil {
+		t.Fatalf("create project group: %v", err)
+	}
+	if group.Name != "核心系统组" || !group.Enabled {
+		t.Fatalf("unexpected group %+v", group)
+	}
+	if _, err := service.CreateProjectGroup(ProjectGroupInput{Code: "codex-core", Name: "重复"}, "tester"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate code must conflict, got %v", err)
+	}
+	if _, err := service.CreateProjectGroup(ProjectGroupInput{Code: "", Name: ""}, "tester"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("empty code/name must be rejected, got %v", err)
+	}
+
+	// 资产数计入项目组
+	counted := false
+	for _, item := range service.ProjectGroups() {
+		if item.Code == "codex-core" && item.Count == 1 {
+			counted = true
+		}
+	}
+	if !counted {
+		t.Fatalf("project group must report its asset count, got %+v", service.ProjectGroups())
+	}
+	for _, item := range service.UnregisteredProjectGroups() {
+		if item.Group == "codex-core" {
+			t.Fatal("a registered group must no longer be reported as unregistered")
+		}
+	}
+
+	// 仍有资产引用时不允许删除
+	if err := service.DeleteProjectGroup("codex-core"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("group in use must not be deleted, got %v", err)
+	}
+	if _, err := service.UpdateProjectGroup("codex-core", ProjectGroupInput{Code: "codex-core", Name: "核心系统组(改)", Enabled: boolPointer(false)}); err != nil {
+		t.Fatalf("update project group: %v", err)
+	}
+	for _, item := range service.ProjectGroups() {
+		if item.Code == "codex-core" && (item.Name != "核心系统组(改)" || item.Enabled) {
+			t.Fatalf("update was not applied: %+v", item)
+		}
+	}
+	if err := service.DeleteProjectGroup("codex-core"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("still referenced by an asset, want conflict, got %v", err)
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }

@@ -1,1 +1,61 @@
 .model-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:#020a12dd;backdrop-filter:blur(5px)}.model-modal>section{width:min(1050px,94vw);height:min(720px,90vh);border:1px solid #23516d;background:#071d2f;padding:18px;overflow:hidden}.model-modal>section>header{display:flex;justify-content:space-between;align-items:center}.model-modal header small{color:#24cee5;letter-spacing:2px}.model-modal button{border:1px solid #24465e;background:#0b293e;color:#c5dfed;padding:8px;cursor:pointer}.model-manager{display:grid;grid-template-columns:280px 1fr;gap:16px;height:calc(100% - 65px);margin-top:14px}.model-manager aside{overflow:auto;border:1px solid #173b54;padding:10px}.model-manager aside .new-model{width:100%;display:flex;gap:8px;justify-content:center}.model-manager aside article{display:grid;grid-template-columns:1fr 55px;gap:5px;margin-top:7px}.model-manager aside article.disabled{opacity:.45}.model-manager aside article>button:first-child{text-align:left}.model-manager aside strong,.model-manager aside span{display:block}.model-manager aside span{margin-top:4px;color:#688398;font-size:10px}.model-manager form{overflow:auto;padding:4px 12px}.model-manager form>label,.model-row label{display:grid;gap:5px;margin-bottom:10px;color:#7894a7;font-size:11px}.model-manager input,.model-manager textarea,.model-manager select{box-sizing:border-box;width:100%;border:1px solid #24465e;background:#061725;color:#dcecff;padding:9px;outline:none}.model-manager textarea{min-height:65px;resize:vertical}.model-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.model-manager form>header{display:flex;justify-content:space-between;align-items:center}.field-row{display:grid;grid-template-columns:1fr 1fr 100px 70px 38px;gap:6px;margin:7px 0}.field-row label{display:flex;align-items:center;gap:4px;color:#7894a7}.field-row label input{width:auto}.field-row svg{width:15px}.model-manager form>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.model-manager button.primary{border-color:#1ba8c4;background:#087f99;color:white}@media(max-width:900px){.model-manager{grid-template-columns:1fr}.model-manager aside{max-height:190px}.model-modal>section{overflow:auto}}
+
+/* ---- 项目组下拉 ---- */
+.project-group-select{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.project-group-select select{flex:1;min-width:160px;height:32px;border:1px solid #28536c;background:#031525;color:#d5edf8;border-radius:5px;padding:0 7px}
+.project-group-select .link-button{display:inline-flex;align-items:center;gap:3px;border:1px solid #28536c;background:#0d2235;color:#b9d4e3;border-radius:5px;padding:5px 8px;font-size:11px;cursor:pointer}
+.project-group-select .link-button svg{width:12px}
+.project-group-select .inline-create{display:flex;gap:5px;align-items:center;flex:1;min-width:200px}
+.project-group-select .inline-create input{flex:1;height:30px;border:1px solid #28536c;background:#031525;color:#d5edf8;border-radius:5px;padding:0 7px}
+.project-group-select .inline-create button{border:1px solid #28536c;background:#0d2235;color:#b9d4e3;border-radius:5px;padding:5px 9px;font-size:11px;cursor:pointer}
+.project-group-select .inline-create button.primary{background:#0b6da5;border-color:#1a93c8;color:#fff}
+.project-group-select .warn{flex-basis:100%;color:#fbbf24;font-size:10px}
+
+/* ---- 停用模型隐藏提示 ---- */
+.cmdb-hidden-hint{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px;padding:9px 12px;border:1px solid rgba(251,191,36,.35);background:rgba(251,191,36,.08);border-radius:7px;color:#fbbf24;font-size:11px}
+.cmdb-hidden-hint b{color:#fde68a}
+.cmdb-hidden-hint button{border:1px solid rgba(251,191,36,.45);background:transparent;color:#fbbf24;border-radius:5px;padding:5px 9px;font-size:11px;cursor:pointer}
+
+/* ---- 项目组管理 ---- */
+.project-group-manager{width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#081a2b;border:1px solid #246c98;border-radius:10px}
+.project-group-manager>header{display:flex;justify-content:space-between;align-items:flex-start;padding:14px 18px;border-bottom:1px solid #174d78}
+.project-group-manager>header small{color:#31c9eb;font-size:9px;letter-spacing:2px}
+.project-group-manager>header h2{margin:3px 0;font-size:17px}
+.project-group-manager>header p{margin:0;color:#7890a8;font-size:11px}
+.project-group-manager>header button{background:transparent;border:0;color:#7890a8;cursor:pointer}
+.project-group-manager .cmdb-message,.project-group-manager .cmdb-error{margin:10px 18px 0;padding:8px 10px;border-radius:6px;font-size:11px}
+.project-group-manager .cmdb-message{background:rgba(72,216,154,.12);color:#5bdfa1}
+.project-group-manager .cmdb-error{background:rgba(255,82,104,.12);color:#ff8998}
+.pg-body{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:14px;padding:14px 18px 18px}
+@media(max-width:1100px){.pg-body{grid-template-columns:1fr}}
+.pg-list>header,.pg-pending>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.pg-list>header div,.pg-pending>header div{display:grid}
+.pg-list>header strong,.pg-pending>header strong{font-size:13px;color:#e3f3fb}
+.pg-list>header span,.pg-pending>header span{color:#7890a8;font-size:10px}
+.pg-list>header button,.pg-pending>header button{display:inline-flex;align-items:center;gap:4px;border:1px solid #28536c;background:#0d2235;color:#b9d4e3;border-radius:5px;padding:5px 8px;font-size:11px;cursor:pointer}
+.pg-list>header button.primary{background:#0b6da5;border-color:#1a93c8;color:#fff}
+.pg-list>header button svg,.pg-pending button svg{width:12px}
+.pg-list article,.pg-pending article{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:9px 10px;margin-bottom:6px;border:1px solid #17415e;background:#061a2c;border-radius:6px}
+.pg-pending article{grid-template-columns:1fr auto}
+.pg-list article.disabled{opacity:.55}
+.pg-list article div,.pg-pending article div{display:grid;gap:2px}
+.pg-list strong,.pg-pending strong{font-size:12px;color:#e3f3fb}
+.pg-list small,.pg-pending small{color:#7890a8;font-size:10px}
+.pg-list article span{color:#69889d;font-size:10px}
+.pg-state{padding:2px 6px;border-radius:4px;background:rgba(72,200,232,.12);color:#48c8e8;font-size:10px}
+.pg-list article button,.pg-pending article button{display:inline-flex;align-items:center;gap:3px;border:1px solid #28536c;background:#0d2235;color:#b9d4e3;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer}
+.pg-list article button:disabled{opacity:.4;cursor:not-allowed}
+.pg-empty{padding:12px;border:1px dashed #28536c;border-radius:6px;color:#7890a8;font-size:11px;text-align:center}
+.pg-form{display:grid;grid-template-columns:1fr 1fr;gap:9px;align-content:start;padding:12px;border:1px solid #28536c;background:#10273a;border-radius:8px}
+.pg-form header{grid-column:1/-1}
+.pg-form h3{margin:0;font-size:13px}
+.pg-form label{display:grid;gap:4px}
+.pg-form label.wide{grid-column:1/-1}
+.pg-form label.check{display:flex;align-items:center;gap:6px;grid-column:1/-1}
+.pg-form label>span{color:#7890a8;font-size:10px}
+.pg-form input,.pg-form textarea{border:1px solid #28536c;background:#031525;color:#d5edf8;border-radius:5px;padding:6px 7px;font-size:12px}
+.pg-form footer{grid-column:1/-1;display:flex;justify-content:flex-end;gap:7px}
+.pg-form footer button{border:1px solid #28536c;background:#0d2235;color:#b9d4e3;border-radius:5px;padding:6px 10px;font-size:11px;cursor:pointer}
+.pg-form footer button.primary{background:#0b6da5;border-color:#1a93c8;color:#fff}
+.spin{animation:spin .9s linear infinite}
+

@@ -55,3 +55,9 @@ export interface AssetGovernanceBulkResult { total:number;succeeded:number;faile
 
 export interface BatchUpdateAssetInput { assetIds:string[];status:string;environment:string;projectGroup:string;owner:string;location:string;hostId:string;tags:string[];tagsMode:'replace'|'append' }
 export interface BatchUpdateAssetResult { total:number;succeeded:number;failed:number;items:Array<{assetId:string;assetName:string;success:boolean;error?:string}> }
+
+export interface GroupCount { group:string;count:number }
+
+export interface ProjectGroup { code:string;name:string;description:string;owner:string;ownerPhone:string;enabled:boolean;count:number;createdBy:string;createdAt:string;updatedAt:string }
+
+export interface ProjectGroupInput { code:string;name:string;description?:string;owner?:string;ownerPhone?:string;enabled?:boolean }

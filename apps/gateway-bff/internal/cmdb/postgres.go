@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS cmdb_topology_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_cmdb_topology_snapshots_kind_time
   ON cmdb_topology_snapshots(kind, environment, created_at DESC);
+CREATE TABLE IF NOT EXISTS cmdb_project_groups (
+  code text PRIMARY KEY,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  owner text NOT NULL DEFAULT '',
+  owner_phone text NOT NULL DEFAULT '',
+  enabled boolean NOT NULL DEFAULT true,
+  created_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS cmdb_integration_configs (
   provider text PRIMARY KEY,
   url text NOT NULL DEFAULT '',
@@ -123,6 +134,40 @@ func loadModels(ctx context.Context, db *sql.DB) ([]Model, error) {
 	}
 	return out, rows.Err()
 }
+func loadProjectGroups(ctx context.Context, db *sql.DB) ([]ProjectGroup, error) {
+	rows, err := db.QueryContext(ctx, `SELECT code,name,description,owner,owner_phone,enabled,created_by,created_at,updated_at FROM cmdb_project_groups ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ProjectGroup{}
+	for rows.Next() {
+		var item ProjectGroup
+		var createdAt, updatedAt time.Time
+		if err = rows.Scan(&item.Code, &item.Name, &item.Description, &item.Owner, &item.OwnerPhone, &item.Enabled, &item.CreatedBy, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		item.UpdatedAt = updatedAt.Format(time.RFC3339)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func upsertProjectGroup(ctx context.Context, db execer, item ProjectGroup) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO cmdb_project_groups(code,name,description,owner,owner_phone,enabled,created_by,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,now())
+		ON CONFLICT(code) DO UPDATE SET name=excluded.name,description=excluded.description,owner=excluded.owner,
+			owner_phone=excluded.owner_phone,enabled=excluded.enabled,updated_at=now()`,
+		item.Code, item.Name, item.Description, item.Owner, item.OwnerPhone, item.Enabled, item.CreatedBy)
+	return err
+}
+
+func deleteProjectGroupRow(ctx context.Context, db execer, code string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM cmdb_project_groups WHERE code=$1`, code)
+	return err
+}
+
 func upsertModel(ctx context.Context, db execer, m Model) error {
 	fields, _ := json.Marshal(m.Fields)
 	_, err := db.ExecContext(ctx, `INSERT INTO cmdb_models(code,name,category,icon,description,enabled,fields,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(code) DO UPDATE SET name=excluded.name,category=excluded.category,icon=excluded.icon,description=excluded.description,enabled=excluded.enabled,fields=excluded.fields,updated_at=now()`, m.Code, m.Name, m.Category, m.Icon, m.Description, m.Enabled, fields)

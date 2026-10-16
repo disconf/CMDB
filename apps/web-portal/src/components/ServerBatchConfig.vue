@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { CheckSquare, RefreshCw, Server, Settings2, X } from 'lucide-vue-next'
 import { batchUpdateAssets, fetchAssetOptions } from '@/api/cmdb'
+import ProjectGroupSelect from '@/components/ProjectGroupSelect.vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import type { Asset, BatchUpdateAssetResult } from '@/features/cmdb/types'
 
@@ -60,7 +61,7 @@ onMounted(load)
           <div class="form-grid">
             <label><span>环境</span><select v-model="form.environment"><option value="">保持不变</option><option>生产</option><option>测试</option><option>开发</option><option>预生产</option></select></label>
             <label><span>状态</span><select v-model="form.status"><option value="">保持不变</option><option value="online">在线</option><option value="warning">异常</option><option value="offline">离线</option></select></label>
-            <label><span>项目组</span><input v-model="form.projectGroup" placeholder="保持原项目组"></label>
+            <label><span>项目组</span><ProjectGroupSelect v-model="form.projectGroup" allow-empty placeholder="保持原项目组"/></label>
             <label><span>负责人</span><input v-model="form.owner" placeholder="保持原负责人"></label>
             <label class="wide"><span>位置</span><input v-model="form.location" placeholder="物理机填写机房位置；虚拟机可留空并继承宿主机"></label>
             <label class="wide"><span>宿主机（仅虚拟机）</span><select v-model="form.hostId"><option value="">不修改宿主机关系</option><option v-for="host in hosts" :key="host.id" :value="host.id">{{host.name}} · {{host.typeName}} · {{host.ip||host.location}}</option></select></label>
