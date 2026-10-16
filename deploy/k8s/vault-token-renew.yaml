@@ -1,0 +1,49 @@
+# 周期令牌（-period）没有最大有效期，但必须被续期，否则到点仍会失效。
+# 这个 CronJob 每周调用一次 renew-self，把 TTL 重新拉满，令牌即可长期有效
+# （续期不会改变令牌本身，所以不需要再次修改 Secret）。
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-token-renew
+  namespace: ops-qa
+  labels: {app: vault-token-renew, tier: security}
+spec:
+  schedule: "0 3 * * 1"
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata: {labels: {app: vault-token-renew}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: cmdb-registry}]
+          containers:
+          - name: renew
+            image: harbor.qa.bcavt.com/library/busybox:latest
+            env:
+            - name: VAULT_ADDR
+              value: http://vault-active.ops-qa.svc.cluster.local:8200
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cmdb-gateway-env, key: VAULT_TOKEN}
+            command: ["/bin/sh", "-c"]
+            args:
+            - |
+              set -e
+              echo "renew Vault token at $(date -Iseconds 2>/dev/null || date)"
+              if wget -qO- --post-data="" --header="X-Vault-Token: $VAULT_TOKEN" \
+                   "$VAULT_ADDR/v1/auth/token/renew-self" > /tmp/renew.json 2>/tmp/renew.err; then
+                cat /tmp/renew.json
+                echo
+                echo "RENEW_OK"
+              else
+                cat /tmp/renew.err
+                echo "RENEW_FAILED：令牌无效或已过期，请重新签发后更新 Secret cmdb-gateway-env"
+                exit 1
+              fi
+            resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 100m, memory: 64Mi}}
