@@ -419,6 +419,28 @@ func (s *Service) SearchKnowledgeAll(q string) []Knowledge {
 	return s.searchKnowledge(q, true)
 }
 
+func (s *Service) SearchKnowledgeForActor(q string, includeDrafts bool, actor KnowledgeActor) []Knowledge {
+	items := s.searchKnowledge(q, includeDrafts)
+	result := make([]Knowledge, 0, len(items))
+	for _, item := range items {
+		if s.canViewKnowledgeDocument(actor, item) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (s *Service) SearchKnowledgeHybridForActor(query string, includeDrafts bool, actor KnowledgeActor) []Knowledge {
+	items := s.SearchKnowledgeHybrid(query, includeDrafts)
+	result := make([]Knowledge, 0, len(items))
+	for _, item := range items {
+		if s.canViewKnowledgeDocument(actor, item) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 func (s *Service) searchKnowledge(q string, includeDrafts bool) []Knowledge {
 	_ = s.reloadKnowledge()
 	q = strings.ToLower(strings.TrimSpace(q))
@@ -514,6 +536,9 @@ func (s *Service) knowledgeSuggestionsFor(rootCause, alertTitle string, limit in
 			continue
 		}
 		for _, item := range s.SearchKnowledgeHybrid(query, false) {
+			if space, err := s.knowledgeSpace(item.SpaceID); err != nil || space.Kind == "private" {
+				continue
+			}
 			if seen[item.ID] {
 				continue
 			}

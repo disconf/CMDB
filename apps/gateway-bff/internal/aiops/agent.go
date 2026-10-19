@@ -36,6 +36,10 @@ type AgentAnswer struct {
 }
 
 func (s *Service) AgentQuery(ctx context.Context, question, user string) (AgentAnswer, error) {
+	return s.AgentQueryWithActor(ctx, question, KnowledgeActor{Username: user})
+}
+
+func (s *Service) AgentQueryWithActor(ctx context.Context, question string, actor KnowledgeActor) (AgentAnswer, error) {
 	question = strings.TrimSpace(maskSensitiveText(question))
 	if question == "" {
 		return AgentAnswer{}, ErrValidation
@@ -48,9 +52,9 @@ func (s *Service) AgentQuery(ctx context.Context, question, user string) (AgentA
 	case containsAny(lower, "机房", "位置", "区域") && containsAny(lower, "分布", "在哪", "多少", "哪些"):
 		s.agentLocationStats(&answer, lower)
 	case containsAny(lower, "告警", "故障", "异常"):
-		s.agentAlertSummary(ctx, &answer, user)
+		s.agentAlertSummary(ctx, &answer, actor)
 	default:
-		s.agentAssetLookup(&answer, question, user)
+		s.agentAssetLookup(&answer, question, actor)
 	}
 	return answer, nil
 }
@@ -154,13 +158,13 @@ func agentAssetTypes(question string) []string {
 	}
 }
 
-func (s *Service) agentAssetLookup(answer *AgentAnswer, question, user string) {
+func (s *Service) agentAssetLookup(answer *AgentAnswer, question string, actor KnowledgeActor) {
 	page := cmdb.AssetPage{}
 	if s.assets != nil {
 		page = s.assets.ListAssets(cmdb.AssetQuery{Search: question, Page: 1, PageSize: 5, ScopeAll: true})
 	}
 	if len(page.Data) == 0 {
-		s.agentKnowledgeFallback(answer, question, user)
+		s.agentKnowledgeFallback(answer, question, actor)
 		return
 	}
 	asset := page.Data[0]
@@ -179,7 +183,7 @@ func (s *Service) agentAssetLookup(answer *AgentAnswer, question, user string) {
 	answer.Actions = append(answer.Actions, AgentAction{Type: "asset", Label: "查看资产详情", AssetID: asset.ID})
 }
 
-func (s *Service) agentAlertSummary(ctx context.Context, answer *AgentAnswer, user string) {
+func (s *Service) agentAlertSummary(ctx context.Context, answer *AgentAnswer, actor KnowledgeActor) {
 	alerts := s.Alerts()
 	counts := map[string]int{}
 	for _, alert := range alerts {
@@ -202,7 +206,7 @@ func (s *Service) agentAlertSummary(ctx context.Context, answer *AgentAnswer, us
 		}
 		answer.Evidence = append(answer.Evidence, AgentEvidence{Type: "告警", Name: alert.Title, Detail: detail})
 	}
-	knowledge, err := s.AskKnowledgeWithUser("告警 "+alerts[0].Title+" 影响 解决方案", 3, user)
+	knowledge, err := s.AskKnowledgeWithActor("告警 "+alerts[0].Title+" 影响 解决方案", 3, actor)
 	if err == nil {
 		answer.Citations = knowledge.Citations
 		if len(answer.Citations) > 0 {
@@ -212,8 +216,8 @@ func (s *Service) agentAlertSummary(ctx context.Context, answer *AgentAnswer, us
 	answer.Actions = append(answer.Actions, AgentAction{Type: "navigate", Label: "打开监控告警"})
 }
 
-func (s *Service) agentKnowledgeFallback(answer *AgentAnswer, question, user string) {
-	knowledge, err := s.AskKnowledgeWithUser(question, 5, user)
+func (s *Service) agentKnowledgeFallback(answer *AgentAnswer, question string, actor KnowledgeActor) {
+	knowledge, err := s.AskKnowledgeWithActor(question, 5, actor)
 	if err != nil {
 		answer.Answer = "暂未找到匹配资产或知识，请提供更具体的资产名称、IP、告警名称或故障现象。"
 		return

@@ -136,12 +136,12 @@ func (s *Service) KnowledgeSpaces(actor KnowledgeActor) []KnowledgeSpace {
 			continue
 		}
 		for _, folder := range folders {
-			if folder.SpaceID == space.ID {
+			if folder.SpaceID == space.ID && s.knowledgeFolderPermission(actor, folder) > 0 {
 				space.FolderCount++
 			}
 		}
 		for _, item := range knowledge {
-			if item.SpaceID == space.ID && item.Status != "archived" {
+			if item.SpaceID == space.ID && item.Status != "archived" && s.canViewKnowledgeDocument(actor, item) {
 				space.DocumentCount++
 			}
 		}
@@ -179,15 +179,39 @@ func (s *Service) KnowledgeTree(spaceID string, actor KnowledgeActor) (Knowledge
 	}
 	knowledge, _ := s.repo.LoadKnowledge(context.Background())
 	counts := map[string]int{}
+	visible := map[string]bool{}
 	for _, item := range knowledge {
-		if item.SpaceID == spaceID && item.Status != "archived" {
+		if item.SpaceID == spaceID && item.Status != "archived" && s.canViewKnowledgeDocument(actor, item) {
 			counts[item.FolderID]++
+			visible[item.FolderID] = true
 		}
 	}
-	for index := range folders {
-		folders[index].DocumentCount = counts[folders[index].ID]
+	byID := make(map[string]KnowledgeFolder, len(folders))
+	for _, folder := range folders {
+		byID[folder.ID] = folder
+		if s.knowledgeFolderPermission(actor, folder) > 0 {
+			visible[folder.ID] = true
+		}
 	}
-	return KnowledgeTree{Spaces: spaces, Folders: buildKnowledgeFolderTree(folders), Selected: selected.ID}, nil
+	for id := range visible {
+		for current := byID[id]; current.ParentID != ""; {
+			visible[current.ParentID] = true
+			parent, ok := byID[current.ParentID]
+			if !ok {
+				break
+			}
+			current = parent
+		}
+	}
+	visibleFolders := make([]KnowledgeFolder, 0, len(folders))
+	for _, folder := range folders {
+		if !visible[folder.ID] {
+			continue
+		}
+		folder.DocumentCount = counts[folder.ID]
+		visibleFolders = append(visibleFolders, folder)
+	}
+	return KnowledgeTree{Spaces: spaces, Folders: buildKnowledgeFolderTree(visibleFolders), Selected: selected.ID}, nil
 }
 
 func buildKnowledgeFolderTree(folders []KnowledgeFolder) []KnowledgeFolder {
@@ -324,6 +348,9 @@ func (s *Service) CreateKnowledgeFolder(input KnowledgeFolderInput, actor Knowle
 		parent, err := s.knowledgeFolder(parentID)
 		if err != nil || parent.SpaceID != spaceID {
 			return KnowledgeFolder{}, ErrValidation
+		}
+		if s.knowledgeFolderPermission(actor, parent) < permissionRank(knowledgePermEdit) {
+			return KnowledgeFolder{}, ErrUnauthorized
 		}
 		path = strings.TrimRight(parent.Path, "/") + "/" + strings.TrimSpace(input.Name)
 	}
@@ -497,6 +524,122 @@ func (s *Service) KnowledgeDocument(id string, actor KnowledgeActor, incrementVi
 	return Knowledge{}, ErrNotFound
 }
 
+func (s *Service) CreateKnowledgeWithActor(input KnowledgeInput, actor KnowledgeActor) (Knowledge, error) {
+	if actor.Username == "" || !s.actorCan(actor, knowledgePermEdit) {
+		return Knowledge{}, ErrUnauthorized
+	}
+	s.ensureKnowledgeLayout(context.Background())
+	s.ensurePrivateSpace(context.Background(), actor)
+	folder, space, err := s.knowledgeTargetFolder(input.SpaceID, input.FolderID, input.Category, actor)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	input.SpaceID = space.ID
+	input.FolderID = folder.ID
+	input.Category = folder.Name
+	if space.Kind == "private" {
+		input.Visibility = "private"
+		input.Owner = actor.Username
+	} else if !s.actorCan(actor, knowledgePermManage) {
+		input.Owner = actor.Username
+	}
+	if input.Status == "" {
+		input.Status = "published"
+	}
+	if (input.Status == "published" || input.Status == "archived") && !s.actorCan(actor, knowledgePermPublish) {
+		if input.Status == "published" {
+			input.Status = "draft"
+		} else {
+			return Knowledge{}, ErrUnauthorized
+		}
+	}
+	return s.CreateKnowledge(input, actor.Username)
+}
+
+func (s *Service) UpdateKnowledgeWithActor(id string, input KnowledgeInput, actor KnowledgeActor) (Knowledge, error) {
+	existing, ok := s.knowledgeExists(id)
+	if !ok {
+		return Knowledge{}, ErrNotFound
+	}
+	if !s.canEditKnowledgeDocument(actor, existing) {
+		return Knowledge{}, ErrUnauthorized
+	}
+	targetSpaceID := strings.TrimSpace(input.SpaceID)
+	if targetSpaceID == "" {
+		targetSpaceID = existing.SpaceID
+	}
+	targetFolderID := strings.TrimSpace(input.FolderID)
+	if targetFolderID == "" {
+		targetFolderID = existing.FolderID
+	}
+	if targetSpaceID != existing.SpaceID || targetFolderID != existing.FolderID {
+		folder, _, err := s.knowledgeTargetFolder(targetSpaceID, targetFolderID, input.Category, actor)
+		if err != nil {
+			return Knowledge{}, err
+		}
+		input.SpaceID, input.FolderID, input.Category = folder.SpaceID, folder.ID, folder.Name
+	} else {
+		input.SpaceID, input.FolderID = existing.SpaceID, existing.FolderID
+	}
+	if !s.actorCan(actor, knowledgePermManage) {
+		input.Owner = existing.Owner
+	}
+	if input.Status == "" {
+		input.Status = existing.Status
+	}
+	if (input.Status == "published" || input.Status == "archived") && !s.canPublishKnowledgeDocument(actor, existing) {
+		return Knowledge{}, ErrUnauthorized
+	}
+	return s.UpdateKnowledge(id, input, actor.Username)
+}
+
+func (s *Service) knowledgeTargetFolder(spaceID, folderID, category string, actor KnowledgeActor) (KnowledgeFolder, KnowledgeSpace, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		spaceID = knowledgeDefaultSpaceID
+	}
+	space, err := s.knowledgeSpace(spaceID)
+	if err != nil {
+		return KnowledgeFolder{}, KnowledgeSpace{}, ErrValidation
+	}
+	if !s.canViewKnowledgeSpace(actor, space) {
+		return KnowledgeFolder{}, KnowledgeSpace{}, ErrUnauthorized
+	}
+	var folder KnowledgeFolder
+	if folderID = strings.TrimSpace(folderID); folderID == "" {
+		folder = s.knowledgeFolderForCategoryInSpace(spaceID, category)
+	} else {
+		folder, err = s.knowledgeFolder(folderID)
+		if err != nil || folder.SpaceID != spaceID {
+			return KnowledgeFolder{}, KnowledgeSpace{}, ErrValidation
+		}
+	}
+	if s.knowledgeFolderPermission(actor, folder) < permissionRank(knowledgePermEdit) {
+		return KnowledgeFolder{}, KnowledgeSpace{}, ErrUnauthorized
+	}
+	return folder, space, nil
+}
+
+func (s *Service) knowledgeFolderForCategoryInSpace(spaceID, category string) KnowledgeFolder {
+	name := strings.TrimSpace(category)
+	if name == "" {
+		name = knowledgeRootFolderName
+	}
+	folders, _ := s.repo.LoadKnowledgeFolders(context.Background(), spaceID)
+	for _, folder := range folders {
+		if folder.ParentID == "" && strings.EqualFold(folder.Name, name) {
+			return folder
+		}
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	folder := KnowledgeFolder{
+		ID: newID("kf"), SpaceID: spaceID, Name: name, Path: "/" + name,
+		Owner: "system", CreatedAt: now, UpdatedAt: now,
+	}
+	_ = s.repo.SaveKnowledgeFolder(context.Background(), folder)
+	return folder
+}
+
 func (s *Service) CanAccessKnowledge(id string, actor KnowledgeActor, permission string) bool {
 	knowledge, _ := s.repo.LoadKnowledge(context.Background())
 	for _, item := range knowledge {
@@ -515,6 +658,14 @@ func (s *Service) CanAccessKnowledge(id string, actor KnowledgeActor, permission
 	return false
 }
 
+func (s *Service) CanAccessKnowledgeFolder(id string, actor KnowledgeActor, permission string) bool {
+	folder, err := s.knowledgeFolder(id)
+	if err != nil {
+		return false
+	}
+	return s.knowledgeFolderPermission(actor, folder) >= permissionRank(permission)
+}
+
 func (s *Service) MoveKnowledgeDocument(id, spaceID, folderID string, actor KnowledgeActor) (Knowledge, error) {
 	knowledge, _ := s.repo.LoadKnowledge(context.Background())
 	for _, item := range knowledge {
@@ -530,6 +681,9 @@ func (s *Service) MoveKnowledgeDocument(id, spaceID, folderID string, actor Know
 		folder, err := s.knowledgeFolder(folderID)
 		if err != nil || folder.SpaceID != spaceID {
 			return Knowledge{}, ErrValidation
+		}
+		if s.knowledgeFolderPermission(actor, folder) < permissionRank(knowledgePermEdit) {
+			return Knowledge{}, ErrUnauthorized
 		}
 		item.SpaceID, item.FolderID = spaceID, folderID
 		item.Version++
@@ -685,20 +839,39 @@ func (s *Service) folderPath(parentID, name string) string {
 }
 
 func (s *Service) canViewKnowledgeSpace(actor KnowledgeActor, space KnowledgeSpace) bool {
+	if space.Kind == "private" {
+		return space.Owner == actor.Username
+	}
 	if s.actorCan(actor, knowledgePermManage) {
 		return true
 	}
 	switch space.Kind {
-	case "private":
-		return space.Owner == actor.Username
 	case "project":
 		if space.Owner == actor.Username || containsString(actor.ProjectGroups, space.Owner) {
 			return true
 		}
-		return s.aclAllows(actor, "space", space.ID, knowledgePermView)
+		if s.aclAllows(actor, "space", space.ID, knowledgePermView) {
+			return true
+		}
 	default:
-		return s.actorCan(actor, knowledgePermView)
+		if s.actorCan(actor, knowledgePermView) {
+			return true
+		}
 	}
+	ctx := context.Background()
+	folders, _ := s.repo.LoadKnowledgeFolders(ctx, space.ID)
+	for _, folder := range folders {
+		if s.knowledgeFolderPermission(actor, folder) > 0 {
+			return true
+		}
+	}
+	knowledge, _ := s.repo.LoadKnowledge(ctx)
+	for _, item := range knowledge {
+		if item.SpaceID == space.ID && s.canViewKnowledgeDocument(actor, item) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) canViewKnowledgeDocument(actor KnowledgeActor, item Knowledge) bool {
@@ -714,32 +887,86 @@ func (s *Service) canPublishKnowledgeDocument(actor KnowledgeActor, item Knowled
 }
 
 func (s *Service) canEditKnowledgeFolder(actor KnowledgeActor, folder KnowledgeFolder) bool {
-	if s.actorCan(actor, knowledgePermManage) {
-		return true
-	}
-	space, err := s.knowledgeSpace(folder.SpaceID)
-	if err != nil || !s.canViewKnowledgeSpace(actor, space) {
-		return false
-	}
-	if space.Kind == "private" && space.Owner != actor.Username {
-		return false
-	}
-	if folder.Owner == actor.Username {
-		return true
-	}
-	if s.aclAllows(actor, "folder", folder.ID, knowledgePermEdit) {
-		return true
-	}
-	return false
+	return s.knowledgeFolderPermission(actor, folder) >= permissionRank(knowledgePermEdit)
 }
 
 func (s *Service) knowledgeDocumentPermission(actor KnowledgeActor, item Knowledge) int {
+	if actor.Username == "" {
+		return 0
+	}
+	space, err := s.knowledgeSpace(item.SpaceID)
+	if err != nil {
+		return 0
+	}
+	if space.Kind == "private" {
+		if space.Owner == actor.Username {
+			return 4
+		}
+		return 0
+	}
 	if s.actorCan(actor, knowledgePermManage) {
 		return 4
 	}
-	if item.Owner == actor.Username && item.Owner != "" {
-		return 3
+	rank := s.knowledgeBasePermission(actor, space)
+	if item.Owner == actor.Username && item.Owner != "" && rank >= permissionRank(knowledgePermEdit) {
+		rank = maxKnowledgeRank(rank, permissionRank(knowledgePermPublish))
 	}
+	if folder, err := s.knowledgeFolder(item.FolderID); err == nil {
+		for _, ancestor := range s.folderAncestors(folder) {
+			denied, allowed := s.aclPermissionWithInheritance(actor, "folder", ancestor.ID, true)
+			if denied {
+				return 0
+			}
+			rank = maxKnowledgeRank(rank, allowed)
+		}
+	}
+	denied, allowed := s.aclPermission(actor, "document", item.ID)
+	if denied {
+		return 0
+	}
+	rank = maxKnowledgeRank(rank, allowed)
+	if item.Status == "draft" && rank < 2 {
+		return 0
+	}
+	if item.Status == "archived" && rank < 4 {
+		return 0
+	}
+	return rank
+}
+
+func (s *Service) knowledgeFolderPermission(actor KnowledgeActor, folder KnowledgeFolder) int {
+	if actor.Username == "" {
+		return 0
+	}
+	space, err := s.knowledgeSpace(folder.SpaceID)
+	if err != nil {
+		return 0
+	}
+	if space.Kind == "private" {
+		if space.Owner == actor.Username {
+			return 4
+		}
+		return 0
+	}
+	if s.actorCan(actor, knowledgePermManage) {
+		return 4
+	}
+	rank := s.knowledgeBasePermission(actor, space)
+	if folder.Owner == actor.Username && folder.Owner != "" && rank >= permissionRank(knowledgePermEdit) {
+		rank = maxKnowledgeRank(rank, permissionRank(knowledgePermPublish))
+	}
+	ancestors := s.folderAncestors(folder)
+	for index, ancestor := range ancestors {
+		denied, allowed := s.aclPermissionWithInheritance(actor, "folder", ancestor.ID, index < len(ancestors)-1)
+		if denied {
+			return 0
+		}
+		rank = maxKnowledgeRank(rank, allowed)
+	}
+	return rank
+}
+
+func (s *Service) knowledgeBasePermission(actor KnowledgeActor, space KnowledgeSpace) int {
 	rank := 0
 	if s.actorCan(actor, knowledgePermView) {
 		rank = 1
@@ -750,38 +977,17 @@ func (s *Service) knowledgeDocumentPermission(actor KnowledgeActor, item Knowled
 	if s.actorCan(actor, knowledgePermPublish) {
 		rank = 3
 	}
-	if space, err := s.knowledgeSpace(item.SpaceID); err == nil {
-		if space.Kind == "private" {
-			if space.Owner == actor.Username {
-				return 4
-			}
-			return 0
-		}
-		if space.Kind == "project" && !containsString(actor.ProjectGroups, space.Owner) && !s.aclAllows(actor, "space", space.ID, knowledgePermView) {
-			rank = 0
-		}
-	}
-	if folder, err := s.knowledgeFolder(item.FolderID); err == nil {
-		for _, ancestor := range s.folderAncestors(folder) {
-			if denied, allowed := s.aclPermission(actor, "folder", ancestor.ID); denied {
-				return 0
-			} else if allowed > rank {
-				rank = allowed
-			}
-		}
-	}
-	if denied, allowed := s.aclPermission(actor, "document", item.ID); denied {
-		return 0
-	} else if allowed > rank {
-		rank = allowed
-	}
-	if item.Status == "draft" && rank < 2 {
-		return 0
-	}
-	if item.Status == "archived" && rank < 4 {
+	if space.Kind == "project" && space.Owner != actor.Username && !containsString(actor.ProjectGroups, space.Owner) && !s.aclAllows(actor, "space", space.ID, knowledgePermView) {
 		return 0
 	}
 	return rank
+}
+
+func maxKnowledgeRank(left, right int) int {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func (s *Service) knowledgeSpace(id string) (KnowledgeSpace, error) {
@@ -814,9 +1020,16 @@ func (s *Service) aclAllows(actor KnowledgeActor, resourceType, resourceID, perm
 }
 
 func (s *Service) aclPermission(actor KnowledgeActor, resourceType, resourceID string) (bool, int) {
+	return s.aclPermissionWithInheritance(actor, resourceType, resourceID, false)
+}
+
+func (s *Service) aclPermissionWithInheritance(actor KnowledgeActor, resourceType, resourceID string, inheritedOnly bool) (bool, int) {
 	items, _ := s.repo.LoadKnowledgeACL(context.Background(), resourceType, resourceID)
 	allowed := 0
 	for _, item := range items {
+		if inheritedOnly && !item.Inherit {
+			continue
+		}
 		if !knowledgeSubjectMatches(actor, item) {
 			continue
 		}
@@ -857,12 +1070,25 @@ func permissionRank(permission string) int {
 }
 
 func (s *Service) actorCan(actor KnowledgeActor, permission string) bool {
+	target := permissionRank(permission)
 	for _, value := range actor.Permissions {
 		switch value {
 		case "aiops:execute", "knowledge:manage", "knowledge:" + permission:
 			return true
-		case "aiops:view", "knowledge:view":
-			if permission == knowledgePermView {
+		case "aiops:view":
+			if target <= permissionRank(knowledgePermView) {
+				return true
+			}
+		case "knowledge:view":
+			if target <= permissionRank(knowledgePermView) {
+				return true
+			}
+		case "knowledge:create", "knowledge:edit", "knowledge:manage_folder":
+			if target <= permissionRank(knowledgePermEdit) {
+				return true
+			}
+		case "knowledge:publish":
+			if target <= permissionRank(knowledgePermPublish) {
 				return true
 			}
 		}

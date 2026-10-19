@@ -4043,6 +4043,10 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledgeFolder(r.PathValue("id"), knowledgeActorFromUser(user), "view") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		writeJSON(w, http.StatusOK, aiopsService.KnowledgeACL("folder", r.PathValue("id"), knowledgeActorFromUser(user)))
 	})
 	mux.HandleFunc("PUT /api/v1/knowledge/folders/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
@@ -4093,7 +4097,7 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		item, err := aiopsService.CreateKnowledge(input, user.Username)
+		item, err := aiopsService.CreateKnowledgeWithActor(input, knowledgeActorFromUser(user))
 		if err != nil {
 			writeKnowledgeError(w, err)
 			return
@@ -4106,16 +4110,12 @@ func NewServer() *Server {
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
 		actor := knowledgeActorFromUser(user)
-		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), actor, "edit") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN"})
-			return
-		}
 		var input aiops.KnowledgeInput
 		if decodeJSON(r, &input) != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
 			return
 		}
-		item, err := aiopsService.UpdateKnowledge(r.PathValue("id"), input, user.Username)
+		item, err := aiopsService.UpdateKnowledgeWithActor(r.PathValue("id"), input, actor)
 		if err != nil {
 			writeKnowledgeError(w, err)
 			return
@@ -4186,6 +4186,10 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "view") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		writeJSON(w, http.StatusOK, aiopsService.KnowledgeACL("document", r.PathValue("id"), knowledgeActorFromUser(user)))
 	})
 	mux.HandleFunc("PUT /api/v1/knowledge/documents/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
@@ -4209,31 +4213,38 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		actor := knowledgeActorFromUser(user)
 		semantic := r.URL.Query().Get("semantic") == "1"
 		if r.URL.Query().Get("all") == "1" {
 			if !authorize(w, r, authService, "aiops:execute") {
 				return
 			}
 			if semantic {
-				writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeHybrid(r.URL.Query().Get("q"), true))
+				writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeHybridForActor(r.URL.Query().Get("q"), true, actor))
 				return
 			}
-			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeAll(r.URL.Query().Get("q")))
+			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeForActor(r.URL.Query().Get("q"), true, actor))
 			return
 		}
 		if semantic {
-			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeHybrid(r.URL.Query().Get("q"), false))
+			writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeHybridForActor(r.URL.Query().Get("q"), false, actor))
 			return
 		}
-		writeJSON(w, http.StatusOK, aiopsService.SearchKnowledge(r.URL.Query().Get("q")))
+		writeJSON(w, http.StatusOK, aiopsService.SearchKnowledgeForActor(r.URL.Query().Get("q"), false, actor))
 	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
-		item, err := aiopsService.GetKnowledge(r.PathValue("id"))
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.KnowledgeDocument(r.PathValue("id"), knowledgeActorFromUser(user), true)
 		if errors.Is(err, aiops.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
 			return
 		}
 		if err != nil {
@@ -4252,7 +4263,11 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		item, err := aiopsService.CreateKnowledge(input, user.Username)
+		item, err := aiopsService.CreateKnowledgeWithActor(input, knowledgeActorFromUser(user))
+		if errors.Is(err, aiops.ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		if errors.Is(err, aiops.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "标题、摘要和正文不能为空"})
 			return
@@ -4274,9 +4289,17 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		item, err := aiopsService.UpdateKnowledge(r.PathValue("id"), input, user.Username)
+		item, err := aiopsService.UpdateKnowledgeWithActor(r.PathValue("id"), input, knowledgeActorFromUser(user))
 		if errors.Is(err, aiops.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
+		if errors.Is(err, aiops.ErrConflict) {
+			writeJSON(w, http.StatusConflict, map[string]string{"code": "KNOWLEDGE_CONFLICT", "message": "文档版本已更新"})
 			return
 		}
 		if errors.Is(err, aiops.ErrValidation) {
@@ -4294,16 +4317,25 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:execute") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "edit") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		if err := aiopsService.DeleteKnowledge(r.PathValue("id")); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_DELETE_FAILED", "message": err.Error()})
 			return
 		}
-		user, _ := authService.CurrentUser(bearerToken(r))
 		auditService.Record(user.Username, "aiops.knowledge.delete", r.PathValue("id"), "")
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /api/v1/aiops/knowledge/{id}/helpful", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "view") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
 			return
 		}
 		item, err := aiopsService.MarkKnowledgeHelpful(r.PathValue("id"))
@@ -4319,6 +4351,11 @@ func NewServer() *Server {
 	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "view") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
 			return
 		}
 		items, err := aiopsService.KnowledgeVersions(r.PathValue("id"))
@@ -4342,6 +4379,10 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "edit") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		item, err := aiopsService.RestoreKnowledge(r.PathValue("id"), version, user.Username)
 		if errors.Is(err, aiops.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_VERSION_NOT_FOUND"})
@@ -4358,6 +4399,11 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "view") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		items, err := aiopsService.KnowledgeAttachments(r.PathValue("id"))
 		if errors.Is(err, aiops.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND"})
@@ -4371,6 +4417,11 @@ func NewServer() *Server {
 	})
 	mux.HandleFunc("POST /api/v1/aiops/knowledge/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:execute") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "edit") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, (20<<20)+1024*1024)
@@ -4397,7 +4448,6 @@ func NewServer() *Server {
 		if strings.TrimSpace(contentType) == "" {
 			contentType = http.DetectContentType(content)
 		}
-		user, _ := authService.CurrentUser(bearerToken(r))
 		item, err := aiopsService.UploadKnowledgeAttachment(r.Context(), r.PathValue("id"), header.Filename, contentType, content, user.Username)
 		if errors.Is(err, aiops.ErrObjectStoreNotReady) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "OBJECT_STORAGE_NOT_READY", "message": "对象存储未配置"})
@@ -4422,6 +4472,11 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "view") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		item, content, err := aiopsService.DownloadKnowledgeAttachment(r.Context(), r.PathValue("id"), r.PathValue("attachmentId"))
 		if errors.Is(err, aiops.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ATTACHMENT_NOT_FOUND"})
@@ -4440,6 +4495,11 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:execute") {
 			return
 		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "edit") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN"})
+			return
+		}
 		if err := aiopsService.DeleteKnowledgeAttachment(r.Context(), r.PathValue("id"), r.PathValue("attachmentId")); err != nil {
 			if errors.Is(err, aiops.ErrNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"code": "ATTACHMENT_NOT_FOUND"})
@@ -4448,7 +4508,6 @@ func NewServer() *Server {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"code": "ATTACHMENT_DELETE_FAILED", "message": err.Error()})
 			return
 		}
-		user, _ := authService.CurrentUser(bearerToken(r))
 		auditService.Record(user.Username, "aiops.knowledge.attachment.delete", r.PathValue("attachmentId"), r.PathValue("id"))
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -4502,7 +4561,7 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		answer, err := aiopsService.AskKnowledgeWithUser(input.Question, input.Limit, user.Username)
+		answer, err := aiopsService.AskKnowledgeWithActor(input.Question, input.Limit, knowledgeActorFromUser(user))
 		if errors.Is(err, aiops.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "QUESTION_REQUIRED", "message": "请输入知识库问题"})
 			return
@@ -4526,7 +4585,7 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		answer, err := aiopsService.AgentQuery(r.Context(), input.Question, user.Username)
+		answer, err := aiopsService.AgentQueryWithActor(r.Context(), input.Question, knowledgeActorFromUser(user))
 		if errors.Is(err, aiops.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "QUESTION_REQUIRED"})
 			return
@@ -4548,10 +4607,13 @@ func NewServer() *Server {
 			return
 		}
 		user, _ := authService.CurrentUser(bearerToken(r))
-		input.Reviewer = user.Username
-		item, err := aiopsService.SubmitKnowledgeAnswerFeedback(r.Context(), r.PathValue("id"), input)
+		item, err := aiopsService.SubmitKnowledgeAnswerFeedbackWithActor(r.Context(), r.PathValue("id"), input, knowledgeActorFromUser(user))
 		if errors.Is(err, aiops.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"code": "ANSWER_NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, aiops.ErrUnauthorized) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN"})
 			return
 		}
 		if errors.Is(err, aiops.ErrValidation) {
@@ -4570,7 +4632,8 @@ func NewServer() *Server {
 			return
 		}
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		items, err := aiopsService.KnowledgeAnswers(limit)
+		user, _ := authService.CurrentUser(bearerToken(r))
+		items, err := aiopsService.KnowledgeAnswersForActor(limit, knowledgeActorFromUser(user))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_ANSWERS_FAILED"})
 			return
@@ -4581,7 +4644,8 @@ func NewServer() *Server {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
 		}
-		stats, err := aiopsService.KnowledgeAnswerFeedbackStats(r.Context())
+		user, _ := authService.CurrentUser(bearerToken(r))
+		stats, err := aiopsService.KnowledgeAnswerFeedbackStatsForActor(r.Context(), knowledgeActorFromUser(user))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "FEEDBACK_STATS_FAILED"})
 			return

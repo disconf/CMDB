@@ -15,6 +15,14 @@ func (s *Service) AskKnowledge(question string, limit int) (KnowledgeAnswer, err
 }
 
 func (s *Service) AskKnowledgeWithUser(question string, limit int, user string) (KnowledgeAnswer, error) {
+	return s.askKnowledge(question, limit, user, nil)
+}
+
+func (s *Service) AskKnowledgeWithActor(question string, limit int, actor KnowledgeActor) (KnowledgeAnswer, error) {
+	return s.askKnowledge(question, limit, actor.Username, &actor)
+}
+
+func (s *Service) askKnowledge(question string, limit int, user string, actor *KnowledgeActor) (KnowledgeAnswer, error) {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return KnowledgeAnswer{}, ErrValidation
@@ -45,6 +53,9 @@ func (s *Service) AskKnowledgeWithUser(question string, limit int, user string) 
 		if _, ok := byID[item.ID]; !ok {
 			continue
 		}
+		if actor != nil && !s.canViewKnowledgeDocument(*actor, item) {
+			continue
+		}
 		scores[item.ID] = &scoredKnowledge{item: item, score: float64(len(byID)-index) * 1.5}
 	}
 	queryVector, _ := s.embedText(context.Background(), question)
@@ -55,6 +66,9 @@ func (s *Service) AskKnowledgeWithUser(question string, limit int, user string) 
 		}
 		item, ok := byID[match.KnowledgeID]
 		if !ok {
+			continue
+		}
+		if actor != nil && !s.canViewKnowledgeDocument(*actor, item) {
 			continue
 		}
 		if existing, ok := scores[item.ID]; ok {
@@ -154,8 +168,37 @@ func (s *Service) SubmitKnowledgeAnswerFeedback(ctx context.Context, answerID st
 	return item, nil
 }
 
+func (s *Service) SubmitKnowledgeAnswerFeedbackWithActor(ctx context.Context, answerID string, input KnowledgeAnswerFeedback, actor KnowledgeActor) (KnowledgeAnswer, error) {
+	item, err := s.repo.GetKnowledgeAnswer(ctx, answerID)
+	if err != nil {
+		return KnowledgeAnswer{}, err
+	}
+	if actor.Username == "" || (!s.actorCan(actor, knowledgePermManage) && item.CreatedBy != actor.Username) {
+		return KnowledgeAnswer{}, ErrUnauthorized
+	}
+	input.Reviewer = actor.Username
+	return s.SubmitKnowledgeAnswerFeedback(ctx, answerID, input)
+}
+
 func (s *Service) KnowledgeAnswers(limit int) ([]KnowledgeAnswer, error) {
 	return s.repo.LoadKnowledgeAnswers(context.Background(), limit)
+}
+
+func (s *Service) KnowledgeAnswersForActor(limit int, actor KnowledgeActor) ([]KnowledgeAnswer, error) {
+	items, err := s.repo.LoadKnowledgeAnswers(context.Background(), limit)
+	if err != nil {
+		return nil, err
+	}
+	if s.actorCan(actor, knowledgePermManage) {
+		return items, nil
+	}
+	result := make([]KnowledgeAnswer, 0, len(items))
+	for _, item := range items {
+		if item.CreatedBy == actor.Username {
+			result = append(result, item)
+		}
+	}
+	return result, nil
 }
 
 func (s *Service) KnowledgeAnswerFeedbackStats(ctx context.Context) (map[string]int, error) {
@@ -163,6 +206,27 @@ func (s *Service) KnowledgeAnswerFeedbackStats(ctx context.Context) (map[string]
 	if err != nil {
 		return nil, err
 	}
+	return knowledgeAnswerFeedbackStats(items), nil
+}
+
+func (s *Service) KnowledgeAnswerFeedbackStatsForActor(ctx context.Context, actor KnowledgeActor) (map[string]int, error) {
+	items, err := s.repo.LoadKnowledgeAnswers(ctx, 1000)
+	if err != nil {
+		return nil, err
+	}
+	if !s.actorCan(actor, knowledgePermManage) {
+		filtered := make([]KnowledgeAnswer, 0, len(items))
+		for _, item := range items {
+			if item.CreatedBy == actor.Username {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	return knowledgeAnswerFeedbackStats(items), nil
+}
+
+func knowledgeAnswerFeedbackStats(items []KnowledgeAnswer) map[string]int {
 	result := map[string]int{"total": len(items), "helpful": 0, "notHelpful": 0, "corrected": 0, "pending": 0}
 	for _, item := range items {
 		if item.Feedback == nil {
@@ -178,7 +242,7 @@ func (s *Service) KnowledgeAnswerFeedbackStats(ctx context.Context) (map[string]
 			result["corrected"]++
 		}
 	}
-	return result, nil
+	return result
 }
 
 func knowledgeSnippet(item Knowledge, question string) string {

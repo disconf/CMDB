@@ -7,8 +7,8 @@
         <p>多空间、目录化、权限可控的运维知识沉淀与复用。</p>
       </div>
       <div class="kc-header-actions">
-        <button v-if="canManage" @click="openSpaceDialog"><Plus/>新建空间</button>
-        <button v-if="canManage" @click="openFolderDialog()"><FolderPlus/>新建目录</button>
+        <button v-if="canManageSpace" @click="openSpaceDialog"><Plus/>新建空间</button>
+        <button v-if="canManageFolders" @click="openFolderDialog()"><FolderPlus/>新建目录</button>
         <button class="primary" @click="newDoc"><FilePlus2/>新建文档</button>
         <button @click="boot"><RefreshCw :class="{ spin: loading }"/>刷新</button>
       </div>
@@ -30,7 +30,10 @@
         </div>
         <div class="tree-heading">
           <span>目录</span>
-          <button @click="selectFolder('')" :class="{ active: !selectedFolderId }">全部文档</button>
+          <div class="tree-heading-actions">
+            <button @click="selectFolder('')" :class="{ active: !selectedFolderId }">全部文档</button>
+            <button v-if="selectedFolderId && canManageFolders" @click="editSelectedFolder"><Pencil/>编辑</button>
+          </div>
         </div>
         <div class="folder-tree">
           <button
@@ -53,8 +56,8 @@
           <p v-if="!allFolders.length" class="tree-empty">当前空间还没有目录</p>
         </div>
         <div class="sidebar-footer">
-          <button @click="openSpaceDialog" v-if="canManage"><Plus/>空间管理</button>
-          <button @click="openFolderDialog()" v-if="canManage"><FolderPlus/>目录</button>
+          <button @click="openSpaceDialog" v-if="canManageSpace"><Plus/>空间管理</button>
+          <button @click="openFolderDialog()" v-if="canManageFolders"><FolderPlus/>目录</button>
         </div>
       </aside>
 
@@ -109,21 +112,21 @@
               <div class="doc-content markdown" v-html="renderContent(selected)"></div>
               <div class="doc-tags"><span v-for="tag in selected.tags" :key="tag">{{ tag }}</span></div>
               <div class="detail-actions">
-                <button @click="editDoc"><Pencil/>编辑</button>
+                <button v-if="canEditSelected" @click="editDoc"><Pencil/>编辑</button>
                 <button v-if="canPublishSelected" @click="publishSelected">发布</button>
-                <button @click="openPermissions('document', selected.id)"><ShieldCheck/>权限</button>
+                <button v-if="canManageACL" @click="openPermissions('document', selected.id)"><ShieldCheck/>权限</button>
                 <button @click="openVersions"><History/>版本</button>
-                <button v-if="canManage" @click="archiveSelected">归档</button>
-                <button v-if="canManage" class="danger" @click="deleteSelected">删除</button>
+                <button v-if="canPublishSelected" @click="archiveSelected">归档</button>
+                <button v-if="canDeleteSelected" class="danger" @click="deleteSelected">删除</button>
               </div>
               <section class="attachment-panel">
                 <header><b>附件</b><label v-if="canEditSelected" class="upload-label">{{ uploading ? '上传中' : '上传附件' }}<input type="file" :disabled="uploading" @change="uploadAttachment"></label></header>
-                <article v-for="item in attachments" :key="item.id"><button @click="downloadAttachment(item)"><b>{{ item.filename }}</b><span>{{ (item.size / 1024).toFixed(1) }} KB · {{ item.uploadedBy }}</span></button><button v-if="canManage" class="danger" @click="deleteAttachment(item)">删除</button></article>
+                <article v-for="item in attachments" :key="item.id"><button @click="downloadAttachment(item)"><b>{{ item.filename }}</b><span>{{ (item.size / 1024).toFixed(1) }} KB · {{ item.uploadedBy }}</span></button><button v-if="canEditSelected" class="danger" @click="deleteAttachment(item)">删除</button></article>
                 <p v-if="!attachments.length">暂无附件</p>
               </section>
               <section v-if="showVersions" class="version-panel">
                 <header><b>版本历史</b><button @click="showVersions = false">关闭</button></header>
-                <article v-for="item in versions" :key="item.id"><b>v{{ item.version }}</b><span>{{ item.changeSummary || '知识更新' }} · {{ item.changedBy }} · {{ item.createdAt }}</span><button v-if="canManage" @click="restoreVersion(item.version)">还原</button></article>
+                <article v-for="item in versions" :key="item.id"><b>v{{ item.version }}</b><span>{{ item.changeSummary || '知识更新' }} · {{ item.changedBy }} · {{ item.createdAt }}</span><button v-if="canEditSelected" @click="restoreVersion(item.version)">还原</button></article>
               </section>
             </aside>
           </div>
@@ -138,8 +141,8 @@
             <label class="wide">标题<input v-model="form.title" placeholder="文档标题" required></label>
             <label>目录<select v-model="form.folderId"><option v-for="folder in folderOptions" :key="folder.id" :value="folder.id">{{ '　'.repeat(folder.depth) + folder.name }}</option></select></label>
             <label>状态<select v-model="form.status"><option value="draft">草稿</option><option value="published">发布</option></select></label>
-            <label>可见范围<select v-model="form.visibility"><option value="organization">组织内</option><option value="project">项目组</option><option value="private">私有</option></select></label>
-            <label>负责人<input v-model="form.owner" placeholder="默认当前用户"></label>
+            <label>可见范围<select v-model="form.visibility" :disabled="selectedSpace?.kind === 'private'"><option value="organization">组织内</option><option value="project">项目组</option><option value="private">私有</option></select></label>
+            <label>负责人<input v-model="form.owner" :disabled="!canManageSpace" :placeholder="canManageSpace ? '默认当前用户' : '保存时使用当前用户'"></label>
             <label class="wide">摘要<textarea v-model="form.summary" placeholder="一句话说明文档用途"></textarea></label>
             <label class="wide">标签<input v-model="form.tags" placeholder="用英文逗号分隔"></label>
             <div class="wide">
@@ -253,9 +256,20 @@ const allFolders = computed(() => flattenFolders(tree.value?.folders || []))
 const flattenedFolders = computed(() => flattenFolders(tree.value?.folders || [], true))
 const folderOptions = computed(() => allFolders.value)
 const currentFolderName = computed(() => selectedFolderId.value ? folderName(selectedFolderId.value) : '全部文档')
-const canManage = computed(() => auth.user?.permissions.some((permission) => ['aiops:execute', 'knowledge:manage', 'knowledge:manage_acl', 'knowledge:manage_folder'].includes(permission)) ?? false)
-const canEditSelected = computed(() => Boolean(selected.value && (canManage.value || selected.value.owner === auth.user?.username || selected.value.author === auth.user?.username)))
-const canPublishSelected = computed(() => canEditSelected.value)
+const permissionSet = computed(() => new Set(auth.user?.permissions || []))
+const canManageSpace = computed(() => hasPermission('aiops:execute', 'knowledge:manage'))
+const canManageFolders = computed(() => hasPermission('aiops:execute', 'knowledge:manage', 'knowledge:manage_folder', 'knowledge:create', 'knowledge:edit'))
+const canManageACL = computed(() => hasPermission('aiops:execute', 'knowledge:manage', 'knowledge:manage_acl'))
+const canEditKnowledge = computed(() => hasPermission('aiops:execute', 'knowledge:manage', 'knowledge:create', 'knowledge:edit'))
+const canPublishKnowledge = computed(() => hasPermission('aiops:execute', 'knowledge:manage', 'knowledge:publish'))
+const canDeleteKnowledge = computed(() => hasPermission('aiops:execute', 'knowledge:manage', 'knowledge:delete'))
+const canEditSelected = computed(() => Boolean(selected.value && canEditKnowledge.value))
+const canPublishSelected = computed(() => Boolean(selected.value && canEditKnowledge.value && canPublishKnowledge.value))
+const canDeleteSelected = computed(() => Boolean(selected.value && canDeleteKnowledge.value && canEditSelected.value))
+
+function hasPermission(...permissions: string[]) {
+  return permissions.some((permission) => permissionSet.value.has(permission))
+}
 
 function flattenFolders(items: KnowledgeFolder[], visibleOnly = false, depth = 0): Array<KnowledgeFolder & { depth: number }> {
   const result: Array<KnowledgeFolder & { depth: number }> = []
@@ -496,6 +510,11 @@ function openFolderDialog(folder?: KnowledgeFolder) {
   }
 }
 
+function editSelectedFolder() {
+  const folder = allFolders.value.find((item) => item.id === selectedFolderId.value)
+  if (folder) openFolderDialog(folder)
+}
+
 async function saveFolder() {
   try {
     if (folderDialog.id) {
@@ -724,6 +743,7 @@ onMounted(boot)
 .space-picker small { color: #617e92; font-size: 10px; }
 .tree-heading { display: flex; justify-content: space-between; align-items: center; margin: 12px 0 8px; color: #7891a4; font-size: 10px; }
 .tree-heading button { padding: 4px 7px !important; font-size: 10px; }
+.tree-heading-actions { display: flex; gap: 4px; }
 .folder-tree { display: grid; gap: 3px; overflow: auto; }
 .folder-row { width: 100%; display: flex; align-items: center; gap: 6px; padding: 7px 8px !important; border: 1px solid transparent !important; text-align: left; font-size: 12px; }
 .folder-row.active { border-color: #16b8e4 !important; background: #0c4967; }
