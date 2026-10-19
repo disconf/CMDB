@@ -61,3 +61,14 @@ export interface GroupCount { group:string;count:number }
 export interface ProjectGroup { code:string;name:string;description:string;owner:string;ownerPhone:string;enabled:boolean;count:number;createdBy:string;createdAt:string;updatedAt:string }
 
 export interface ProjectGroupInput { code:string;name:string;description?:string;owner?:string;ownerPhone?:string;enabled?:boolean }
+
+export interface KubernetesCapacityResource { available:boolean;requested:number;capacity:number;usagePercent:number;unit:string }
+export interface KubernetesCapacity {
+  available:boolean
+  cluster:string
+  source:string
+  message?:string
+  pods:{available:boolean;used:number;capacity:number;usagePercent:number}
+  cpu:KubernetesCapacityResource
+  memory:KubernetesCapacityResource
+}

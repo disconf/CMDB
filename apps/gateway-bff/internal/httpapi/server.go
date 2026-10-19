@@ -542,6 +542,26 @@ func NewServer() *Server {
 		scope := newUserScope(cmdbService, user)
 		writeJSON(w, http.StatusOK, filterKubernetesInventory(cmdbService.KubernetesInventory(), scope))
 	})
+	mux.HandleFunc("GET /api/v1/cmdb/kubernetes/{cluster}/capacity", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "cmdb:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		scope := newUserScope(cmdbService, user)
+		cluster := r.PathValue("cluster")
+		visible := false
+		for _, item := range filterKubernetesInventory(cmdbService.KubernetesInventory(), scope).Clusters {
+			if item.Name == cluster {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			writeJSON(w, http.StatusNotFound, map[string]string{"code": "KUBERNETES_CLUSTER_NOT_FOUND"})
+			return
+		}
+		writeJSON(w, http.StatusOK, monitorService.KubernetesCapacity(cluster))
+	})
 	mux.HandleFunc("GET /api/v1/cmdb/summary", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "cmdb:view") {
 			return

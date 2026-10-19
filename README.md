@@ -7,11 +7,11 @@
 | 项目 | 状态 |
 |---|---|
 | 线上环境 | `ops-qa`，门户与网关双副本 |
-| 网关镜像 | `cmdb/gateway-bff:1.0.224` |
-| 门户镜像 | `cmdb/web-portal:1.0.176` |
+| 网关镜像 | `cmdb/gateway-bff:1.0.225` |
+| 门户镜像 | `cmdb/web-portal:1.0.177` |
 | 任务执行器 | `cmdb/ansible-runner-service:1.0.5` |
 | 功能开发 | 约 90% |
-| 生产就绪 | 约 80%，数据库高可用已恢复，仍需完成规模化压测和正式验收报告 |
+| 生产就绪 | 约 85%，数据库高可用和 K8s 容量卡片已完成，仍需完成规模化压测和正式验收报告 |
 | 进度清单 | [docs/roadmap/milestones.md](docs/roadmap/milestones.md) |
 
 生产环境设置 `CMDB_ENABLE_DEMO_DATA=false`，不再生成演示资产、告警、工单、发布和分析记录。
