@@ -11,7 +11,7 @@
 | 门户镜像 | `cmdb/web-portal:1.0.177` |
 | 任务执行器 | `cmdb/ansible-runner-service:1.0.5` |
 | 功能开发 | 约 90% |
-| 生产就绪 | 约 88%，数据库高可用、K8s 容量卡片和 5,000 资产查询压测已完成，仍需完成 Agent/任务规模压测和正式验收报告 |
+| 生产就绪 | 约 90%，数据库高可用、K8s 容量卡片、5,000 资产查询和 Agent 心跳压测已完成，仍需完成 500 并发任务、RTO/RPO 和正式验收报告 |
 | 进度清单 | [docs/roadmap/milestones.md](docs/roadmap/milestones.md) |
 
 生产环境设置 `CMDB_ENABLE_DEMO_DATA=false`，不再生成演示资产、告警、工单、发布和分析记录。
