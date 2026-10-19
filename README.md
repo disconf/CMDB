@@ -1,6 +1,47 @@
 # CMDB 智能运维平台
 
-当前版本为 V0.1 本地开发验证版，包含科技感全局态势大屏和 Go 聚合接口。前期不依赖 Docker、Kubernetes、PostgreSQL、Redis 或 Kafka。
+当前版本：**V1.5**。平台已在 `ops-qa` 环境上线，使用 Keycloak、PostgreSQL、Redis、Kafka、Vault、MinIO、Prometheus、Thanos、Loki、Tempo、Neo4j 和 OpenSearch 等真实基础设施。
+
+## 当前状态
+
+| 项目 | 状态 |
+|---|---|
+| 线上环境 | `ops-qa`，门户与网关双副本 |
+| 网关镜像 | `cmdb/gateway-bff:1.0.224` |
+| 门户镜像 | `cmdb/web-portal:1.0.176` |
+| 任务执行器 | `cmdb/ansible-runner-service:1.0.5` |
+| 功能开发 | 约 90% |
+| 生产就绪 | 约 80%，数据库高可用已恢复，仍需完成规模化压测和正式验收报告 |
+| 进度清单 | [docs/roadmap/milestones.md](docs/roadmap/milestones.md) |
+
+生产环境设置 `CMDB_ENABLE_DEMO_DATA=false`，不再生成演示资产、告警、工单、发布和分析记录。
+
+## 核心能力
+
+- **CMDB**：CI 模型、资产台账、项目组、机房机柜 U 位、关系拓扑、变更历史、CSV 导入、责任治理和监控联动。
+- **Agent 与发现**：Linux/Windows Agent、mTLS、签名上报、隔离吊销、采集计划、健康巡检、SSH/SNMP/Redfish、VMware、云平台和 Kubernetes 采集。
+- **监控与可观测性**：Prometheus、Alertmanager、Thanos 长期存储、Loki 日志、Tempo 链路和 Grafana。
+- **拓扑与影响分析**：Neo4j/OpenSearch 资产投影、上下游依赖和故障影响路径。
+- **任务与工单**：Ansible Runner 真实执行、审批、定时调度、实时日志、工单 SLA 和告警转单。
+- **CI/CD 与发布**：Argo CD、Harbor、GitLab 集成，发布门禁、回滚、漂移检测和 CMDB 关联。
+- **远程运维**：WebSSH、文件传输、批量执行、高风险命令审批、录像回放、主机指纹和安全策略。
+- **AIOps**：知识库、RAG 问答、引用反馈、Embedding 适配、LLM 网关和 Runbook。
+- **系统管理**：Keycloak 认证、RBAC、数据范围、审计和生产就绪检查。
+
+## 目录
+
+```text
+apps/gateway-bff          Go 聚合网关与业务 API
+apps/web-portal           Vue 3 运维门户
+apps/cmdb-agent           Linux/Windows 主机 Agent
+apps/ansible-runner-service  Ansible 任务执行器
+deploy/k8s                Kubernetes 部署清单
+docs/design               设计文档
+docs/deployment           环境部署与发布记录
+docs/operations           备份、灾备和运维手册
+docs/roadmap              里程碑与进度
+scripts                   构建、压测和运维脚本
+```
 
 ## 本地启动
 
@@ -13,7 +54,7 @@ cd apps/gateway-bff
 go run ./cmd/server
 ```
 
-后端默认监听 `http://localhost:8080`。
+后端默认监听 `http://localhost:8080`。未配置 PostgreSQL 等外部依赖时会使用内存数据，适合本地开发。
 
 另开一个终端启动前端：
 
@@ -25,20 +66,20 @@ npm run dev
 
 浏览器访问 `http://localhost:5173`。Vite 会把 `/api` 请求代理到本地 Go 服务。
 
-本地验证账号：
+本地开发可使用内存验证账号：
 
-| 角色 | 用户名 | 密码 | 可见范围 |
-|---|---|---|---|
-| 平台管理员 | `admin` | `admin123` | 全部 10 个模块 |
-| 只读用户 | `viewer` | `viewer123` | 大屏、CMDB、拓扑、监控 |
+| 角色 | 用户名 | 密码 |
+|---|---|---|
+| 平台管理员 | `admin` | `admin123` |
+| 只读用户 | `viewer` | `viewer123` |
 
-这些账号只用于无外部依赖的开发验证。接入 Keycloak 后将删除内存账号和密码。
+线上环境统一使用 Keycloak，不再使用上述本地账号。
 
 ## 验证
 
 ```powershell
 cd apps/gateway-bff
-go test -cover ./...
+go test ./...
 go vet ./...
 
 cd ../web-portal
@@ -46,25 +87,9 @@ npm test
 npm run build
 ```
 
-## 当前功能
+## 部署与运维
 
-- 全局状态、数据中心和管理员信息
-- 资产、Agent、告警和任务关键指标
-- 数据中心容量与资源健康度
-- 项目—应用—服务—实例—基础设施五层拓扑
-- 24 小时告警趋势和高优先级告警
-- 活动任务、运维时间线和发布状态
-- 30 秒自动刷新、失败重试和全屏展示
-- 后端健康检查和大屏聚合 API
-- 登录、退出和会话恢复
-- RBAC 功能权限和动态菜单
-- 路由守卫与无权限跳转
-- 九个业务模块入口框架
-- CMDB 资产状态总览和 CI 模型分类
-- 资产台账搜索、类型、状态和项目组筛选
-- 资产详情、扩展属性、标签和资产关系
-- 新增和编辑资产、字段校验
-- 资产变更历史与差异记录
-- CSV 批量导入和逐行错误反馈
-
-当前后端使用内存演示数据。后续 CMDB、监控、任务等模块完成后，在服务层替换为真实数据源，前端接口契约保持不变。
+- 部署形态、镜像和发布步骤：[docs/deployment/v1.5-ops-qa-deployment.md](docs/deployment/v1.5-ops-qa-deployment.md)
+- 备份、灾备与压测：[docs/operations/生产就绪与灾备演练.md](docs/operations/生产就绪与灾备演练.md)
+- 远程运维设计与验收：[docs/design/远程运维重构设计.md](docs/design/远程运维重构设计.md)
+- CMDB 资产优化状态：[docs/design/CMDB资产模块优化设计.md](docs/design/CMDB资产模块优化设计.md)

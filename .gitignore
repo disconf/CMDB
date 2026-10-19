@@ -31,3 +31,15 @@ deploy/secrets/*.env
 .tools/
 .kube/
 
+# Local build and recovery artifacts
+.codex-build/
+apps/gateway-bff/.codex-build/
+backups/
+gateway-linux-amd64.bin
+gateway-policy
+web-static-policy
+
+# Local middleware notes may contain Vault init material
+中间件部署/
+中间件服务部署.md
+
