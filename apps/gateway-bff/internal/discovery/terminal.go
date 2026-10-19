@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -121,8 +122,21 @@ func (s *Service) CreateTerminalTicket(sessionID, operator string, roles []strin
 			delete(s.terminalTickets, key)
 		}
 	}
-	s.terminalTickets[ticket] = terminalTicketRecord{SessionID: item.ID, Operator: operator, Roles: append([]string(nil), roles...), ExpiresAt: expires}
+	record := terminalTicketRecord{SessionID: item.ID, Operator: operator, Roles: append([]string(nil), roles...), ExpiresAt: expires}
 	s.mu.Unlock()
+	if s.terminalBus != nil {
+		// 票据必须对每个网关副本可见，否则浏览器可能在另一个副本上兑换被拒。
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := s.terminalBus.StoreTerminalTicket(ctx, ticket, record, time.Until(expires)); err != nil {
+			slog.Warn("store terminal ticket in shared bus", "error", err)
+		}
+	} else {
+		// 未配置共享总线时退化为单副本内存票据。
+		s.mu.Lock()
+		s.terminalTickets[ticket] = record
+		s.mu.Unlock()
+	}
 	return TerminalTicket{Ticket: ticket, ExpiresAt: expires.Format("2006-01-02 15:04:05")}, nil
 }
 
@@ -131,11 +145,37 @@ func (s *Service) ConsumeTerminalTicket(ticket string) (RemoteSession, error) {
 	if ticket == "" {
 		return RemoteSession{}, ErrRemoteValidation
 	}
-	s.mu.Lock()
-	record, ok := s.terminalTickets[ticket]
-	if ok {
-		delete(s.terminalTickets, ticket)
+	var (
+		record terminalTicketRecord
+		ok     bool
+	)
+	// 共享存储是唯一的权威来源：票据由任意副本签发，也只能被兑换一次。
+	// 查无此票或共享存储报错都直接拒绝，不能回退到签发副本的内存副本，
+	// 否则同一张票据可能被重复使用。
+	if s.terminalBus != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		shared, found, sharedErr := s.terminalBus.ConsumeTerminalTicket(ctx, ticket)
+		cancel()
+		if sharedErr != nil {
+			slog.Warn("consume terminal ticket from shared bus", "error", sharedErr)
+			return RemoteSession{}, ErrNotFound
+		} else if found {
+			record, ok = shared, true
+		} else {
+			// Redis 明确返回不存在，说明票据已被兑换或已过期，直接拒绝。
+			s.mu.Lock()
+			delete(s.terminalTickets, ticket)
+			s.mu.Unlock()
+			return RemoteSession{}, ErrNotFound
+		}
+	} else {
+		s.mu.Lock()
+		record, ok = s.terminalTickets[ticket]
+		s.mu.Unlock()
 	}
+	// 无论命中的是共享存储还是本地副本，都清掉本地副本，防止重复兑换。
+	s.mu.Lock()
+	delete(s.terminalTickets, ticket)
 	s.mu.Unlock()
 	if !ok || record.ExpiresAt.Before(time.Now()) {
 		return RemoteSession{}, ErrNotFound

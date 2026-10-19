@@ -1,7 +1,9 @@
 package observability
 
 import (
+	"bufio"
 	"context"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -104,6 +106,27 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack keeps WebSocket upgrades working behind tracing. Without it the
+// recorder hides the underlying http.Hijacker and terminal connections fail
+// with HTTP 500 after a successful ticket exchange.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 func sampleRatio() float64 {

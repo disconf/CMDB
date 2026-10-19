@@ -652,6 +652,27 @@ function focusReplayTerminal() {
   replayTerminal?.focus()
 }
 
+let terminalReconnectTimer: ReturnType<typeof setTimeout> | undefined
+let terminalHeartbeatTimer: ReturnType<typeof setInterval> | undefined
+let terminalIntentionalClose = false
+let terminalReconnectAttempts = 0
+const terminalMaxReconnectAttempts = 6
+
+function clearTerminalReconnectTimer() {
+  if (terminalReconnectTimer) { clearTimeout(terminalReconnectTimer); terminalReconnectTimer = undefined }
+}
+
+function clearTerminalHeartbeat() {
+  if (terminalHeartbeatTimer) { clearInterval(terminalHeartbeatTimer); terminalHeartbeatTimer = undefined }
+}
+
+function startTerminalHeartbeat(socket: WebSocket) {
+  clearTerminalHeartbeat()
+  terminalHeartbeatTimer = setInterval(() => {
+    if (terminalSocket === socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type:'heartbeat' }))
+  }, 25000)
+}
+
 async function openInteractiveTerminal() {
   if (!selectedSessionId.value || terminalConnecting.value) return
   terminalMode.value = true
@@ -659,17 +680,33 @@ async function openInteractiveTerminal() {
   terminalAccess.value = selectedSession.value?.accessMode === 'readonly' ? 'readonly' : 'control'
   await ensureInteractiveTerminal()
   if (terminalInstance) terminalInstance.options.disableStdin = terminalReadOnly.value
+  terminalIntentionalClose = true
   closeInteractiveTerminal(false)
+  terminalIntentionalClose = false
+  terminalReconnectAttempts = 0
+  await connectInteractiveTerminal()
+}
+
+async function connectInteractiveTerminal() {
+  const sessionId = selectedSessionId.value
+  if (!sessionId || terminalIntentionalClose) return
+  clearTerminalReconnectTimer()
   terminalConnecting.value = true
+  terminalError.value = ''
   try {
-    const ticket = await request<{ticket:string}>(`/api/v1/discovery/remote-sessions/${selectedSessionId.value}/terminal-ticket`, { method:'POST' })
+    const ticket = await request<{ticket:string}>(`/api/v1/discovery/remote-sessions/${sessionId}/terminal-ticket`, { method:'POST' })
+    if (terminalIntentionalClose || selectedSessionId.value !== sessionId) return
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const query = new URLSearchParams({ ticket:ticket.ticket, cols:String(terminalInstance?.cols || 120), rows:String(terminalInstance?.rows || 32) })
-    const socket = new WebSocket(`${protocol}//${location.host}/api/v1/discovery/remote-sessions/${selectedSessionId.value}/terminal?${query}`)
+    const socket = new WebSocket(`${protocol}//${location.host}/api/v1/discovery/remote-sessions/${sessionId}/terminal?${query}`)
     terminalSocket = socket
     socket.onopen = () => {
+      if (terminalSocket !== socket) return
       terminalConnecting.value = false
       terminalConnected.value = true
+      terminalReconnectAttempts = 0
+      terminalError.value = ''
+      startTerminalHeartbeat(socket)
       void refreshSessions()
       if (!terminalReadOnly.value) terminalInstance?.focus()
       terminalInstance?.writeln(terminalReadOnly.value
@@ -677,6 +714,7 @@ async function openInteractiveTerminal() {
         : '\x1b[32m[CMDB] 安全终端已连接，高风险命令将进入审批流程。\x1b[0m')
     }
     socket.onmessage = event => {
+      if (terminalSocket !== socket) return
       let socketMessage: TerminalSocketMessage
       try { socketMessage = JSON.parse(String(event.data)) as TerminalSocketMessage } catch { terminalInstance?.write(String(event.data)); return }
       if (socketMessage.type === 'output' && socketMessage.data) terminalInstance?.write(decodeTerminalData(socketMessage.data))
@@ -691,17 +729,51 @@ async function openInteractiveTerminal() {
         terminalInstance?.writeln(`\r\n\x1b[33m[待审批] ${socketMessage.approval.reason}，命令尚未执行。\x1b[0m\r\n`)
       }
       if (socketMessage.type === 'error') { terminalError.value = socketMessage.message || '交互终端连接失败'; terminalInstance?.writeln(`\r\n\x1b[31m${terminalError.value}\x1b[0m`) }
-      if (socketMessage.type === 'closed') { terminalConnected.value = false; terminalConnecting.value = false }
+      if (socketMessage.type === 'closed') { terminalIntentionalClose = true; terminalConnected.value = false; terminalConnecting.value = false }
     }
-    socket.onerror = () => { terminalError.value = '交互终端连接失败'; terminalConnected.value = false; terminalConnecting.value = false }
-    socket.onclose = () => { terminalConnected.value = false; terminalConnecting.value = false }
+    socket.onerror = () => {
+      if (terminalSocket !== socket) return
+      terminalError.value = '交互终端连接失败'
+      terminalConnected.value = false
+      terminalConnecting.value = false
+    }
+    socket.onclose = () => {
+      if (terminalSocket !== socket) return
+      terminalConnected.value = false
+      terminalConnecting.value = false
+      clearTerminalHeartbeat()
+      if (terminalIntentionalClose) return
+      scheduleTerminalReconnect()
+    }
   } catch (reason) {
     terminalConnecting.value = false
     terminalError.value = reason instanceof Error ? reason.message : '交互终端连接失败'
+    if (!terminalIntentionalClose) scheduleTerminalReconnect()
   }
 }
 
+function scheduleTerminalReconnect() {
+  if (terminalReconnectAttempts >= terminalMaxReconnectAttempts) {
+    terminalError.value = '交互终端连接已断开，自动重连失败，请手动重新连接'
+    terminalInstance?.writeln('\r\n\x1b[31m[CMDB] 自动重连失败，请手动重新连接。\x1b[0m\r\n')
+    return
+  }
+  const attempt = terminalReconnectAttempts + 1
+  terminalReconnectAttempts = attempt
+  const delay = Math.min(15000, 1000 * 2 ** (attempt - 1))
+  terminalError.value = `连接中断，${Math.round(delay / 1000)} 秒后自动重连（第 ${attempt} 次）`
+  terminalInstance?.writeln(`\r\n\x1b[33m[CMDB] 连接中断，${Math.round(delay / 1000)} 秒后自动重连（第 ${attempt} 次）...\x1b[0m\r\n`)
+  clearTerminalReconnectTimer()
+  terminalReconnectTimer = setTimeout(() => {
+    terminalReconnectTimer = undefined
+    if (!terminalIntentionalClose && terminalMode.value) void connectInteractiveTerminal()
+  }, delay)
+}
+
 function closeInteractiveTerminal(updateMessage = true) {
+  terminalIntentionalClose = true
+  clearTerminalReconnectTimer()
+  clearTerminalHeartbeat()
   if (terminalSocket?.readyState === WebSocket.OPEN) {
     terminalSocket.send(JSON.stringify({ type:'close' }))
     terminalSocket.close()

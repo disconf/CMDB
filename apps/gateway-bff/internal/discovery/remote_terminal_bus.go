@@ -112,6 +112,39 @@ func remoteTerminalSequenceKey(sessionID string) string {
 	return "cmdb:remote:terminal:{" + strings.TrimSpace(sessionID) + "}:sequence"
 }
 
+// terminalTicketKey namespaces one-time terminal tickets. Tickets must be visible
+// to every gateway replica: the browser may redeem them through any pod, so an
+// in-process map alone fails roughly half of the connections behind a Service.
+func terminalTicketKey(ticket string) string {
+	return "cmdb:remote:ticket:" + strings.TrimSpace(ticket)
+}
+
+// StoreTerminalTicket publishes a one-time ticket to the shared store.
+func (b *RemoteTerminalBus) StoreTerminalTicket(ctx context.Context, ticket string, record terminalTicketRecord, ttl time.Duration) error {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return b.client.Set(ctx, terminalTicketKey(ticket), payload, ttl).Err()
+}
+
+// ConsumeTerminalTicket redeems a ticket atomically so it can only be used once,
+// no matter which replica handles the WebSocket upgrade.
+func (b *RemoteTerminalBus) ConsumeTerminalTicket(ctx context.Context, ticket string) (terminalTicketRecord, bool, error) {
+	raw, err := b.client.GetDel(ctx, terminalTicketKey(ticket)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return terminalTicketRecord{}, false, nil
+	}
+	if err != nil {
+		return terminalTicketRecord{}, false, err
+	}
+	var record terminalTicketRecord
+	if err = json.Unmarshal(raw, &record); err != nil {
+		return terminalTicketRecord{}, false, err
+	}
+	return record, true, nil
+}
+
 func (b *RemoteTerminalBus) PublishOutput(ctx context.Context, sessionID string, sequence int64, data []byte) error {
 	return b.publish(ctx, remoteTerminalOutputChannel(sessionID), remoteTerminalBusEvent{Kind: "output", Sequence: sequence, Data: base64.StdEncoding.EncodeToString(data)})
 }
