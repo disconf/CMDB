@@ -100,31 +100,127 @@ type Analysis struct {
 }
 
 type Knowledge struct {
-	ID        string         `json:"id"`
-	Title     string         `json:"title"`
-	Category  string         `json:"category"`
-	Summary   string         `json:"summary"`
-	Content   string         `json:"content"`
-	Tags      []string       `json:"tags"`
-	Helpful   int            `json:"helpful"`
-	Views     int            `json:"views"`
-	Status    string         `json:"status"`
-	Source    string         `json:"source"`
-	SourceID  string         `json:"sourceId,omitempty"`
-	Author    string         `json:"author"`
-	CreatedAt string         `json:"createdAt"`
-	UpdatedAt string         `json:"updatedAt"`
-	Related   []KnowledgeRef `json:"related"`
+	ID               string         `json:"id"`
+	SpaceID          string         `json:"spaceId,omitempty"`
+	FolderID         string         `json:"folderId,omitempty"`
+	Title            string         `json:"title"`
+	Category         string         `json:"category"`
+	Summary          string         `json:"summary"`
+	Content          string         `json:"content"`
+	ContentFormat    string         `json:"contentFormat,omitempty"`
+	Tags             []string       `json:"tags"`
+	Helpful          int            `json:"helpful"`
+	Views            int            `json:"views"`
+	Status           string         `json:"status"`
+	Source           string         `json:"source"`
+	SourceID         string         `json:"sourceId,omitempty"`
+	Author           string         `json:"author"`
+	Owner            string         `json:"owner,omitempty"`
+	Visibility       string         `json:"visibility,omitempty"`
+	Version          int            `json:"version"`
+	PublishedVersion int            `json:"publishedVersion,omitempty"`
+	CreatedAt        string         `json:"createdAt"`
+	UpdatedAt        string         `json:"updatedAt"`
+	Related          []KnowledgeRef `json:"related"`
 }
 
 type KnowledgeInput struct {
-	Title    string         `json:"title"`
-	Category string         `json:"category"`
-	Summary  string         `json:"summary"`
-	Content  string         `json:"content"`
-	Tags     []string       `json:"tags"`
-	Status   string         `json:"status"`
-	Related  []KnowledgeRef `json:"related"`
+	SpaceID       string         `json:"spaceId"`
+	FolderID      string         `json:"folderId"`
+	Title         string         `json:"title"`
+	Category      string         `json:"category"`
+	Summary       string         `json:"summary"`
+	Content       string         `json:"content"`
+	ContentFormat string         `json:"contentFormat"`
+	Tags          []string       `json:"tags"`
+	Status        string         `json:"status"`
+	Owner         string         `json:"owner"`
+	Visibility    string         `json:"visibility"`
+	Version       int            `json:"version"`
+	Related       []KnowledgeRef `json:"related"`
+}
+
+type KnowledgeSpace struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Code          string `json:"code"`
+	Description   string `json:"description"`
+	Kind          string `json:"kind"`
+	Visibility    string `json:"visibility"`
+	Owner         string `json:"owner"`
+	CreatedBy     string `json:"createdBy"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
+	DocumentCount int    `json:"documentCount"`
+	FolderCount   int    `json:"folderCount"`
+	Private       bool   `json:"private"`
+}
+
+type KnowledgeFolder struct {
+	ID            string            `json:"id"`
+	SpaceID       string            `json:"spaceId"`
+	ParentID      string            `json:"parentId,omitempty"`
+	Name          string            `json:"name"`
+	Path          string            `json:"path"`
+	Description   string            `json:"description"`
+	Owner         string            `json:"owner"`
+	SortOrder     int               `json:"sortOrder"`
+	DocumentCount int               `json:"documentCount"`
+	Children      []KnowledgeFolder `json:"children,omitempty"`
+	CreatedAt     string            `json:"createdAt"`
+	UpdatedAt     string            `json:"updatedAt"`
+}
+
+type KnowledgeACL struct {
+	ID           string `json:"id"`
+	ResourceType string `json:"resourceType"`
+	ResourceID   string `json:"resourceId"`
+	SubjectType  string `json:"subjectType"`
+	SubjectID    string `json:"subjectId"`
+	Permission   string `json:"permission"`
+	Effect       string `json:"effect"`
+	Inherit      bool   `json:"inherit"`
+	CreatedBy    string `json:"createdBy"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+type KnowledgeACLInput struct {
+	SubjectType string `json:"subjectType"`
+	SubjectID   string `json:"subjectId"`
+	Permission  string `json:"permission"`
+	Effect      string `json:"effect"`
+	Inherit     bool   `json:"inherit"`
+}
+
+type KnowledgeActor struct {
+	Username      string   `json:"username"`
+	Roles         []string `json:"roles"`
+	Permissions   []string `json:"permissions"`
+	ProjectGroups []string `json:"projectGroups"`
+}
+
+type KnowledgeSpaceInput struct {
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	Description string `json:"description"`
+	Kind        string `json:"kind"`
+	Visibility  string `json:"visibility"`
+	Owner       string `json:"owner"`
+}
+
+type KnowledgeFolderInput struct {
+	SpaceID     string `json:"spaceId"`
+	ParentID    string `json:"parentId"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Owner       string `json:"owner"`
+	SortOrder   int    `json:"sortOrder"`
+}
+
+type KnowledgeTree struct {
+	Spaces   []KnowledgeSpace  `json:"spaces"`
+	Folders  []KnowledgeFolder `json:"folders"`
+	Selected string            `json:"selectedSpaceId"`
 }
 
 type KnowledgeRef struct {
@@ -266,6 +362,15 @@ type repository interface {
 	LoadKnowledge(context.Context) ([]Knowledge, error)
 	SaveKnowledge(context.Context, Knowledge) error
 	DeleteKnowledge(context.Context, string) error
+	LoadKnowledgeSpaces(context.Context) ([]KnowledgeSpace, error)
+	SaveKnowledgeSpace(context.Context, KnowledgeSpace) error
+	DeleteKnowledgeSpace(context.Context, string) error
+	LoadKnowledgeFolders(context.Context, string) ([]KnowledgeFolder, error)
+	SaveKnowledgeFolder(context.Context, KnowledgeFolder) error
+	DeleteKnowledgeFolder(context.Context, string) error
+	LoadKnowledgeACL(context.Context, string, string) ([]KnowledgeACL, error)
+	SaveKnowledgeACL(context.Context, KnowledgeACL) error
+	DeleteKnowledgeACL(context.Context, string) error
 	LoadKnowledgeVersions(context.Context, string) ([]KnowledgeVersion, error)
 	SaveKnowledgeVersion(context.Context, KnowledgeVersion) error
 	LoadKnowledgeAttachments(context.Context, string) ([]KnowledgeAttachment, error)

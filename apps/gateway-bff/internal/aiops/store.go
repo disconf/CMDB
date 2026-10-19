@@ -14,6 +14,9 @@ type memoryRepository struct {
 	mu            sync.RWMutex
 	analyses      []Analysis
 	knowledge     []Knowledge
+	spaces        []KnowledgeSpace
+	folders       []KnowledgeFolder
+	acls          []KnowledgeACL
 	versions      []KnowledgeVersion
 	attachments   []KnowledgeAttachment
 	embeddings    map[string][]float32
@@ -25,7 +28,112 @@ type memoryRepository struct {
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, embeddings: map[string][]float32{}, answers: []KnowledgeAnswer{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+	return &memoryRepository{analyses: []Analysis{}, knowledge: []Knowledge{}, spaces: []KnowledgeSpace{}, folders: []KnowledgeFolder{}, acls: []KnowledgeACL{}, versions: []KnowledgeVersion{}, attachments: []KnowledgeAttachment{}, embeddings: map[string][]float32{}, answers: []KnowledgeAnswer{}, executions: []Execution{}, runbooks: []RunbookPolicy{}, changeControl: ChangeControl{ID: "default", LiveEnabled: true}, canaries: []CanaryValidation{}}
+}
+
+func (r *memoryRepository) LoadKnowledgeSpaces(context.Context) ([]KnowledgeSpace, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]KnowledgeSpace{}, r.spaces...), nil
+}
+
+func (r *memoryRepository) SaveKnowledgeSpace(_ context.Context, item KnowledgeSpace) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.spaces {
+		if r.spaces[i].ID == item.ID {
+			r.spaces[i] = item
+			return nil
+		}
+	}
+	r.spaces = append(r.spaces, item)
+	return nil
+}
+
+func (r *memoryRepository) DeleteKnowledgeSpace(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.spaces {
+		if r.spaces[i].ID == id {
+			r.spaces = append(r.spaces[:i], r.spaces[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (r *memoryRepository) LoadKnowledgeFolders(_ context.Context, spaceID string) ([]KnowledgeFolder, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := []KnowledgeFolder{}
+	for _, item := range r.folders {
+		if spaceID == "" || item.SpaceID == spaceID {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+func (r *memoryRepository) SaveKnowledgeFolder(_ context.Context, item KnowledgeFolder) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.folders {
+		if r.folders[i].ID == item.ID {
+			r.folders[i] = item
+			return nil
+		}
+	}
+	r.folders = append(r.folders, item)
+	return nil
+}
+
+func (r *memoryRepository) DeleteKnowledgeFolder(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.folders {
+		if r.folders[i].ID == id {
+			r.folders = append(r.folders[:i], r.folders[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (r *memoryRepository) LoadKnowledgeACL(_ context.Context, resourceType, resourceID string) ([]KnowledgeACL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := []KnowledgeACL{}
+	for _, item := range r.acls {
+		if item.ResourceType == resourceType && (resourceID == "" || item.ResourceID == resourceID) {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+func (r *memoryRepository) SaveKnowledgeACL(_ context.Context, item KnowledgeACL) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.acls {
+		if r.acls[i].ID == item.ID {
+			r.acls[i] = item
+			return nil
+		}
+	}
+	r.acls = append(r.acls, item)
+	return nil
+}
+
+func (r *memoryRepository) DeleteKnowledgeACL(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.acls {
+		if r.acls[i].ID == id {
+			r.acls = append(r.acls[:i], r.acls[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 func (r *memoryRepository) LoadKnowledge(context.Context) ([]Knowledge, error) {

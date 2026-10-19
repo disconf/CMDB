@@ -21,6 +21,8 @@ import (
 
 var (
 	ErrNotFound            = errors.New("analysis not found")
+	ErrUnauthorized        = errors.New("knowledge unauthorized")
+	ErrConflict            = errors.New("knowledge version conflict")
 	ErrValidation          = errors.New("validation")
 	ErrNotReady            = errors.New("analysis dependencies not ready")
 	ErrNoEvidence          = errors.New("no new evidence")
@@ -89,6 +91,7 @@ func NewService() *Service {
 			_ = s.repo.SaveKnowledge(ctx, item)
 		}
 	}
+	s.ensureKnowledgeLayout(ctx)
 	for _, item := range s.knowledge {
 		if versions, err := s.repo.LoadKnowledgeVersions(ctx, item.ID); err == nil && len(versions) == 0 {
 			_, _ = s.saveKnowledgeVersion(item, "system", "初始化版本")
@@ -464,6 +467,9 @@ func knowledgeSearchScore(item Knowledge, query string) int {
 	category := strings.ToLower(item.Category)
 	summary := strings.ToLower(item.Summary)
 	content := strings.ToLower(item.Content)
+	if item.ContentFormat == "html" {
+		content = strings.ToLower(stripHTML(item.Content))
+	}
 	tags := strings.ToLower(strings.Join(item.Tags, " "))
 	score := 0
 	for _, term := range terms {
@@ -562,11 +568,24 @@ func (s *Service) CreateKnowledge(input KnowledgeInput, author string) (Knowledg
 	if err != nil {
 		return Knowledge{}, err
 	}
+	if item.SpaceID == "" {
+		item.SpaceID = knowledgeDefaultSpaceID
+	}
+	if item.FolderID == "" {
+		item.FolderID = s.knowledgeFolderForCategory(item.Category).ID
+	}
 	item.Related = s.resolveKnowledgeRefs(item.Related)
 	now := time.Now().Format("2006-01-02 15:04:05")
 	item.ID = newID("kb")
 	item.Source = "manual"
 	item.Author = strings.TrimSpace(author)
+	if item.Owner == "" {
+		item.Owner = item.Author
+	}
+	item.Version = 1
+	if item.Status == "published" {
+		item.PublishedVersion = 1
+	}
 	item.CreatedAt = now
 	item.UpdatedAt = now
 	if err = s.repo.SaveKnowledge(context.Background(), item); err != nil {
@@ -595,6 +614,10 @@ func (s *Service) UpdateKnowledge(id string, input KnowledgeInput, author string
 		return Knowledge{}, ErrNotFound
 	}
 	existing := s.knowledge[index]
+	if input.Version > 0 && existing.Version > 0 && input.Version != existing.Version {
+		s.mu.Unlock()
+		return Knowledge{}, ErrConflict
+	}
 	updated, err := normalizeKnowledgeInput(existing, input)
 	if err != nil {
 		s.mu.Unlock()
@@ -605,6 +628,13 @@ func (s *Service) UpdateKnowledge(id string, input KnowledgeInput, author string
 	updated.Source = existing.Source
 	updated.SourceID = existing.SourceID
 	updated.Author = strings.TrimSpace(author)
+	if updated.Owner == "" {
+		updated.Owner = updated.Author
+	}
+	updated.Version = existing.Version + 1
+	if updated.Status == "published" {
+		updated.PublishedVersion = updated.Version
+	}
 	updated.CreatedAt = existing.CreatedAt
 	updated.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 	s.knowledge[index] = updated
@@ -944,10 +974,33 @@ func (s *Service) ReindexKnowledge() (int, error) {
 
 func normalizeKnowledgeInput(existing Knowledge, input KnowledgeInput) (Knowledge, error) {
 	item := existing
+	if value := strings.TrimSpace(input.SpaceID); value != "" {
+		item.SpaceID = value
+	}
+	if value := strings.TrimSpace(input.FolderID); value != "" {
+		item.FolderID = value
+	}
 	item.Title = strings.TrimSpace(input.Title)
 	item.Category = strings.TrimSpace(input.Category)
 	item.Summary = strings.TrimSpace(input.Summary)
 	item.Content = strings.TrimSpace(input.Content)
+	item.ContentFormat = strings.ToLower(strings.TrimSpace(input.ContentFormat))
+	if item.ContentFormat == "" {
+		item.ContentFormat = "markdown"
+	}
+	if item.ContentFormat != "markdown" && item.ContentFormat != "html" {
+		return Knowledge{}, ErrValidation
+	}
+	if value := strings.TrimSpace(input.Owner); value != "" {
+		item.Owner = value
+	}
+	item.Visibility = strings.ToLower(strings.TrimSpace(input.Visibility))
+	if item.Visibility == "" {
+		item.Visibility = "organization"
+	}
+	if item.Visibility != "private" && item.Visibility != "project" && item.Visibility != "organization" {
+		return Knowledge{}, ErrValidation
+	}
 	item.Tags = make([]string, 0, len(input.Tags))
 	for _, tag := range input.Tags {
 		if value := strings.TrimSpace(tag); value != "" && !containsString(item.Tags, value) {
@@ -958,7 +1011,7 @@ func normalizeKnowledgeInput(existing Knowledge, input KnowledgeInput) (Knowledg
 	if item.Status == "" {
 		item.Status = "published"
 	}
-	if item.Status != "published" && item.Status != "draft" {
+	if item.Status != "published" && item.Status != "draft" && item.Status != "archived" {
 		return Knowledge{}, ErrValidation
 	}
 	if item.Title == "" || item.Summary == "" || item.Content == "" {

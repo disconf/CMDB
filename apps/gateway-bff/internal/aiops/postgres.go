@@ -71,8 +71,59 @@ ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAUL
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS source_id text NOT NULL DEFAULT '';
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS author text NOT NULL DEFAULT '';
 ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS related jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS space_id text NOT NULL DEFAULT '';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS folder_id text NOT NULL DEFAULT '';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS content_format text NOT NULL DEFAULT 'markdown';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS owner text NOT NULL DEFAULT '';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS visibility text NOT NULL DEFAULT 'organization';
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS doc_version integer NOT NULL DEFAULT 1;
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS published_version integer NOT NULL DEFAULT 0;
+ALTER TABLE aiops_knowledge ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_updated_at ON aiops_knowledge(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_category ON aiops_knowledge(category);
+CREATE INDEX IF NOT EXISTS idx_aiops_knowledge_space_folder ON aiops_knowledge(space_id, folder_id);
+CREATE TABLE IF NOT EXISTS knowledge_spaces (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  code text NOT NULL UNIQUE,
+  description text NOT NULL DEFAULT '',
+  kind text NOT NULL DEFAULT 'organization',
+  visibility text NOT NULL DEFAULT 'organization',
+  owner text NOT NULL DEFAULT '',
+  created_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS knowledge_folders (
+  id text PRIMARY KEY,
+  space_id text NOT NULL REFERENCES knowledge_spaces(id) ON DELETE CASCADE,
+  parent_id text NOT NULL DEFAULT '',
+  name text NOT NULL,
+  path text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  owner text NOT NULL DEFAULT '',
+  sort_order integer NOT NULL DEFAULT 0,
+  created_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_folders_space_parent ON knowledge_folders(space_id, parent_id, sort_order);
+CREATE TABLE IF NOT EXISTS knowledge_acl (
+  id text PRIMARY KEY,
+  resource_type text NOT NULL,
+  resource_id text NOT NULL,
+  subject_type text NOT NULL,
+  subject_id text NOT NULL,
+  permission text NOT NULL,
+  effect text NOT NULL DEFAULT 'allow',
+  inherit boolean NOT NULL DEFAULT true,
+  created_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_acl_unique ON knowledge_acl(resource_type, resource_id, subject_type, subject_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_acl_resource ON knowledge_acl(resource_type, resource_id);
 CREATE TABLE IF NOT EXISTS aiops_knowledge_versions (
   id text PRIMARY KEY,
   knowledge_id text NOT NULL REFERENCES aiops_knowledge(id) ON DELETE CASCADE,
@@ -312,13 +363,13 @@ func (r *postgresRepository) SaveKnowledge(ctx context.Context, item Knowledge) 
 	if err != nil {
 		updatedAt = time.Now()
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge(id,title,category,summary,content,tags,related,helpful,views,status,source,source_id,author,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(id) DO UPDATE SET title=excluded.title,category=excluded.category,summary=excluded.summary,content=excluded.content,tags=excluded.tags,related=excluded.related,helpful=excluded.helpful,views=excluded.views,status=excluded.status,source=excluded.source,source_id=excluded.source_id,author=excluded.author,updated_at=excluded.updated_at`,
-		item.ID, item.Title, item.Category, item.Summary, item.Content, tags, related, item.Helpful, item.Views, item.Status, item.Source, item.SourceID, item.Author, createdAt, updatedAt)
+	_, err = r.db.ExecContext(ctx, `INSERT INTO aiops_knowledge(id,space_id,folder_id,title,category,summary,content,content_format,tags,related,helpful,views,status,source,source_id,author,owner,visibility,doc_version,published_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) ON CONFLICT(id) DO UPDATE SET space_id=excluded.space_id,folder_id=excluded.folder_id,title=excluded.title,category=excluded.category,summary=excluded.summary,content=excluded.content,content_format=excluded.content_format,tags=excluded.tags,related=excluded.related,helpful=excluded.helpful,views=excluded.views,status=excluded.status,source=excluded.source,source_id=excluded.source_id,author=excluded.author,owner=excluded.owner,visibility=excluded.visibility,doc_version=excluded.doc_version,published_version=excluded.published_version,updated_at=excluded.updated_at`,
+		item.ID, item.SpaceID, item.FolderID, item.Title, item.Category, item.Summary, item.Content, item.ContentFormat, tags, related, item.Helpful, item.Views, item.Status, item.Source, item.SourceID, item.Author, item.Owner, item.Visibility, item.Version, item.PublishedVersion, createdAt, updatedAt)
 	return err
 }
 
 func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,title,category,summary,content,tags,related,helpful,views,status,source,source_id,author,created_at,updated_at FROM aiops_knowledge ORDER BY updated_at DESC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,space_id,folder_id,title,category,summary,content,content_format,tags,related,helpful,views,status,source,source_id,author,owner,visibility,doc_version,published_version,created_at,updated_at FROM aiops_knowledge ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +379,7 @@ func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, er
 		var item Knowledge
 		var tags, related []byte
 		var createdAt, updatedAt time.Time
-		if err = rows.Scan(&item.ID, &item.Title, &item.Category, &item.Summary, &item.Content, &tags, &related, &item.Helpful, &item.Views, &item.Status, &item.Source, &item.SourceID, &item.Author, &createdAt, &updatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.SpaceID, &item.FolderID, &item.Title, &item.Category, &item.Summary, &item.Content, &item.ContentFormat, &tags, &related, &item.Helpful, &item.Views, &item.Status, &item.Source, &item.SourceID, &item.Author, &item.Owner, &item.Visibility, &item.Version, &item.PublishedVersion, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(tags, &item.Tags)
@@ -342,6 +393,118 @@ func (r *postgresRepository) LoadKnowledge(ctx context.Context) ([]Knowledge, er
 
 func (r *postgresRepository) DeleteKnowledge(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM aiops_knowledge WHERE id=$1`, id)
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledgeSpaces(ctx context.Context) ([]KnowledgeSpace, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,code,description,kind,visibility,owner,created_by,created_at,updated_at FROM knowledge_spaces WHERE deleted_at IS NULL ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeSpace{}
+	for rows.Next() {
+		var item KnowledgeSpace
+		var createdAt, updatedAt time.Time
+		if err = rows.Scan(&item.ID, &item.Name, &item.Code, &item.Description, &item.Kind, &item.Visibility, &item.Owner, &item.CreatedBy, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		item.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveKnowledgeSpace(ctx context.Context, item KnowledgeSpace) error {
+	createdAt, err := parseAITime(item.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	updatedAt, err := parseAITime(item.UpdatedAt)
+	if err != nil {
+		updatedAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO knowledge_spaces(id,name,code,description,kind,visibility,owner,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET name=excluded.name,code=excluded.code,description=excluded.description,kind=excluded.kind,visibility=excluded.visibility,owner=excluded.owner,updated_at=excluded.updated_at`,
+		item.ID, item.Name, item.Code, item.Description, item.Kind, item.Visibility, item.Owner, item.CreatedBy, createdAt, updatedAt)
+	return err
+}
+
+func (r *postgresRepository) DeleteKnowledgeSpace(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE knowledge_spaces SET deleted_at=now(), updated_at=now() WHERE id=$1`, id)
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledgeFolders(ctx context.Context, spaceID string) ([]KnowledgeFolder, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,space_id,parent_id,name,path,description,owner,sort_order,created_at,updated_at FROM knowledge_folders WHERE deleted_at IS NULL AND ($1='' OR space_id=$1) ORDER BY sort_order,name`, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeFolder{}
+	for rows.Next() {
+		var item KnowledgeFolder
+		var createdAt, updatedAt time.Time
+		if err = rows.Scan(&item.ID, &item.SpaceID, &item.ParentID, &item.Name, &item.Path, &item.Description, &item.Owner, &item.SortOrder, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		item.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveKnowledgeFolder(ctx context.Context, item KnowledgeFolder) error {
+	createdAt, err := parseAITime(item.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	updatedAt, err := parseAITime(item.UpdatedAt)
+	if err != nil {
+		updatedAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO knowledge_folders(id,space_id,parent_id,name,path,description,owner,sort_order,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET space_id=excluded.space_id,parent_id=excluded.parent_id,name=excluded.name,path=excluded.path,description=excluded.description,owner=excluded.owner,sort_order=excluded.sort_order,updated_at=excluded.updated_at`,
+		item.ID, item.SpaceID, item.ParentID, item.Name, item.Path, item.Description, item.Owner, item.SortOrder, createdAt, updatedAt)
+	return err
+}
+
+func (r *postgresRepository) DeleteKnowledgeFolder(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE knowledge_folders SET deleted_at=now(), updated_at=now() WHERE id=$1`, id)
+	return err
+}
+
+func (r *postgresRepository) LoadKnowledgeACL(ctx context.Context, resourceType, resourceID string) ([]KnowledgeACL, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,resource_type,resource_id,subject_type,subject_id,permission,effect,inherit,created_by,created_at FROM knowledge_acl WHERE resource_type=$1 AND ($2='' OR resource_id=$2) ORDER BY created_at`, resourceType, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []KnowledgeACL{}
+	for rows.Next() {
+		var item KnowledgeACL
+		var createdAt time.Time
+		if err = rows.Scan(&item.ID, &item.ResourceType, &item.ResourceID, &item.SubjectType, &item.SubjectID, &item.Permission, &item.Effect, &item.Inherit, &item.CreatedBy, &createdAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *postgresRepository) SaveKnowledgeACL(ctx context.Context, item KnowledgeACL) error {
+	createdAt, err := parseAITime(item.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	_, err = r.db.ExecContext(ctx, `INSERT INTO knowledge_acl(id,resource_type,resource_id,subject_type,subject_id,permission,effect,inherit,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(resource_type,resource_id,subject_type,subject_id) DO UPDATE SET permission=excluded.permission,effect=excluded.effect,inherit=excluded.inherit,created_by=excluded.created_by,created_at=excluded.created_at`,
+		item.ID, item.ResourceType, item.ResourceID, item.SubjectType, item.SubjectID, item.Permission, item.Effect, item.Inherit, item.CreatedBy, createdAt)
+	return err
+}
+
+func (r *postgresRepository) DeleteKnowledgeACL(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM knowledge_acl WHERE id=$1`, id)
 	return err
 }
 

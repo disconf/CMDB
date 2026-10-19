@@ -187,7 +187,11 @@ func knowledgeSnippet(item Knowledge, question string) string {
 		if text != "" {
 			text += "。"
 		}
-		text += strings.TrimSpace(item.Content)
+		content := item.Content
+		if item.ContentFormat == "html" {
+			content = stripHTML(content)
+		}
+		text += strings.TrimSpace(content)
 	}
 	if text == "" {
 		return "暂无摘要"

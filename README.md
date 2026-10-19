@@ -7,8 +7,8 @@
 | 项目 | 状态 |
 |---|---|
 | 线上环境 | `ops-qa`，门户与网关双副本 |
-| 网关镜像 | `cmdb/gateway-bff:1.0.225` |
-| 门户镜像 | `cmdb/web-portal:1.0.177` |
+| 网关镜像 | `cmdb/gateway-bff:1.0.226` |
+| 门户镜像 | `cmdb/web-portal:1.0.178` |
 | 任务执行器 | `cmdb/ansible-runner-service:1.0.5` |
 | 功能开发 | 约 90% |
 | 生产就绪 | 约 92%，数据库高可用、K8s 容量卡片、资产/Agent/任务并发压测已完成，仍需完成 RTO/RPO、真实 Runner 500 并发上限和正式验收报告 |
@@ -26,6 +26,7 @@
 - **CI/CD 与发布**：Argo CD、Harbor、GitLab 集成，发布门禁、回滚、漂移检测和 CMDB 关联。
 - **远程运维**：WebSSH、文件传输、批量执行、高风险命令审批、录像回放、主机指纹和安全策略。
 - **AIOps**：知识库、RAG 问答、引用反馈、Embedding 适配、LLM 网关和 Runbook。
+- **知识库**：多知识空间、多级目录、Markdown/富文本双编辑器、目录与文档 ACL、版本历史、附件和私有空间。
 - **系统管理**：Keycloak 认证、RBAC、数据范围、审计和生产就绪检查。
 
 ## 目录

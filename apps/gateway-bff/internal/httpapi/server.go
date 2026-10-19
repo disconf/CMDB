@@ -3910,6 +3910,301 @@ func NewServer() *Server {
 		}
 		writeJSON(w, http.StatusOK, aiopsService.FeedbackStats())
 	})
+	mux.HandleFunc("GET /api/v1/knowledge/spaces", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:view", "knowledge:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, aiopsService.KnowledgeSpaces(knowledgeActorFromUser(user)))
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/spaces", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:manage") {
+			return
+		}
+		var input aiops.KnowledgeSpaceInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.CreateKnowledgeSpace(input, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/knowledge/spaces/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:manage") {
+			return
+		}
+		var input aiops.KnowledgeSpaceInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.UpdateKnowledgeSpace(r.PathValue("id"), input, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/knowledge/spaces/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:manage") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := aiopsService.DeleteKnowledgeSpace(r.PathValue("id"), knowledgeActorFromUser(user)); err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/knowledge/tree", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:view", "knowledge:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		tree, err := aiopsService.KnowledgeTree(r.URL.Query().Get("spaceId"), knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, tree)
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/folders", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:edit", "knowledge:manage_folder") {
+			return
+		}
+		var input aiops.KnowledgeFolderInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.CreateKnowledgeFolder(input, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/knowledge/folders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:edit", "knowledge:manage_folder") {
+			return
+		}
+		var input aiops.KnowledgeFolderInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.UpdateKnowledgeFolder(r.PathValue("id"), input, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/folders/{id}/move", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:edit", "knowledge:manage_folder") {
+			return
+		}
+		var input struct {
+			ParentID string `json:"parentId"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.MoveKnowledgeFolder(r.PathValue("id"), input.ParentID, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/knowledge/folders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:edit", "knowledge:manage_folder") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if err := aiopsService.DeleteKnowledgeFolder(r.PathValue("id"), knowledgeActorFromUser(user)); err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/v1/knowledge/folders/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:view", "knowledge:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, aiopsService.KnowledgeACL("folder", r.PathValue("id"), knowledgeActorFromUser(user)))
+	})
+	mux.HandleFunc("PUT /api/v1/knowledge/folders/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:manage_acl") {
+			return
+		}
+		var input []aiops.KnowledgeACLInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		items, err := aiopsService.SetKnowledgeACL("folder", r.PathValue("id"), input, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
+	mux.HandleFunc("GET /api/v1/knowledge/documents", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:view", "knowledge:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		query := r.URL.Query()
+		includeSubfolders := query.Get("includeSubfolders") == "true" || query.Get("includeSubfolders") == "1"
+		writeJSON(w, http.StatusOK, aiopsService.KnowledgeDocuments(query.Get("spaceId"), query.Get("folderId"), query.Get("q"), query.Get("status"), includeSubfolders, knowledgeActorFromUser(user)))
+	})
+	mux.HandleFunc("GET /api/v1/knowledge/documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:view", "knowledge:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.KnowledgeDocument(r.PathValue("id"), knowledgeActorFromUser(user), true)
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/documents", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:create", "knowledge:edit") {
+			return
+		}
+		var input aiops.KnowledgeInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.CreateKnowledge(input, user.Username)
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("PUT /api/v1/knowledge/documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:edit") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		actor := knowledgeActorFromUser(user)
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), actor, "edit") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN"})
+			return
+		}
+		var input aiops.KnowledgeInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		item, err := aiopsService.UpdateKnowledge(r.PathValue("id"), input, user.Username)
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/knowledge/documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:delete") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		if !aiopsService.CanAccessKnowledge(r.PathValue("id"), knowledgeActorFromUser(user), "edit") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN"})
+			return
+		}
+		if err := aiopsService.DeleteKnowledge(r.PathValue("id")); err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/documents/{id}/publish", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:publish") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.PublishKnowledge(r.PathValue("id"), knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/documents/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:publish") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.ArchiveKnowledge(r.PathValue("id"), knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("POST /api/v1/knowledge/documents/{id}/move", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:edit") {
+			return
+		}
+		var input struct {
+			SpaceID  string `json:"spaceId"`
+			FolderID string `json:"folderId"`
+		}
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		item, err := aiopsService.MoveKnowledgeDocument(r.PathValue("id"), input.SpaceID, input.FolderID, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+	mux.HandleFunc("GET /api/v1/knowledge/documents/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:view", "knowledge:view") {
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		writeJSON(w, http.StatusOK, aiopsService.KnowledgeACL("document", r.PathValue("id"), knowledgeActorFromUser(user)))
+	})
+	mux.HandleFunc("PUT /api/v1/knowledge/documents/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeAny(w, r, authService, "aiops:execute", "knowledge:manage_acl") {
+			return
+		}
+		var input []aiops.KnowledgeACLInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		user, _ := authService.CurrentUser(bearerToken(r))
+		items, err := aiopsService.SetKnowledgeACL("document", r.PathValue("id"), input, knowledgeActorFromUser(user))
+		if err != nil {
+			writeKnowledgeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})
 	mux.HandleFunc("GET /api/v1/aiops/knowledge", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "aiops:view") {
 			return
@@ -4827,6 +5122,47 @@ func authorize(w http.ResponseWriter, r *http.Request, service *auth.Service, pe
 	}
 	writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN", "message": "没有功能访问权限"})
 	return false
+}
+
+func authorizeAny(w http.ResponseWriter, r *http.Request, service *auth.Service, permissions ...string) bool {
+	user, err := service.CurrentUser(bearerToken(r))
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED", "message": "登录状态已失效"})
+		return false
+	}
+	for _, permission := range permissions {
+		for _, item := range user.Permissions {
+			if item == permission || item == "*" {
+				return true
+			}
+		}
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN", "message": "没有功能访问权限"})
+	return false
+}
+
+func knowledgeActorFromUser(user auth.User) aiops.KnowledgeActor {
+	return aiops.KnowledgeActor{
+		Username:      user.Username,
+		Roles:         append([]string(nil), user.Roles...),
+		Permissions:   append([]string(nil), user.Permissions...),
+		ProjectGroups: append([]string(nil), user.ProjectGroups...),
+	}
+}
+
+func writeKnowledgeError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, aiops.ErrUnauthorized):
+		writeJSON(w, http.StatusForbidden, map[string]string{"code": "KNOWLEDGE_FORBIDDEN", "message": "没有该知识空间或文档的权限"})
+	case errors.Is(err, aiops.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"code": "KNOWLEDGE_NOT_FOUND", "message": "知识资源不存在"})
+	case errors.Is(err, aiops.ErrConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "KNOWLEDGE_CONFLICT", "message": "知识目录非空或文档版本已更新"})
+	case errors.Is(err, aiops.ErrValidation):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "KNOWLEDGE_VALIDATION", "message": "知识信息不完整"})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_FAILED", "message": err.Error()})
+	}
 }
 
 func (s *Server) Handler() http.Handler                { return s.handler }

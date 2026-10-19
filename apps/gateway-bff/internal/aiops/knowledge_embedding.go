@@ -113,12 +113,16 @@ func normalizeVector(vector []float32) []float32 {
 }
 
 func knowledgeEmbeddingText(item Knowledge) string {
+	content := item.Content
+	if item.ContentFormat == "html" {
+		content = stripHTML(content)
+	}
 	parts := []string{
 		strings.Repeat(item.Title+" ", 3),
 		strings.Repeat(item.Category+" ", 2),
 		strings.Repeat(strings.Join(item.Tags, " ")+" ", 2),
 		item.Summary,
-		item.Content,
+		content,
 	}
 	for _, ref := range item.Related {
 		parts = append(parts, ref.Name)

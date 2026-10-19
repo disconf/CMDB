@@ -17,7 +17,7 @@ import ReleasesPage from '@/components/ReleasesPage.vue'
 import ToolboxPage from '@/components/ToolboxPage.vue'
 import AiopsPage from '@/components/AiopsPage.vue'
 import SystemPage from '@/components/SystemPage.vue'
-import KnowledgePanel from '@/components/KnowledgePanel.vue'
+import KnowledgeCenter from '@/components/KnowledgeCenter.vue'
 import TrendChart from '@/components/TrendChart.vue'
 import { useDashboardStore } from '@/stores/useDashboardStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -79,7 +79,7 @@ async function signOut(){await auth.signOut();await router.replace('/login')}
       <TicketsPage v-else-if="route.path==='/tickets'" />
       <ReleasesPage v-else-if="route.path==='/releases'" />
       <ToolboxPage v-else-if="route.path==='/toolbox'" />
-      <AiopsPage v-else-if="route.path==='/aiops'" /><KnowledgePanel v-else-if="route.path==='/knowledge'" />
+      <AiopsPage v-else-if="route.path==='/aiops'" /><KnowledgeCenter v-else-if="route.path==='/knowledge'" />
       <SystemPage v-else-if="route.path==='/system'" />
       <ModulePage v-else />
     </main>
