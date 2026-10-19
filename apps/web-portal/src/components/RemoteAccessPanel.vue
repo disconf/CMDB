@@ -66,6 +66,10 @@ const terminalConnected = ref(false)
 const terminalError = ref('')
 const recordingLoading = ref(false)
 const recordingEvents = ref<TerminalEvent[]>([])
+const recordingSpeed = ref(1)
+const recordingProgress = ref(0)
+const recordingOutputTotal = ref(0)
+const recordingPlaying = ref(false)
 const terminalApprovals = ref<TerminalApproval[]>([])
 const securityPolicies = ref<SecurityPolicy[]>([])
 const policyAudits = ref<PolicyAudit[]>([])
@@ -86,6 +90,7 @@ let approvalPoll: ReturnType<typeof setInterval> | undefined
 let sessionPoll: ReturnType<typeof setInterval> | undefined
 let watermarkTimer: ReturnType<typeof setInterval> | undefined
 let recordingTimers: ReturnType<typeof setTimeout>[] = []
+let recordingPlayTimer: ReturnType<typeof setTimeout> | undefined
 let terminalInstance: XTerm | undefined
 let terminalFit: FitAddon | undefined
 let terminalSocket: WebSocket | undefined
@@ -129,6 +134,10 @@ const selectedSessionLease = computed(() => {
 const projectGroups = computed(() => [...new Set(assets.value.map(item => item.projectGroup).filter(Boolean))])
 const assetTags = computed(() => [...new Set(assets.value.flatMap(item => item.tags || []).filter(Boolean))])
 const visibleReplayLogs = computed(() => replaySession.value?.logs.slice(0, replayVisible.value) ?? [])
+const recordingProgressPercent = computed(() => {
+  if (!recordingOutputTotal.value) return 0
+  return Math.min(100, Math.round((recordingProgress.value / recordingOutputTotal.value) * 100))
+})
 const filteredHistory = computed(() => {
   const query = historyQuery.value.trim().toLowerCase()
   return history.value.filter(item => {
@@ -787,11 +796,14 @@ function closeInteractiveTerminal(updateMessage = true) {
 function clearRecordingTimers() {
   recordingTimers.forEach(timer => clearTimeout(timer))
   recordingTimers = []
+  stopTerminalRecordingPlayback()
 }
 
 function resetRecordingView() {
   clearRecordingTimers()
   recordingEvents.value = []
+  recordingProgress.value = 0
+  recordingOutputTotal.value = 0
   replayTerminal?.dispose()
   replayTerminal = undefined
   replayFit = undefined
@@ -820,6 +832,8 @@ async function loadTerminalRecording() {
   try {
     const recording = await request<TerminalRecording>(`/api/v1/discovery/remote-sessions/${encodeURIComponent(replaySession.value.id)}/terminal-recording`)
     recordingEvents.value = recording.events
+    recordingOutputTotal.value = recording.events.filter(event => event.direction === 'output').length
+    recordingProgress.value = 0
     await ensureReplayTerminal()
     playTerminalRecording()
     if (recording.truncated) message.value = '终端录像较长，当前仅回放最近 20000 个事件'
@@ -830,18 +844,50 @@ async function loadTerminalRecording() {
   }
 }
 
-async function playTerminalRecording() {
+function stopTerminalRecordingPlayback() {
+  if (recordingPlayTimer) { clearTimeout(recordingPlayTimer); recordingPlayTimer = undefined }
+  recordingPlaying.value = false
+}
+
+async function playTerminalRecording(resume = false) {
   if (!recordingEvents.value.length) return
   clearRecordingTimers()
   await ensureReplayTerminal()
-  replayTerminal?.reset()
-  let delay = 0
-  recordingEvents.value.forEach(event => {
-    if (event.direction !== 'output') return
-    delay += 80
-    const chunk = decodeTerminalData(event.data)
-    recordingTimers.push(setTimeout(() => replayTerminal?.write(chunk), Math.min(delay, 4000)))
-  })
+  if (!resume) {
+    replayTerminal?.reset()
+    recordingProgress.value = 0
+  }
+  const events = recordingEvents.value.filter(event => event.direction === 'output')
+  recordingOutputTotal.value = events.length
+  if (!events.length) return
+  recordingPlaying.value = true
+  let index = Math.min(recordingProgress.value, events.length)
+  let previous = index > 0 ? new Date(events[index - 1].createdAt).getTime() : new Date(events[0]?.createdAt || '').getTime()
+  const step = () => {
+    if (!recordingPlaying.value) return
+    if (index >= events.length) { recordingPlaying.value = false; return }
+    const event = events[index]
+    const current = new Date(event.createdAt).getTime()
+    const rawGap = Number.isFinite(current) && Number.isFinite(previous) ? current - previous : 80
+    const gap = Math.min(Math.max(rawGap, 16), 3000)
+    previous = current
+    recordingPlayTimer = setTimeout(() => {
+      if (!recordingPlaying.value) return
+      try { replayTerminal?.write(decodeTerminalData(event.data)) } catch {}
+      index += 1
+      recordingProgress.value = index
+      step()
+    }, Math.max(16, gap / Math.max(recordingSpeed.value, 1)))
+  }
+  step()
+}
+
+function pauseTerminalRecording() {
+  stopTerminalRecordingPlayback()
+}
+
+function resumeTerminalRecording() {
+  void playTerminalRecording(true)
 }
 
 async function openReplay(id:string) {
@@ -1174,7 +1220,7 @@ onBeforeUnmount(() => {
               <div v-if="!replayVisible" class="empty-access">点击开始回放，按时间顺序还原会话操作</div>
             </div>
             <div v-if="recordingEvents.length" class="terminal-recording">
-              <header><div><strong>PTY 逐屏录像</strong><span>{{recordingEvents.length}} 个原始终端事件</span></div><button @click="playTerminalRecording"><Play/>重新播放</button></header>
+              <header><div><strong>PTY 逐屏录像</strong><span>{{recordingOutputTotal}} 帧输出 · 已回放 {{recordingProgress}} 帧</span></div><div class="recording-controls"><button v-if="!recordingPlaying" @click="recordingProgress ? resumeTerminalRecording() : playTerminalRecording()"><Play/>{{recordingProgress ? '继续' : '播放'}}</button><button v-else @click="pauseTerminalRecording"><Pause/>暂停</button><button @click="playTerminalRecording()"><RotateCcw/>重播</button><select v-model.number="recordingSpeed" aria-label="回放速度"><option :value="1">1x</option><option :value="2">2x</option><option :value="4">4x</option></select></div></header><div class="recording-progress"><span :style="{width: recordingProgressPercent + '%'}"></span></div>
               <div ref="replayTerminalElement" class="xterm-shell replay-xterm" @click="focusReplayTerminal"></div>
             </div>
           </div>
@@ -1190,8 +1236,8 @@ onBeforeUnmount(() => {
 .remote-access{margin:18px 20px;padding:18px;border:1px solid #18384a;border-radius:12px;background:#071925}.remote-access>header{display:flex;justify-content:space-between;align-items:center}.remote-access h2{margin:4px 0}.remote-access header span{color:#6f91a5;font-size:11px}.access-grid{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:12px;margin-top:14px}.access-card{padding:13px;border:1px solid #173a52;background:#081f31}.access-card h3{display:flex;align-items:center;gap:7px;font-size:13px}.access-form{display:grid;gap:7px}.access-form input,.access-form select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.access-form label{font-size:11px;color:#7894a8}.grant-list article{display:grid;grid-template-columns:20px 1fr 50px 50px;gap:6px;align-items:center;padding:8px 0;border-top:1px solid #123043}.grant-list article.disabled{opacity:.5}.grant-list span{display:block;color:#6f91a5;font-size:10px}.grant-list button{padding:4px 5px;font-size:10px}.terminal-box{margin-top:10px}.command-row{display:flex;gap:6px}.command-row input{flex:1}.terminal-box pre{min-height:240px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#020b12;color:#bae6fd;padding:10px;font:11px monospace}.terminal-box pre span{display:block;margin-bottom:8px}.terminal-box em{color:#4f7188;font-style:normal;margin-right:8px}.terminal-box span[data-level=error]{color:#fb7185}.empty-access{padding:30px;text-align:center;color:#64869a}.access-card p{color:#6f91a5;font-size:10px}.access-error,.access-message{margin-top:10px;padding:9px;border:1px solid #7b3140;background:#351723;color:#ff9cad}.access-message{border-color:#155e75;background:#082b38;color:#a5f3fc}.history-card{grid-column:1/-1}.history-head{display:flex;justify-content:space-between;align-items:center}.history-head h3{margin:0}.history-head>div{display:grid;gap:3px}.history-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:11px}.history-toolbar{display:grid;grid-template-columns:1fr 180px;gap:10px;margin:13px 0}.search-box{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid #22465f;background:#061725}.search-box svg{width:15px;color:#64869a}.search-box input{width:100%;border:0;background:transparent;color:#dcecff;padding:9px 0;outline:0}.history-toolbar select{border:1px solid #22465f;background:#061725;color:#dcecff;padding:8px}.history-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(440px,1.6fr);gap:12px;min-height:330px}.history-list{max-height:460px;overflow:auto;border:1px solid #123043;background:#061620}.history-list>button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #123043;background:transparent;color:#dcecff;text-align:left;cursor:pointer}.history-list>button:hover,.history-list>button.selected{background:#0b2a3b}.history-main,.history-meta{display:grid;gap:3px}.history-main small,.history-meta small{color:#6f91a5;font-size:10px}.history-meta{text-align:right}.history-meta b{font-size:11px}.history-meta b[data-status=active],.replay-panel header>b[data-status=active]{color:#38bdf8}.history-meta b[data-status=closed],.replay-panel header>b[data-status=closed]{color:#2dd4bf}.history-meta b[data-status=interrupted],.replay-panel header>b[data-status=interrupted]{color:#f59e0b}.replay-panel{display:flex;min-width:0;flex-direction:column;border:1px solid #123043;background:#040f17}.replay-panel>header{display:flex;justify-content:space-between;gap:12px;padding:12px;border-bottom:1px solid #123043}.replay-panel>header>div{display:grid;gap:3px}.replay-panel>header span{color:#6f91a5}.replay-actions{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #123043}.replay-actions span{margin-left:auto;color:#6f91a5;font-size:11px}.replay-actions button{display:flex;align-items:center;gap:5px}.replay-timeline{flex:1;max-height:390px;overflow:auto;padding:12px}.replay-timeline>article{display:grid;grid-template-columns:28px 1fr;gap:8px}.timeline-dot{display:flex;justify-content:center;color:#22d3ee}.timeline-dot::after{content:'';width:1px;flex:1;margin-top:4px;background:#17415a}.timeline-content{min-width:0;padding-bottom:12px}.timeline-content>header{display:flex;align-items:center;gap:9px;margin-bottom:5px}.timeline-content>header b{color:#67e8f9;font-size:11px}.timeline-content time,.timeline-content span{color:#64869a;font-size:10px}.timeline-content pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;border-radius:7px;background:#020b12;color:#bae6fd;font:11px/1.55 monospace}.replay-timeline article[data-level=error] .timeline-dot{color:#fb7185}.replay-timeline article[data-level=error] pre{color:#fda4af}.replay-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed #1b4258;color:#64869a}.replay-placeholder svg{width:30px;height:30px;color:#22d3ee}.replay-placeholder strong{color:#c9e6f5}.host-key-probe{display:grid;gap:6px;padding:8px;border:1px solid #155e75;background:#082b38}.host-key-probe code{overflow-wrap:anywhere;color:#a5f3fc;font-size:10px}.host-key-probe b{color:#f59e0b;font-size:10px}.live-terminal-card{grid-column:1/-1}.live-terminal-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.live-terminal-head>div:first-child{display:grid;gap:4px}.live-terminal-head h3{margin:0}.terminal-actions{display:flex;align-items:center;gap:8px}.terminal-actions b{padding:4px 9px;border-radius:999px;font-size:11px}.terminal-actions b[data-state=offline]{background:#2a1721;color:#fda4af}.terminal-actions b[data-state=connecting]{background:#322712;color:#fcd34d}.terminal-actions b[data-state=online]{background:#0b2f2b;color:#5eead4}.terminal-actions button{display:flex;align-items:center;gap:5px}.xterm-shell{height:430px;margin-top:12px;padding:8px;border:1px solid #16445c;border-radius:8px;background:#020b12;overflow:hidden}.xterm-shell .xterm{height:100%}.terminal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;height:180px;margin-top:12px;border:1px dashed #1b4258;color:#64869a}.terminal-empty svg{width:30px;height:30px;color:#22d3ee}.terminal-empty strong{color:#c9e6f5}.terminal-recording{margin-top:12px;border-top:1px solid #123043}.terminal-recording>header{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.terminal-recording>header>div{display:grid;gap:3px}.terminal-recording>header span{color:#6f91a5;font-size:10px}.terminal-recording>header button{display:flex;align-items:center;gap:5px}.replay-xterm{height:300px;margin-top:0}.terminal-recording+.replay-timeline{max-height:220px}.approval-card{grid-column:1/-1}.approval-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.approval-head>div{display:grid;gap:4px}.approval-head h3{margin:0}.approval-head>div>span{color:#6f91a5}.approval-head>b{padding:5px 10px;border-radius:999px;background:#162c38;color:#8fb2c4;font-size:11px}.approval-head>b[data-active=true]{background:#3a2610;color:#fbbf24}.approval-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:10px;margin-top:12px}.approval-list article{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid #443414;background:#171307}.approval-list article[data-status=approved]{border-color:#14564c;background:#071b19}.approval-list article[data-status=rejected],.approval-list article[data-status=failed]{border-color:#692c3a;background:#1d0b11}.approval-list article[data-status=expired]{border-color:#40515d;background:#101820}.approval-main{display:grid;gap:6px;min-width:0}.approval-main header{display:flex;align-items:center;justify-content:space-between;gap:12px}.approval-main header b{font-size:10px;color:#fbbf24}.approval-main header b[data-status=approved]{color:#5eead4}.approval-main header b[data-status=rejected],.approval-main header b[data-status=failed]{color:#fb7185}.approval-main code{overflow-wrap:anywhere;padding:8px;border-radius:6px;background:#020b12;color:#fde68a;font:11px/1.5 monospace}.approval-main p{margin:0;color:#fca5a5;font-size:12px}.approval-main small{color:#7895a6;font-size:10px}.approval-list footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.approval-list footer input{flex:1;min-width:180px;padding:8px 9px;border:1px solid #4a3a1a;border-radius:6px;background:#080f14;color:#e5eef5}.approval-list footer button{display:flex;align-items:center;gap:5px}.approval-list footer span{color:#fbbf24;font-size:11px}@media(max-width:1200px){.access-grid{grid-template-columns:1fr}.history-layout{grid-template-columns:1fr}.history-list{max-height:260px}}
 .session-participants{margin-top:12px;padding-top:12px;border-top:1px solid #123043}.session-participants>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.session-participants>header>div{display:grid;gap:3px}.session-participants>header span{color:#6f91a5;font-size:10px}.session-participants>header>b{padding:4px 8px;border-radius:999px;background:#321a22;color:#fda4af;font-size:10px}.session-participants>header>b[data-online=true]{background:#0b2f2b;color:#5eead4}.collaborator-form{display:grid;grid-template-columns:1fr 130px auto;gap:7px;margin-top:10px}.collaborator-form input,.collaborator-form select{min-width:0;padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff}.collaborator-list{display:grid;gap:6px;margin-top:9px}.collaborator-list article{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;padding:8px;border:1px solid #123043;background:#061a29}.collaborator-list article>div{display:grid;gap:2px}.collaborator-list article strong{font-size:12px}.collaborator-list article span{color:#6f91a5;font-size:10px}.participant-empty{padding:10px;border:1px dashed #1b4258;color:#64869a;font-size:11px;text-align:center}.xterm-shell{position:relative}.terminal-watermark{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;transform:rotate(-18deg);pointer-events:none;color:rgba(103,232,249,.09);font:700 24px/1.6 monospace;letter-spacing:3px;text-align:center;white-space:pre-wrap;overflow:hidden}.danger{border-color:#7f1d1d!important;background:#331116!important;color:#fecaca!important}@media(max-width:1200px){.collaborator-form{grid-template-columns:1fr}}
 .grant-form{gap:9px}.grant-main-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grant-main-row input:not([type=checkbox]){min-width:150px}.grant-scope-picker{display:flex;gap:6px;max-height:150px;overflow:auto;padding:8px;border:1px solid #16445c;background:#04121c;flex-wrap:wrap}.grant-scope-picker label{display:flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid #17415a;background:#082638;color:#dcecff;font-size:11px;cursor:pointer}.grant-scope-picker label:hover{border-color:#22d3ee}.grant-scope-picker em{color:#64748b;font-size:10px;font-style:normal}.policy-template-center{margin-top:12px;padding:11px;border:1px solid #16445c;background:#061620}.policy-template-center>header,.policy-template-history>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.policy-template-center h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-template-center>header span,.policy-template-editor>header span{display:block;margin-top:3px;color:#6f91a5;font-size:10px}.policy-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin-top:9px}.policy-template-grid article{display:grid;gap:6px;padding:10px;border:1px solid #17415a;background:#082638}.policy-template-grid article.disabled{opacity:.5}.policy-template-grid article>header{display:flex;justify-content:space-between;gap:8px}.policy-template-grid article p{margin:0;color:#8fb2c4;font-size:10px}.policy-template-grid article small{color:#6f91a5;font-size:9px}.policy-template-grid article footer,.policy-template-editor footer{display:flex;gap:6px;flex-wrap:wrap}.policy-template-empty{display:grid;place-items:center;min-height:110px;color:#64748b;font-size:11px;border:1px dashed #17415a}.policy-template-editor{display:grid;gap:7px;margin-top:10px;padding:10px;border:1px solid #155e75;background:#04121c}.policy-template-editor input{padding:7px;border:1px solid #22465f;background:#061725;color:#dcecff}.policy-template-editor label{color:#8fb2c4;font-size:10px}.policy-template-history{display:grid;gap:5px;margin-top:10px;padding:9px;border:1px solid #123043;background:#040f17}.policy-template-history article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 5px;border-top:1px solid #123043}.policy-template-history article>div{display:grid;gap:2px}.policy-template-history span,.policy-template-history small{color:#7894a8;font-size:9px}
-</style>
-<style scoped>
+.recording-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.recording-controls select{padding:5px 7px;border:1px solid #22465f;background:#061725;color:#dcecff}.recording-progress{height:4px;margin:8px 0 0;border-radius:999px;background:#0b2233;overflow:hidden}.recording-progress span{display:block;height:100%;background:linear-gradient(90deg,#0891b2,#22d3ee);transition:width .15s linear}
+</style><style scoped>
 .policy-card{grid-column:1/-1}.policy-head{display:flex;justify-content:space-between;align-items:center;gap:16px}.policy-head>div{display:grid;gap:4px}.policy-head h3{margin:0}.policy-head>div>span{color:#6f91a5;font-size:10px}.policy-head>b{padding:4px 9px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:10px}.policy-layout{display:grid;grid-template-columns:minmax(420px,1fr) minmax(420px,1.15fr);gap:14px;margin-top:12px}.policy-form{display:grid;gap:8px;padding:12px;border:1px solid #123043;background:#061620}.policy-form input,.policy-form select,.policy-form textarea{padding:8px;border:1px solid #22465f;background:#061725;color:#dcecff;font:inherit}.policy-form textarea{resize:vertical}.policy-row,.policy-limits{display:grid;grid-template-columns:1fr 1fr;gap:8px}.policy-numbers{display:grid;grid-template-columns:1fr 1fr;gap:8px}.policy-numbers label,.policy-limits label,.policy-path{display:grid;gap:4px;color:#7894a8;font-size:10px}.policy-switches{display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:#8fb2c4;font-size:11px}.policy-switches label{display:flex;align-items:center;gap:4px}.policy-switches select{margin-left:auto}.policy-actions{display:flex;gap:8px}.policy-list{display:grid;gap:8px;max-height:520px;overflow:auto}.policy-list article{display:grid;gap:7px;padding:11px;border:1px solid #16445c;background:#061a29}.policy-list article.disabled{opacity:.55}.policy-list article>header{display:flex;justify-content:space-between;gap:12px}.policy-list article>header>div{display:grid;gap:2px}.policy-list article>header span,.policy-list article p{color:#6f91a5;font-size:10px;margin:0}.policy-list article>header>b{color:#5eead4;font-size:10px}.policy-list article.disabled>header>b{color:#94a3b8}.policy-list footer{display:flex;gap:7px}.policy-effective{margin:9px 0 0;padding:7px 9px;border:1px solid #155e75;background:#082b38;color:#a5f3fc!important}.policy-list article>p:first-of-type{color:#8fb2c4}.policy-list article>p:last-of-type{color:#64748b}@media(max-width:1200px){.policy-layout{grid-template-columns:1fr}.policy-numbers{grid-template-columns:1fr 1fr}}.policy-templates{display:flex;align-items:stretch;gap:8px;margin-top:12px;padding:9px;border:1px solid #16445c;background:#061620;flex-wrap:wrap}.policy-templates>span{align-self:center;color:#67e8f9;font-size:10px;font-weight:700;letter-spacing:1px}.policy-templates button{display:grid;gap:2px;min-width:170px;padding:8px 10px;border:1px solid #17415a;background:#082638;color:#dcecff;text-align:left;cursor:pointer}.policy-templates button:hover{border-color:#22d3ee;background:#0b3045}.policy-templates strong{font-size:11px}.policy-templates small{color:#7894a8;font-size:9px}.policy-templates em{margin-left:auto;align-self:center;color:#64748b;font-size:10px;font-style:normal}.policy-list article>small{color:#64748b;font-size:9px}.policy-batch{margin-top:14px;padding:12px;border:1px solid #16445c;background:#061620}.policy-batch>header,.policy-audit>header{display:flex;justify-content:space-between;align-items:center;gap:12px}.policy-batch h4,.policy-audit h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-batch>header>div,.policy-audit>header{display:grid;gap:3px}.policy-batch>header span,.policy-audit>header span{color:#6f91a5;font-size:10px}.policy-batch>header>b{padding:4px 8px;border-radius:999px;background:#0c2b3d;color:#67e8f9;font-size:10px}.policy-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.policy-target-grid>section{min-width:0;padding:9px;border:1px solid #123043;background:#040f17}.policy-target-grid>section>strong{display:block;margin-bottom:7px;color:#8fb2c4;font-size:10px}.policy-target-list{display:grid;gap:5px;max-height:180px;overflow:auto}.policy-target-list label{display:flex;align-items:flex-start;gap:7px;padding:6px;border:1px solid transparent;color:#dcecff;cursor:pointer}.policy-target-list label:hover{border-color:#1b5069;background:#071c29}.policy-target-list input{margin-top:2px}.policy-target-list span{display:grid;gap:2px;min-width:0;font-size:11px}.policy-target-list small{overflow:hidden;color:#6f91a5;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.policy-target-list em{color:#64748b;font-size:10px;font-style:normal}.policy-batch>footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}.policy-batch>footer span{color:#7894a8;font-size:10px}.policy-audit{margin-top:14px;padding:12px;border:1px solid #16445c;background:#040f17}.policy-audit ul{display:grid;gap:0;max-height:240px;overflow:auto;margin:9px 0 0;padding:0;list-style:none}.policy-audit li{display:grid;grid-template-columns:145px 180px 1fr;gap:10px;padding:8px 4px;border-top:1px solid #123043;color:#8fb2c4;font-size:10px}.policy-audit time{color:#64748b}.policy-audit strong{color:#a5f3fc}.policy-audit-empty{display:block!important;color:#64748b!important;text-align:center}.policy-list article>p:last-of-type{color:#64748b}@media(max-width:1200px){.policy-layout{grid-template-columns:1fr}.policy-numbers{grid-template-columns:1fr 1fr}.policy-target-grid{grid-template-columns:1fr}.policy-audit li{grid-template-columns:1fr}.policy-templates em{width:100%;margin-left:0}}
 
 .grant-form{gap:9px}.grant-main-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grant-main-row input:not([type=checkbox]){min-width:150px}.grant-scope-picker{display:flex;gap:6px;max-height:150px;overflow:auto;padding:8px;border:1px solid #16445c;background:#04121c;flex-wrap:wrap}.grant-scope-picker label{display:flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid #17415a;background:#082638;color:#dcecff;font-size:11px;cursor:pointer}.grant-scope-picker label:hover{border-color:#22d3ee}.grant-scope-picker em{color:#64748b;font-size:10px;font-style:normal}.policy-template-center{margin-top:12px;padding:11px;border:1px solid #16445c;background:#061620}.policy-template-center>header,.policy-template-history>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.policy-template-center h4{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}.policy-template-center>header span,.policy-template-editor>header span{display:block;margin-top:3px;color:#6f91a5;font-size:10px}.policy-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin-top:9px}.policy-template-grid article{display:grid;gap:6px;padding:10px;border:1px solid #17415a;background:#082638}.policy-template-grid article.disabled{opacity:.5}.policy-template-grid article>header{display:flex;justify-content:space-between;gap:8px}.policy-template-grid article p{margin:0;color:#8fb2c4;font-size:10px}.policy-template-grid article small{color:#6f91a5;font-size:9px}.policy-template-grid article footer,.policy-template-editor footer{display:flex;gap:6px;flex-wrap:wrap}.policy-template-empty{display:grid;place-items:center;min-height:110px;color:#64748b;font-size:11px;border:1px dashed #17415a}.policy-template-editor{display:grid;gap:7px;margin-top:10px;padding:10px;border:1px solid #155e75;background:#04121c}.policy-template-editor input{padding:7px;border:1px solid #22465f;background:#061725;color:#dcecff}.policy-template-editor label{color:#8fb2c4;font-size:10px}.policy-template-history{display:grid;gap:5px;margin-top:10px;padding:9px;border:1px solid #123043;background:#040f17}.policy-template-history article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 5px;border-top:1px solid #123043}.policy-template-history article>div{display:grid;gap:2px}.policy-template-history span,.policy-template-history small{color:#7894a8;font-size:9px}
@@ -1220,4 +1266,5 @@ onBeforeUnmount(() => {
 .file-transfer-lane button{justify-self:start;white-space:nowrap}
 .access-grid[data-view=approvals]{grid-template-columns:1fr}
 .access-grid[data-view=security]{grid-template-columns:1fr}
-.access-grid[data-view=security] .access-card{min-width:0}</style>
+.access-grid[data-view=security] .access-card{min-width:0}.recording-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.recording-controls select{padding:5px 7px;border:1px solid #22465f;background:#061725;color:#dcecff}.recording-progress{height:4px;margin:8px 0 0;border-radius:999px;background:#0b2233;overflow:hidden}.recording-progress span{display:block;height:100%;background:linear-gradient(90deg,#0891b2,#22d3ee);transition:width .15s linear}
+</style>
