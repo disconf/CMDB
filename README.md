@@ -90,6 +90,9 @@ npm run build
 
 ## 部署与运维
 
+- 单机 Docker Compose 与 Kubernetes 完整部署手册：[docs/deployment/平台部署手册-单机与Kubernetes.md](docs/deployment/平台部署手册-单机与Kubernetes.md)
+- 单机一键部署包：[deploy/single-node](deploy/single-node/README.md)
+- 平台使用手册（含全部模块截图）：[docs/manuals/平台使用手册.md](docs/manuals/平台使用手册.md)
 - 部署形态、镜像和发布步骤：[docs/deployment/v1.5-ops-qa-deployment.md](docs/deployment/v1.5-ops-qa-deployment.md)
 - 备份、灾备与压测：[docs/operations/生产就绪与灾备演练.md](docs/operations/生产就绪与灾备演练.md)
 - 远程运维设计与验收：[docs/design/远程运维重构设计.md](docs/design/远程运维重构设计.md)
