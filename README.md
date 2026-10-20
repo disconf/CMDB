@@ -7,8 +7,8 @@
 | 项目 | 状态 |
 |---|---|
 | 线上环境 | `ops-qa`，门户与网关双副本 |
-| 网关镜像 | `cmdb/gateway-bff:1.0.228` |
-| 门户镜像 | `cmdb/web-portal:1.0.179` |
+| 网关镜像 | `cmdb/gateway-bff:1.0.230` |
+| 门户镜像 | `cmdb/web-portal:1.0.180` |
 | 任务执行器 | `cmdb/ansible-runner-service:1.0.5` |
 | 功能开发 | 约 90% |
 | 生产就绪 | 约 92%，数据库高可用、K8s 容量卡片、资产/Agent/任务并发压测已完成，仍需完成 RTO/RPO、真实 Runner 500 并发上限和正式验收报告 |

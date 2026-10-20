@@ -15,22 +15,33 @@ import (
 
 var ErrNotFound = errors.New("not found")
 var ErrValidation = errors.New("validation")
+var ErrConflict = errors.New("conflict")
+var ErrForbidden = errors.New("forbidden")
+var ErrKeycloakNotConfigured = errors.New("keycloak admin is not configured")
 
 type User struct {
-	ID             string   `json:"id"`
-	Username       string   `json:"username"`
-	DisplayName    string   `json:"displayName"`
-	Department     string   `json:"department"`
-	Email          string   `json:"email,omitempty"`
-	Roles          []string `json:"roles"`
-	Status         string   `json:"status"`
-	LastLogin      string   `json:"lastLogin"`
-	DataScope      string   `json:"dataScope"`
-	ProjectGroups  []string `json:"projectGroups"`
-	ScopeTags      []string `json:"scopeTags"`
-	KeycloakGroups []string `json:"keycloakGroups,omitempty"`
-	KeycloakID     string   `json:"keycloakId,omitempty"`
-	SyncedAt       string   `json:"syncedAt,omitempty"`
+	ID                  string               `json:"id"`
+	Username            string               `json:"username"`
+	DisplayName         string               `json:"displayName"`
+	Department          string               `json:"department"`
+	Email               string               `json:"email,omitempty"`
+	Roles               []string             `json:"roles"`
+	Status              string               `json:"status"`
+	LastLogin           string               `json:"lastLogin"`
+	DataScope           string               `json:"dataScope"`
+	ProjectGroups       []string             `json:"projectGroups"`
+	ScopeTags           []string             `json:"scopeTags"`
+	KeycloakGroups      []string             `json:"keycloakGroups,omitempty"`
+	KeycloakID          string               `json:"keycloakId,omitempty"`
+	SyncedAt            string               `json:"syncedAt,omitempty"`
+	DeletedAt           string               `json:"deletedAt,omitempty"`
+	DeletedBy           string               `json:"deletedBy,omitempty"`
+	PermissionOverrides []PermissionOverride `json:"permissionOverrides"`
+}
+type PermissionOverride struct {
+	Code   string `json:"code"`
+	Effect string `json:"effect"`
+	Reason string `json:"reason,omitempty"`
 }
 type Role struct {
 	ID            string   `json:"id"`
@@ -41,6 +52,7 @@ type Role struct {
 	DataScope     string   `json:"dataScope"`
 	ProjectGroups []string `json:"projectGroups"`
 	ScopeTags     []string `json:"scopeTags"`
+	System        bool     `json:"system"`
 }
 type Module struct {
 	Code       string `json:"code"`
@@ -102,6 +114,16 @@ func NewService() *Service {
 	return service
 }
 func (s *Service) Users() []User {
+	result := make([]User, 0, len(s.users))
+	for _, item := range s.allUsers() {
+		if item.Status != "deleted" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (s *Service) allUsers() []User {
 	if s.db != nil {
 		_ = s.reload(context.Background())
 	}
@@ -115,7 +137,21 @@ func (s *Service) Roles() []Role {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return cloneRoles(s.roles)
+	result := cloneRoles(s.roles)
+	counts := map[string]int{}
+	for _, user := range s.users {
+		if user.Status == "deleted" {
+			continue
+		}
+		for _, roleID := range user.Roles {
+			counts[roleID]++
+		}
+	}
+	for index := range result {
+		result[index].System = isSystemRole(result[index].ID)
+		result[index].Users = counts[result[index].ID]
+	}
+	return result
 }
 func (s *Service) Modules() []Module { return append([]Module(nil), s.modules...) }
 func (s *Service) Audits() []Audit {
@@ -125,8 +161,12 @@ func (s *Service) Audits() []Audit {
 }
 func (s *Service) Settings() []Setting { return append([]Setting(nil), s.settings...) }
 func (s *Service) Summary() Summary {
-	r := Summary{Users: len(s.users), Roles: len(s.roles), Modules: len(s.modules), AuditsToday: len(s.audits)}
+	r := Summary{Roles: len(s.roles), Modules: len(s.modules), AuditsToday: len(s.audits)}
 	for _, u := range s.users {
+		if u.Status == "deleted" {
+			continue
+		}
+		r.Users++
 		if u.Status == "active" {
 			r.ActiveUsers++
 		}
@@ -135,6 +175,14 @@ func (s *Service) Summary() Summary {
 }
 func (s *Service) audit(actor, action, resource, detail string) {
 	s.audits = append([]Audit{{"audit-" + time.Now().Format("150405"), time.Now().Format("15:04:05"), actor, action, resource, "127.0.0.1", "success", detail}}, s.audits...)
+}
+
+func isSystemRole(id string) bool {
+	switch id {
+	case "platform-admin", "viewer", "operator", "approver":
+		return true
+	}
+	return false
 }
 func (s *Service) ToggleUser(id, actor string) (User, error) {
 	for _, user := range s.Users() {

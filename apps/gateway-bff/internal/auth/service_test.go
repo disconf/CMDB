@@ -83,6 +83,20 @@ func TestSameAccountCanCreateMultipleSessions(t *testing.T) {
 	}
 }
 
+func TestDeniedPermissionOverridesWildcard(t *testing.T) {
+	service := NewService()
+	service.SetAccessProfileResolver(func(username string) (AccessProfile, error) {
+		return AccessProfile{Permissions: []string{"job:view"}, DeniedPermissions: []string{"system:manage"}}, nil
+	})
+	user := service.applyAccessProfile(User{Username: "admin", Permissions: []string{"*"}, DataScope: "all"})
+	if Allows(user, "system:manage") {
+		t.Fatal("denied permission must override wildcard")
+	}
+	if !Allows(user, "cmdb:view") || !Allows(user, "job:view") {
+		t.Fatalf("other permissions should remain: %#v", user)
+	}
+}
+
 func TestAccessProfileResolverMergesDataScope(t *testing.T) {
 	service := NewService()
 	service.SetAccessProfileResolver(func(username string) (AccessProfile, error) {

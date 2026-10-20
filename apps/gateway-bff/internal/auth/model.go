@@ -1,21 +1,23 @@
 package auth
 
 type User struct {
-	ID            string   `json:"id"`
-	Username      string   `json:"username"`
-	DisplayName   string   `json:"displayName"`
-	Roles         []string `json:"roles"`
-	Permissions   []string `json:"permissions"`
-	DataScope     string   `json:"dataScope"`
-	ProjectGroups []string `json:"projectGroups"`
-	ScopeTags     []string `json:"scopeTags"`
+	ID                string   `json:"id"`
+	Username          string   `json:"username"`
+	DisplayName       string   `json:"displayName"`
+	Roles             []string `json:"roles"`
+	Permissions       []string `json:"permissions"`
+	DeniedPermissions []string `json:"deniedPermissions,omitempty"`
+	DataScope         string   `json:"dataScope"`
+	ProjectGroups     []string `json:"projectGroups"`
+	ScopeTags         []string `json:"scopeTags"`
 }
 
 type AccessProfile struct {
-	DataScope     string
-	ProjectGroups []string
-	ScopeTags     []string
-	Permissions   []string
+	DataScope         string
+	ProjectGroups     []string
+	ScopeTags         []string
+	Permissions       []string
+	DeniedPermissions []string
 }
 
 type Session struct {

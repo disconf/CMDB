@@ -63,7 +63,7 @@ func (s *Service) SyncKeycloak(ctx context.Context) (SyncReport, error) {
 		return SyncReport{}, err
 	}
 	existing := map[string]User{}
-	for _, user := range s.Users() {
+	for _, user := range s.allUsers() {
 		existing[user.Username] = user
 	}
 	report := SyncReport{Users: len(kcUsers), Groups: len(kcGroups)}
@@ -83,6 +83,9 @@ func (s *Service) SyncKeycloak(ctx context.Context) (SyncReport, error) {
 			item = User{ID: "kc-" + kcUser.ID, Username: kcUser.Username, DataScope: "groups"}
 			report.Created++
 		} else {
+			if item.Status == "deleted" {
+				continue
+			}
 			report.Updated++
 		}
 		item.KeycloakID = kcUser.ID

@@ -109,7 +109,7 @@ func NewServer() *Server {
 		if err != nil {
 			return auth.AccessProfile{}, err
 		}
-		return auth.AccessProfile{DataScope: profile.DataScope, ProjectGroups: profile.ProjectGroups, ScopeTags: profile.ScopeTags, Permissions: profile.Permissions}, nil
+		return auth.AccessProfile{DataScope: profile.DataScope, ProjectGroups: profile.ProjectGroups, ScopeTags: profile.ScopeTags, Permissions: profile.Permissions, DeniedPermissions: profile.DeniedPermissions}, nil
 	})
 	idcService := idc.NewService()
 	credentialsService := credentials.NewService()
@@ -4735,11 +4735,92 @@ func NewServer() *Server {
 		}
 		writeJSON(w, 200, systemService.Users())
 	})
+	mux.HandleFunc("POST /api/v1/system/users", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		var input system.UserCreateInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		actor, _ := authService.CurrentUser(bearerToken(r))
+		item, password, err := systemService.CreateUser(input, actor.Username)
+		if err != nil {
+			writeSystemError(w, err)
+			return
+		}
+		auditService.Record(actor.Username, "system.user.create", item.ID, item.Username)
+		writeJSON(w, http.StatusCreated, map[string]any{"user": item, "initialPassword": password})
+	})
+	mux.HandleFunc("DELETE /api/v1/system/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		actor, _ := authService.CurrentUser(bearerToken(r))
+		item, err := systemService.DeleteUser(r.PathValue("id"), actor.Username)
+		if err != nil {
+			writeSystemError(w, err)
+			return
+		}
+		authService.InvalidateUser(item.Username)
+		auditService.Record(actor.Username, "system.user.delete", item.ID, item.Username)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/v1/system/users/{id}/reset-password", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		actor, _ := authService.CurrentUser(bearerToken(r))
+		password, err := systemService.ResetUserPassword(r.PathValue("id"), actor.Username)
+		if err != nil {
+			writeSystemError(w, err)
+			return
+		}
+		auditService.Record(actor.Username, "system.user.reset_password", r.PathValue("id"), "一次性密码已轮换")
+		writeJSON(w, http.StatusOK, map[string]string{"password": password})
+	})
 	mux.HandleFunc("GET /api/v1/system/roles", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
 			return
 		}
 		writeJSON(w, 200, systemService.Roles())
+	})
+	mux.HandleFunc("GET /api/v1/system/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		writeJSON(w, http.StatusOK, system.Permissions())
+	})
+	mux.HandleFunc("POST /api/v1/system/roles", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		var input system.RoleCreateInput
+		if decodeJSON(r, &input) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"code": "INVALID_REQUEST"})
+			return
+		}
+		actor, _ := authService.CurrentUser(bearerToken(r))
+		item, err := systemService.CreateRole(input, actor.Username)
+		if err != nil {
+			writeSystemError(w, err)
+			return
+		}
+		auditService.Record(actor.Username, "system.role.create", item.ID, item.Name)
+		writeJSON(w, http.StatusCreated, item)
+	})
+	mux.HandleFunc("DELETE /api/v1/system/roles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r, authService, "system:manage") {
+			return
+		}
+		actor, _ := authService.CurrentUser(bearerToken(r))
+		if err := systemService.DeleteRole(r.PathValue("id"), actor.Username); err != nil {
+			writeSystemError(w, err)
+			return
+		}
+		auditService.Record(actor.Username, "system.role.delete", r.PathValue("id"), "")
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/v1/system/modules", func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authService, "system:manage") {
@@ -4845,10 +4926,12 @@ func NewServer() *Server {
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
 		x, err := systemService.ToggleUser(r.PathValue("id"), u.Username)
-		if errors.Is(err, system.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"code": "USER_NOT_FOUND"})
+		if err != nil {
+			writeSystemError(w, err)
 			return
 		}
+		authService.InvalidateUser(x.Username)
+		auditService.Record(u.Username, "system.user.toggle", x.ID, x.Status)
 		writeJSON(w, 200, x)
 	})
 	mux.HandleFunc("PUT /api/v1/system/users/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -4862,14 +4945,12 @@ func NewServer() *Server {
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
 		x, err := systemService.UpdateUser(r.PathValue("id"), in, u.Username)
-		if errors.Is(err, system.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"code": "USER_NOT_FOUND"})
+		if err != nil {
+			writeSystemError(w, err)
 			return
 		}
-		if errors.Is(err, system.ErrValidation) {
-			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "用户数据范围无效"})
-			return
-		}
+		authService.InvalidateUser(x.Username)
+		auditService.Record(u.Username, "system.user.update", x.ID, x.Username)
 		writeJSON(w, 200, x)
 	})
 	mux.HandleFunc("PUT /api/v1/system/roles/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
@@ -4883,14 +4964,12 @@ func NewServer() *Server {
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
 		x, err := systemService.UpdateRoleProfile(r.PathValue("id"), in, u.Username)
-		if errors.Is(err, system.ErrNotFound) {
-			writeJSON(w, 404, map[string]string{"code": "ROLE_NOT_FOUND"})
+		if err != nil {
+			writeSystemError(w, err)
 			return
 		}
-		if errors.Is(err, system.ErrValidation) {
-			writeJSON(w, 422, map[string]string{"code": "VALIDATION_ERROR", "message": "角色权限或数据范围无效"})
-			return
-		}
+		authService.InvalidateUsers(systemService.UsersWithRole(x.ID))
+		auditService.Record(u.Username, "system.role.update", x.ID, x.Name)
 		writeJSON(w, 200, x)
 	})
 	mux.HandleFunc("POST /api/v1/system/sync/keycloak", func(w http.ResponseWriter, r *http.Request) {
@@ -4903,6 +4982,11 @@ func NewServer() *Server {
 			return
 		}
 		u, _ := authService.CurrentUser(bearerToken(r))
+		usernames := make([]string, 0, len(systemService.Users()))
+		for _, item := range systemService.Users() {
+			usernames = append(usernames, item.Username)
+		}
+		authService.InvalidateUsers(usernames)
 		systemService.RecordAudit(u.Username, "同步 Keycloak 组织", "系统管理", "用户与用户组已同步")
 		writeJSON(w, 200, report)
 	})
@@ -5179,10 +5263,8 @@ func authorize(w http.ResponseWriter, r *http.Request, service *auth.Service, pe
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "UNAUTHORIZED", "message": "登录状态已失效"})
 		return false
 	}
-	for _, item := range user.Permissions {
-		if item == permission || item == "*" {
-			return true
-		}
+	if auth.Allows(user, permission) {
+		return true
 	}
 	writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN", "message": "没有功能访问权限"})
 	return false
@@ -5195,10 +5277,8 @@ func authorizeAny(w http.ResponseWriter, r *http.Request, service *auth.Service,
 		return false
 	}
 	for _, permission := range permissions {
-		for _, item := range user.Permissions {
-			if item == permission || item == "*" {
-				return true
-			}
+		if auth.Allows(user, permission) {
+			return true
 		}
 	}
 	writeJSON(w, http.StatusForbidden, map[string]string{"code": "FORBIDDEN", "message": "没有功能访问权限"})
@@ -5226,6 +5306,23 @@ func writeKnowledgeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "KNOWLEDGE_VALIDATION", "message": "知识信息不完整"})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "KNOWLEDGE_FAILED", "message": err.Error()})
+	}
+}
+
+func writeSystemError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, system.ErrForbidden):
+		writeJSON(w, http.StatusForbidden, map[string]string{"code": "SYSTEM_FORBIDDEN", "message": "不能执行该用户或角色操作"})
+	case errors.Is(err, system.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"code": "SYSTEM_RESOURCE_NOT_FOUND", "message": "用户或角色不存在"})
+	case errors.Is(err, system.ErrConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "SYSTEM_CONFLICT", "message": "用户名已存在、角色仍在使用或不能移除最后一个管理员"})
+	case errors.Is(err, system.ErrValidation):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "SYSTEM_VALIDATION", "message": "用户、角色、权限或数据范围不合法"})
+	case errors.Is(err, system.ErrKeycloakNotConfigured):
+		writeJSON(w, http.StatusFailedDependency, map[string]string{"code": "KEYCLOAK_ADMIN_NOT_CONFIGURED", "message": "未配置 Keycloak 管理凭据"})
+	default:
+		writeJSON(w, http.StatusBadGateway, map[string]string{"code": "SYSTEM_OPERATION_FAILED", "message": err.Error()})
 	}
 }
 

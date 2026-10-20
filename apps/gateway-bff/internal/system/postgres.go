@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS platform_users (
   synced_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS deleted_by text NOT NULL DEFAULT '';
+ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS permission_overrides jsonb NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS platform_roles (
   id text PRIMARY KEY,
   name text NOT NULL,
@@ -140,6 +143,9 @@ func loadSystemData(ctx context.Context, db *sql.DB) ([]User, []Role, []Module, 
 	}
 	roleCounts := map[string]int{}
 	for _, user := range users {
+		if user.Status == "deleted" {
+			continue
+		}
 		for _, role := range user.Roles {
 			roleCounts[role]++
 		}
@@ -159,7 +165,7 @@ func loadSystemData(ctx context.Context, db *sql.DB) ([]User, []Role, []Module, 
 }
 
 func loadUsers(ctx context.Context, db *sql.DB) ([]User, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id,username,display_name,department,email,roles,status,last_login,data_scope,project_groups,scope_tags,keycloak_groups,keycloak_id,synced_at FROM platform_users ORDER BY username`)
+	rows, err := db.QueryContext(ctx, `SELECT id,username,display_name,department,email,roles,status,last_login,data_scope,project_groups,scope_tags,keycloak_groups,keycloak_id,synced_at,deleted_at,deleted_by,permission_overrides FROM platform_users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -167,17 +173,21 @@ func loadUsers(ctx context.Context, db *sql.DB) ([]User, error) {
 	result := []User{}
 	for rows.Next() {
 		var item User
-		var roles, projectGroups, scopeTags, keycloakGroups []byte
-		var syncedAt sql.NullTime
-		if err = rows.Scan(&item.ID, &item.Username, &item.DisplayName, &item.Department, &item.Email, &roles, &item.Status, &item.LastLogin, &item.DataScope, &projectGroups, &scopeTags, &keycloakGroups, &item.KeycloakID, &syncedAt); err != nil {
+		var roles, projectGroups, scopeTags, keycloakGroups, permissionOverrides []byte
+		var syncedAt, deletedAt sql.NullTime
+		if err = rows.Scan(&item.ID, &item.Username, &item.DisplayName, &item.Department, &item.Email, &roles, &item.Status, &item.LastLogin, &item.DataScope, &projectGroups, &scopeTags, &keycloakGroups, &item.KeycloakID, &syncedAt, &deletedAt, &item.DeletedBy, &permissionOverrides); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(roles, &item.Roles)
 		_ = json.Unmarshal(projectGroups, &item.ProjectGroups)
 		_ = json.Unmarshal(scopeTags, &item.ScopeTags)
 		_ = json.Unmarshal(keycloakGroups, &item.KeycloakGroups)
+		_ = json.Unmarshal(permissionOverrides, &item.PermissionOverrides)
 		if syncedAt.Valid {
 			item.SyncedAt = syncedAt.Time.Local().Format("2006-01-02 15:04:05")
+		}
+		if deletedAt.Valid {
+			item.DeletedAt = deletedAt.Time.Local().Format("2006-01-02 15:04:05")
 		}
 		result = append(result, item)
 	}
@@ -244,10 +254,11 @@ func upsertSystemUser(ctx context.Context, db *sql.DB, item User) error {
 	projectGroups, _ := json.Marshal(item.ProjectGroups)
 	scopeTags, _ := json.Marshal(item.ScopeTags)
 	keycloakGroups, _ := json.Marshal(item.KeycloakGroups)
-	_, err := db.ExecContext(ctx, `INSERT INTO platform_users(id,username,display_name,department,email,roles,status,last_login,data_scope,project_groups,scope_tags,keycloak_groups,keycloak_id,synced_at,updated_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
-		ON CONFLICT(id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,department=excluded.department,email=excluded.email,roles=excluded.roles,status=excluded.status,last_login=excluded.last_login,data_scope=excluded.data_scope,project_groups=excluded.project_groups,scope_tags=excluded.scope_tags,keycloak_groups=excluded.keycloak_groups,keycloak_id=excluded.keycloak_id,synced_at=excluded.synced_at,updated_at=now()`,
-		item.ID, item.Username, item.DisplayName, item.Department, item.Email, roles, item.Status, item.LastLogin, item.DataScope, projectGroups, scopeTags, keycloakGroups, item.KeycloakID, nullableTime(item.SyncedAt))
+	permissionOverrides, _ := json.Marshal(item.PermissionOverrides)
+	_, err := db.ExecContext(ctx, `INSERT INTO platform_users(id,username,display_name,department,email,roles,status,last_login,data_scope,project_groups,scope_tags,keycloak_groups,keycloak_id,synced_at,deleted_at,deleted_by,permission_overrides,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
+		ON CONFLICT(id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,department=excluded.department,email=excluded.email,roles=excluded.roles,status=excluded.status,last_login=excluded.last_login,data_scope=excluded.data_scope,project_groups=excluded.project_groups,scope_tags=excluded.scope_tags,keycloak_groups=excluded.keycloak_groups,keycloak_id=excluded.keycloak_id,synced_at=excluded.synced_at,deleted_at=excluded.deleted_at,deleted_by=excluded.deleted_by,permission_overrides=excluded.permission_overrides,updated_at=now()`,
+		item.ID, item.Username, item.DisplayName, item.Department, item.Email, roles, item.Status, item.LastLogin, item.DataScope, projectGroups, scopeTags, keycloakGroups, item.KeycloakID, nullableTime(item.SyncedAt), nullableTime(item.DeletedAt), item.DeletedBy, permissionOverrides)
 	return err
 }
 

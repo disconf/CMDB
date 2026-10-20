@@ -43,8 +43,17 @@ func NewService() *Service {
 	allPermissions := []string{"dashboard:view", "cmdb:view", "cmdb:manage", "discovery:view", "discovery:manage", "topology:view", "monitor:view", "monitor:manage", "job:view", "job:manage", "ticket:view", "ticket:manage", "release:view", "release:manage", "toolbox:use", "aiops:view", "aiops:execute", "system:manage"}
 	service := &Service{
 		accounts: map[string]account{
-			"admin":  {"admin123", User{"u-admin", "admin", "运维管理员", []string{"platform-admin"}, allPermissions, "all", []string{"华东业务组", "核心系统组"}, nil}},
-			"viewer": {"viewer123", User{"u-viewer", "viewer", "只读用户", []string{"viewer"}, []string{"dashboard:view", "cmdb:view", "topology:view", "monitor:view"}, "groups", []string{"华东业务组"}, nil}},
+			"admin": {"admin123", User{
+				ID: "u-admin", Username: "admin", DisplayName: "运维管理员",
+				Roles: []string{"platform-admin"}, Permissions: allPermissions,
+				DataScope: "all", ProjectGroups: []string{"华东业务组", "核心系统组"},
+			}},
+			"viewer": {"viewer123", User{
+				ID: "u-viewer", Username: "viewer", DisplayName: "只读用户",
+				Roles:       []string{"viewer"},
+				Permissions: []string{"dashboard:view", "cmdb:view", "topology:view", "monitor:view"},
+				DataScope:   "groups", ProjectGroups: []string{"华东业务组"},
+			}},
 		},
 		sessions: make(map[string]User),
 		modules:  []Module{{"dashboard", "全局态势", "/", "LayoutDashboard", "dashboard:view"}, {"cmdb", "CMDB 资产", "/cmdb", "Database", "cmdb:view"}, {"idc", "机房管理", "/idc", "Building2", "cmdb:view"}, {"discovery", "Agent 与发现", "/discovery", "Radar", "discovery:view"}, {"remote", "远程运维", "/remote", "Terminal", "discovery:view"}, {"topology", "拓扑中心", "/topology", "Network", "topology:view"}, {"monitor", "监控告警", "/monitor", "BellRing", "monitor:view"}, {"jobs", "任务管理", "/jobs", "ClipboardCheck", "job:view"}, {"tickets", "工单中心", "/tickets", "TicketCheck", "ticket:view"}, {"releases", "CI/CD 与发布", "/releases", "Rocket", "release:view"}, {"toolbox", "排查工具", "/toolbox", "Wrench", "toolbox:use"}, {"aiops", "AI 运维", "/aiops", "Bot", "aiops:view"}, {"knowledge", "知识库", "/knowledge", "BookOpen", "aiops:view"}, {"system", "系统管理", "/system", "Settings", "system:manage"}},
@@ -110,18 +119,27 @@ func (s *Service) Modules(token string) ([]Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	allowed := make(map[string]struct{}, len(user.Permissions))
-	for _, p := range user.Permissions {
-		allowed[p] = struct{}{}
-	}
 	modules := make([]Module, 0, len(s.modules))
 	for _, module := range s.modules {
-		_, wildcard := allowed["*"]
-		if _, ok := allowed[module.Permission]; ok || wildcard {
+		if Allows(user, module.Permission) {
 			modules = append(modules, module)
 		}
 	}
 	return modules, nil
+}
+
+func Allows(user User, permission string) bool {
+	for _, denied := range user.DeniedPermissions {
+		if strings.TrimSpace(denied) == permission {
+			return false
+		}
+	}
+	for _, item := range user.Permissions {
+		if item == permission || item == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) Logout(token string) {
@@ -199,6 +217,7 @@ func newToken() (string, error) {
 func cloneUser(user User) User {
 	user.Roles = append([]string(nil), user.Roles...)
 	user.Permissions = append([]string(nil), user.Permissions...)
+	user.DeniedPermissions = append([]string(nil), user.DeniedPermissions...)
 	user.ProjectGroups = append([]string(nil), user.ProjectGroups...)
 	user.ScopeTags = append([]string(nil), user.ScopeTags...)
 	return user
@@ -222,6 +241,10 @@ func (s *Service) applyAccessProfile(user User) User {
 			user.ProjectGroups = mergeStrings(user.ProjectGroups, profile.ProjectGroups)
 			user.ScopeTags = mergeStrings(user.ScopeTags, profile.ScopeTags)
 			user.Permissions = mergeStrings(user.Permissions, profile.Permissions)
+			for _, denied := range profile.DeniedPermissions {
+				user.Permissions = removeString(user.Permissions, strings.TrimSpace(denied))
+			}
+			user.DeniedPermissions = mergeStrings(user.DeniedPermissions, profile.DeniedPermissions)
 		}
 	}
 	if user.DataScope == "" {
@@ -234,6 +257,19 @@ func (s *Service) applyAccessProfile(user User) User {
 		}
 	}
 	return user
+}
+
+func removeString(values []string, target string) []string {
+	if target == "" {
+		return values
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func mergeStrings(base, extra []string) []string {

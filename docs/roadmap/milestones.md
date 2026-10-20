@@ -1,7 +1,7 @@
 # CMDB 平台里程碑
 
 > 更新时间：2026-10-19
-> 当前环境：`ops-qa` 已上线，网关 `1.0.228`，门户 `1.0.179`
+> 当前环境：`ops-qa` 已上线，网关 `1.0.230`，门户 `1.0.180`
 
 ## 总体进度
 
@@ -33,8 +33,8 @@
 
 | 组件 | 状态 |
 |---|---|
-| gateway | 2/2 Ready，`1.0.228` |
-| web | 2/2 Ready，`1.0.179` |
+| gateway | 2/2 Ready，`1.0.230` |
+| web | 2/2 Ready，`1.0.180` |
 | cmdb-ansible-runner | 1/1 Ready，`1.0.5` |
 | Keycloak | 2/2 Ready |
 | Kafka | 3 broker + 3 controller Ready |

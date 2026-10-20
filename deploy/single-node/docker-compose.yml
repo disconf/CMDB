@@ -374,7 +374,7 @@ services:
       context: ../../apps/gateway-bff
       args:
         GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
-    image: cmdb/gateway:${CMDB_VERSION:-1.0.228}
+    image: cmdb/gateway:${CMDB_VERSION:-1.0.230}
     env_file:
       - ./secrets/gateway.env
     environment:
@@ -404,7 +404,7 @@ services:
     <<: *common
     build:
       context: ../../apps/web-portal
-    image: cmdb/web:${CMDB_VERSION:-1.0.179}
+    image: cmdb/web:${CMDB_VERSION:-1.0.180}
     environment:
       GATEWAY_URL: http://gateway:8080
       KEYCLOAK_URL: ${KEYCLOAK_PUBLIC_URL}
