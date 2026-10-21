@@ -243,11 +243,7 @@ func (s *Service) appendEventLocked(alertID, eventType, operator, message string
 }
 func (s *Service) Summary() Summary {
 	r := Summary{}
-	if s.prometheusURL == "" {
-		r.Targets = 24
-		r.Healthy = 21
-		r.Availability = 99.96
-	} else {
+	if s.prometheusURL != "" {
 		total, _ := s.instant(`count(up)`)
 		healthy, _ := s.instant(`sum(up)`)
 		r.Targets = int(total)

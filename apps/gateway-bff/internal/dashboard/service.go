@@ -8,10 +8,11 @@ import (
 
 	"cmdb/gateway-bff/internal/audit"
 	"cmdb/gateway-bff/internal/cmdb"
-	"cmdb/gateway-bff/internal/demo"
 	"cmdb/gateway-bff/internal/discovery"
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/monitor"
+	"cmdb/gateway-bff/internal/releases"
+	"cmdb/gateway-bff/internal/tickets"
 )
 
 type Service struct {
@@ -20,6 +21,8 @@ type Service struct {
 	monitor   *monitor.Service
 	jobs      *jobs.Service
 	audit     *audit.Service
+	tickets   *tickets.Service
+	releases  *releases.Service
 }
 
 // SetActivitySources wires the job and audit services used by the activity and
@@ -27,6 +30,11 @@ type Service struct {
 func (s *Service) SetActivitySources(jobsService *jobs.Service, auditService *audit.Service) {
 	s.jobs = jobsService
 	s.audit = auditService
+}
+
+func (s *Service) SetOperationsSources(ticketsService *tickets.Service, releasesService *releases.Service) {
+	s.tickets = ticketsService
+	s.releases = releasesService
 }
 
 func NewService() *Service { return &Service{} }
@@ -39,26 +47,12 @@ func (s *Service) Overview() Overview {
 	if s.cmdb != nil && s.discovery != nil && s.monitor != nil {
 		return s.liveOverview()
 	}
-	if !demo.Enabled() {
-		return Overview{UpdatedAt: time.Now(), Capacity: []CapacityItem{}, Health: []HealthItem{}, Topology: Topology{Layers: []TopologyLayer{}}, AlertTrend: []TrendPoint{}, Alerts: []Alert{}, Jobs: []Job{}, Timeline: []TimelineEvent{}, Deployments: []Deployment{}}
-	}
 	return Overview{
 		UpdatedAt: time.Now(),
-		Metrics:   Metrics{AssetTotal: 4286, OnlineAgents: 1024, ActiveAlerts: 37, TodayJobs: 186},
-		Capacity:  []CapacityItem{{"CPU 使用率", 63.2, "1012 / 1600 Core"}, {"内存使用率", 71.4, "914.3 / 1280 GB"}, {"存储使用率", 58.7, "58.7 / 100 TB"}, {"网络带宽", 32.6, "3.26 / 10 Gbps"}},
-		Health:    []HealthItem{{"计算资源", 92}, {"存储资源", 88}, {"网络资源", 95}, {"中间件", 90}},
-		Topology: Topology{Layers: []TopologyLayer{
-			{"项目", []TopologyNode{{"project-ecom", "电商平台", "project", "healthy"}, {"project-fin", "金融核心", "project", "healthy"}, {"project-data", "数据中台", "project", "warning"}}},
-			{"应用", []TopologyNode{{"app-user", "用户中心", "app", "healthy"}, {"app-order", "订单中心", "app", "healthy"}, {"app-pay", "支付中心", "app", "warning"}, {"app-data", "数据分析", "app", "healthy"}}},
-			{"服务", []TopologyNode{{"svc-user", "用户服务", "service", "healthy"}, {"svc-order", "订单服务", "service", "healthy"}, {"svc-pay", "支付服务", "service", "critical"}, {"svc-stock", "库存服务", "service", "healthy"}}},
-			{"实例", []TopologyNode{{"ins-vm", "云主机 286", "instance", "healthy"}, {"ins-pod", "Pod 1,842", "instance", "warning"}, {"ins-db", "数据库 76", "instance", "critical"}, {"ins-cache", "缓存 48", "instance", "healthy"}}},
-			{"基础设施", []TopologyNode{{"infra-phy", "物理机集群", "infra", "healthy"}, {"infra-cloud", "私有云", "infra", "healthy"}, {"infra-k8s", "Kubernetes", "infra", "warning"}, {"infra-net", "网络设备", "infra", "healthy"}}},
-		}},
-		AlertTrend:  []TrendPoint{{"00:00", 34, 8}, {"02:00", 48, 12}, {"04:00", 57, 14}, {"06:00", 72, 18}, {"08:00", 63, 15}, {"10:00", 88, 21}, {"12:00", 51, 12}, {"14:00", 62, 14}, {"16:00", 47, 11}, {"18:00", 58, 13}, {"20:00", 44, 9}, {"22:00", 37, 8}},
-		Alerts:      []Alert{{"ALT-301", "critical", "数据库连接数过高", "db-prod-01", "10:28:31"}, {"ALT-302", "critical", "支付服务响应超时", "pay-service-02", "10:27:12"}, {"ALT-303", "high", "磁盘使用率超阈值", "vm-ecs-192", "10:25:44"}, {"ALT-304", "high", "K8s Pod 重启频繁", "pod-user-7f8d", "10:24:18"}},
-		Jobs:        []Job{{"JOB-101", "数据库备份任务", "备份", 75, "running", "张三"}, {"JOB-102", "安全漏洞扫描", "巡检", 45, "running", "李四"}, {"JOB-103", "日志清理任务", "维护", 90, "running", "王五"}, {"JOB-104", "配置合规检查", "巡检", 20, "queued", "赵六"}},
-		Timeline:    []TimelineEvent{{"EVT-1", "10:28:31", "alert", "告警触发：数据库连接数过高", "告警中心"}, {"EVT-2", "10:24:18", "alert", "告警触发：K8s Pod 重启频繁", "告警中心"}, {"EVT-3", "10:15:42", "job", "任务完成：配置合规检查", "任务中心"}, {"EVT-4", "10:12:07", "deploy", "发布成功：订单服务 v2.3.1", "发布管理"}},
-		Deployments: []Deployment{{"订单服务", "v2.3.1", "success", "10:12"}, {"用户中心", "v1.8.4", "running", "10:06"}, {"推荐服务", "v3.0.0", "failed", "09:48"}},
+		Capacity:  []CapacityItem{}, Health: []HealthItem{}, Sources: []DataSource{},
+		Topology: Topology{Layers: []TopologyLayer{}}, AlertTrend: []TrendPoint{},
+		Alerts: []Alert{}, Jobs: []Job{}, Timeline: []TimelineEvent{}, Deployments: []Deployment{},
+		Releases: ReleaseSnapshot{Recent: []Deployment{}},
 	}
 }
 
@@ -69,9 +63,25 @@ func (s *Service) liveOverview() Overview {
 	now := time.Now()
 	assets := s.cmdb.InventoryAssets()
 	alerts := s.monitor.Alerts()
+	assetSnapshot := buildAssetSnapshot(assets)
+	agentSnapshot := buildAgentSnapshot(s.discovery.Summary())
+	monitorSnapshot := buildMonitorSnapshot(s.monitor.Coverage(monitorExpectedHosts(s.cmdb.MonitoringAssets())))
+	applyAlertSummary(&monitorSnapshot, alerts)
+	taskSnapshot := s.buildTaskSnapshot(now)
+	ticketSnapshot := s.buildTicketSnapshot(now)
+	releaseSnapshot := s.buildReleaseSnapshot(now)
+	command := buildCommandCenter(assetSnapshot, agentSnapshot, monitorSnapshot, taskSnapshot, ticketSnapshot, releaseSnapshot)
 	return Overview{
 		UpdatedAt:   now,
 		Metrics:     Metrics{AssetTotal: s.cmdb.Summary().Total, OnlineAgents: s.discovery.Summary().Online, ActiveAlerts: s.monitor.ActiveCount(), TodayJobs: s.todayJobs(now)},
+		Command:     command,
+		Assets:      assetSnapshot,
+		Agents:      agentSnapshot,
+		Monitoring:  monitorSnapshot,
+		Tasks:       taskSnapshot,
+		Tickets:     ticketSnapshot,
+		Releases:    releaseSnapshot,
+		Sources:     buildDataSources(now, assetSnapshot, agentSnapshot, monitorSnapshot, taskSnapshot, ticketSnapshot, releaseSnapshot),
 		Capacity:    buildCapacity(assets),
 		Health:      buildHealth(assets),
 		Topology:    buildTopology(assets),
@@ -79,8 +89,134 @@ func (s *Service) liveOverview() Overview {
 		Alerts:      buildAlertList(alerts, 10),
 		Jobs:        s.activeJobs(),
 		Timeline:    s.recentTimeline(8),
-		Deployments: []Deployment{},
+		Deployments: releaseSnapshot.Recent,
 	}
+}
+
+func buildAssetSnapshot(assets []cmdb.Asset) AssetSnapshot {
+	projects := map[string]bool{}
+	environments := map[string]bool{}
+	sources := map[string]bool{}
+	result := AssetSnapshot{Total: len(assets)}
+	for _, asset := range assets {
+		status := strings.ToLower(strings.TrimSpace(asset.Status))
+		switch status {
+		case "online", "healthy", "running", "ready":
+			result.Online++
+		case "warning", "degraded":
+			result.Warning++
+		case "offline", "down", "failed", "error":
+			result.Offline++
+		default:
+			result.Unknown++
+		}
+		if value := strings.TrimSpace(asset.ProjectGroup); value != "" {
+			projects[value] = true
+		}
+		if value := strings.TrimSpace(asset.Environment); value != "" {
+			environments[value] = true
+		}
+		if value := strings.TrimSpace(asset.Source); value != "" {
+			sources[value] = true
+		}
+	}
+	result.ProjectGroups = len(projects)
+	result.Environments = len(environments)
+	result.Sources = len(sources)
+	return result
+}
+
+func buildAgentSnapshot(summary discovery.Summary) AgentSnapshot {
+	item := AgentSnapshot{Total: summary.Total, Online: summary.Online, Offline: summary.Offline, Pending: summary.Pending}
+	if item.Total > 0 {
+		item.Coverage = percentage(item.Online, item.Total)
+	}
+	return item
+}
+
+func buildMonitorSnapshot(coverage monitor.Coverage) MonitorSnapshot {
+	return buildMonitorSnapshotFromCoverage(coverage)
+}
+
+func monitorExpectedHosts(assets []cmdb.Asset) []monitor.ExpectedHost {
+	expected := make([]monitor.ExpectedHost, 0, len(assets))
+	for _, asset := range assets {
+		expected = append(expected, monitor.ExpectedHost{
+			AssetID: asset.ID, Name: asset.Name, IP: asset.IP, Environment: asset.Environment,
+			ProjectGroup: asset.ProjectGroup, AssetStatus: asset.Status,
+		})
+	}
+	return expected
+}
+
+func (s *Service) buildTaskSnapshot(now time.Time) TaskSnapshot {
+	if s.jobs == nil {
+		return TaskSnapshot{}
+	}
+	summary := s.jobs.Summary()
+	return buildTaskSnapshotFromItems(s.jobs.Jobs(), summary.Schedules, now)
+}
+
+func (s *Service) buildTicketSnapshot(now time.Time) TicketSnapshot {
+	if s.tickets == nil {
+		return TicketSnapshot{SLACompliance: 100}
+	}
+	items, err := s.tickets.List()
+	if err != nil {
+		return TicketSnapshot{SLACompliance: 100}
+	}
+	return buildTicketSnapshotFromItems(items, now)
+}
+
+func (s *Service) buildReleaseSnapshot(now time.Time) ReleaseSnapshot {
+	if s.releases == nil {
+		return ReleaseSnapshot{Recent: []Deployment{}}
+	}
+	releasesList, err := s.releases.List()
+	if err != nil {
+		return ReleaseSnapshot{Recent: []Deployment{}}
+	}
+	return buildReleaseSnapshotFromItems(releasesList, now)
+}
+
+func buildCommandCenter(assets AssetSnapshot, agents AgentSnapshot, monitoring MonitorSnapshot, tasks TaskSnapshot, tickets TicketSnapshot, releases ReleaseSnapshot) CommandCenter {
+	item := CommandCenter{
+		PlatformStatus: "operational", AgentCoverage: agents.Coverage, MonitorCoverage: monitoring.Coverage,
+		TaskSuccessRate: tasks.SuccessRate, SLACompliance: tickets.SLACompliance,
+		ReleaseSuccessRate: releases.SuccessRate, ActiveIncidents: monitoring.Critical, CriticalAlerts: monitoring.Critical,
+	}
+	if assets.Total > 0 {
+		item.AssetHealth = percentage(assets.Online, assets.Total)
+	}
+	if monitoring.Critical > 0 || assets.Offline > 0 {
+		item.PlatformStatus = "attention"
+	}
+	return item
+}
+
+func buildDataSources(now time.Time, assets AssetSnapshot, agents AgentSnapshot, monitoring MonitorSnapshot, tasks TaskSnapshot, tickets TicketSnapshot, releases ReleaseSnapshot) []DataSource {
+	updatedAt := now.Format(time.RFC3339)
+	status := func(count int) string {
+		if count > 0 {
+			return "live"
+		}
+		return "idle"
+	}
+	return []DataSource{
+		{Code: "cmdb", Name: "CMDB 主数据", Status: status(assets.Total), Detail: fmt.Sprintf("%d 个项目组 · %d 个环境", assets.ProjectGroups, assets.Environments), Count: assets.Total, UpdatedAt: updatedAt},
+		{Code: "agents", Name: "Agent 舰队", Status: status(agents.Total), Detail: fmt.Sprintf("在线 %d · 离线 %d", agents.Online, agents.Offline), Count: agents.Total, UpdatedAt: updatedAt},
+		{Code: "prometheus", Name: "Prometheus", Status: status(monitoring.Targets), Detail: fmt.Sprintf("%d/%d 目标健康", monitoring.Healthy, monitoring.Targets), Count: monitoring.Targets, UpdatedAt: updatedAt},
+		{Code: "jobs", Name: "自动化任务", Status: status(tasks.Today + tasks.Running + tasks.PendingApproval + tasks.Schedules), Detail: fmt.Sprintf("今日 %d 次 · 运行中 %d · 待审批 %d", tasks.Today, tasks.Running, tasks.PendingApproval), Count: tasks.Today + tasks.Running + tasks.PendingApproval + tasks.Schedules, UpdatedAt: updatedAt},
+		{Code: "tickets", Name: "工单与审批", Status: status(tickets.Total), Detail: fmt.Sprintf("待处理 %d · SLA预警 %d", tickets.Pending+tickets.Processing, tickets.SLAWarning), Count: tickets.Total, UpdatedAt: updatedAt},
+		{Code: "releases", Name: "发布流水线", Status: status(releases.Today + releases.Running + len(releases.Recent)), Detail: fmt.Sprintf("今日 %d 次 · 运行中 %d · 成功率 %.1f%%", releases.Today, releases.Running, releases.SuccessRate), Count: releases.Today + releases.Running + len(releases.Recent), UpdatedAt: updatedAt},
+	}
+}
+
+func percentage(part, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(int(float64(part)*1000/float64(total)+0.5)) / 10
 }
 
 type assetGroup struct {

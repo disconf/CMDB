@@ -122,6 +122,7 @@ func NewServer() *Server {
 	toolboxService.SetTopologyGraphProvider(topologyService)
 	auditService := audit.NewService()
 	service.SetActivitySources(jobsService, auditService)
+	service.SetOperationsSources(ticketsService, releasesService)
 	cicdService := cicd.NewService()
 	argoSyncCoordinator := newArgoSyncCoordinator(cicdService, cmdbService, releasesService, monitorService, ticketsService, auditService)
 	go argoSyncCoordinator.Run(context.Background(), argoSyncInterval())
@@ -265,26 +266,41 @@ func NewServer() *Server {
 		user, _ := authService.CurrentUser(bearerToken(r))
 		scope := newUserScope(cmdbService, user)
 		if !scope.global {
-			summary := cmdbService.SummaryFor(assetScopeForUser(user))
+			now := time.Now()
+			assets := cmdbService.InventoryAssetsFor(assetScopeForUser(user))
 			alerts := filterMonitorAlerts(monitorService.Alerts(), scope)
-			overview.Metrics.AssetTotal = summary.Total
-			overview.Metrics.OnlineAgents = summary.Online
-			overview.Metrics.TodayJobs = 0
-			overview.Metrics.ActiveAlerts = 0
-			overview.Alerts = []dashboard.Alert{}
-			for _, item := range alerts {
-				if item.Status == "resolved" {
-					continue
-				}
-				overview.Metrics.ActiveAlerts++
-				if len(overview.Alerts) < 10 {
-					overview.Alerts = append(overview.Alerts, dashboard.Alert{ID: item.ID, Level: item.Severity, Title: item.Title, Target: item.Target, OccurredAt: item.StartedAt})
+			agents := []discovery.Agent{}
+			for _, agent := range discoveryService.Agents() {
+				if scope.allowsIdentifier(agent.ID) || scope.allowsIdentifier(agent.IP) || scope.allowsIdentifier(agent.Name) {
+					agents = append(agents, agent)
 				}
 			}
-			overview.Topology = dashboard.Topology{Layers: []dashboard.TopologyLayer{}}
-			overview.Jobs = []dashboard.Job{}
-			overview.Timeline = []dashboard.TimelineEvent{}
-			overview.Deployments = []dashboard.Deployment{}
+			monitorAssets := []cmdb.Asset{}
+			for _, asset := range cmdbService.MonitoringAssets() {
+				if scope.allowsAsset(asset) {
+					monitorAssets = append(monitorAssets, asset)
+				}
+			}
+			expected := make([]monitor.ExpectedHost, 0, len(monitorAssets))
+			for _, asset := range monitorAssets {
+				if !scope.allowsAsset(asset) {
+					continue
+				}
+				expected = append(expected, monitor.ExpectedHost{
+					AssetID: asset.ID, Name: asset.Name, IP: asset.IP, Environment: asset.Environment,
+					ProjectGroup: asset.ProjectGroup, AssetStatus: asset.Status,
+				})
+			}
+			visibleJobs := filterJobs(jobsService.Jobs(), scope)
+			visibleSchedules := filterSchedules(jobsService.Schedules(), scope)
+			visibleTickets, _ := ticketsService.List()
+			visibleTickets = filterTickets(visibleTickets, cmdbService, scope)
+			visibleReleases, _ := releasesService.List()
+			visibleReleases = filterReleases(visibleReleases, visibleTickets, scope)
+			overview = dashboard.BuildScopedOverview(
+				now, assets, agents, monitorService.Coverage(expected), alerts,
+				visibleJobs, visibleSchedules, visibleTickets, visibleReleases,
+			)
 		}
 		writeJSON(w, http.StatusOK, overview)
 	})
