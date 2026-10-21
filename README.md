@@ -7,7 +7,7 @@
 | 项目 | 状态 |
 |---|---|
 | 线上环境 | `ops-qa`，门户与网关双副本 |
-| 网关镜像 | `cmdb/gateway-bff:1.0.230` |
+| 网关镜像 | `cmdb/gateway-bff:1.0.232` |
 | 门户镜像 | `cmdb/web-portal:1.0.180` |
 | 任务执行器 | `cmdb/ansible-runner-service:1.0.5` |
 | 功能开发 | 约 90% |

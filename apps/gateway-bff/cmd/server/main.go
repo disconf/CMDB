@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,6 +37,20 @@ func main() {
 	shutdownTracing, tracingErr := observability.SetupTracing(context.Background())
 	if tracingErr != nil {
 		slog.Error("initialize tracing", "error", tracingErr)
+	}
+	if pprofAddr := os.Getenv("PPROF_ADDR"); pprofAddr != "" {
+		debugMux := http.NewServeMux()
+		debugMux.HandleFunc("/debug/pprof/", pprof.Index)
+		debugMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		debugMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		debugMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		debugMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		go func() {
+			slog.Warn("gateway pprof enabled", "address", pprofAddr)
+			if err := http.ListenAndServe(pprofAddr, debugMux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("gateway pprof serve", "error", err)
+			}
+		}()
 	}
 
 	api := httpapi.NewServer()

@@ -144,3 +144,26 @@ func loadAlertEvents(ctx context.Context, db *sql.DB) (map[string][]AlertEvent, 
 	}
 	return result, rows.Err()
 }
+
+func loadAlertEventsForAlert(ctx context.Context, db *sql.DB, alertID string, limit int) ([]AlertEvent, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id,alert_id,event_type,operator,message,created_at
+		FROM monitor_alert_events WHERE alert_id=$1 ORDER BY created_at DESC LIMIT $2`, alertID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []AlertEvent{}
+	for rows.Next() {
+		var event AlertEvent
+		var createdAt time.Time
+		if err := rows.Scan(&event.ID, &event.AlertID, &event.Type, &event.Operator, &event.Message, &createdAt); err != nil {
+			return nil, err
+		}
+		event.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		result = append(result, event)
+	}
+	return result, rows.Err()
+}

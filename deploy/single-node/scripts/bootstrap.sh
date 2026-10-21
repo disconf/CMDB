@@ -15,7 +15,7 @@ docker compose version >/dev/null
 
 if [[ ! -f "${ENV_FILE}" ]]; then
 	cp "${ROOT_DIR}/.env.example" "${ENV_FILE}"
-	sed -i 's/^CMDB_VERSION=.*/CMDB_VERSION=1.0.230/' "${ENV_FILE}"
+	sed -i 's/^CMDB_VERSION=.*/CMDB_VERSION=1.0.232/' "${ENV_FILE}"
 fi
 
 set -a

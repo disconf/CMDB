@@ -2,7 +2,7 @@
 
 > 版本：V1.5
 > 更新日期：2026-10-19
-> 适用版本：网关 `1.0.230`、门户 `1.0.180`
+> 适用版本：网关 `1.0.232`、门户 `1.0.180`
 > 覆盖范围：单机 Docker Compose、生产 Kubernetes、系统初始化、中间件、业务服务、升级、备份和验收
 
 ## 1. 文档目标与结论
@@ -265,7 +265,7 @@ Vault 使用文件存储且默认封存，主机重启后必须解封；解封�
 
 ```bash
 cd /opt/cmdb-src/deploy/single-node
-sudo ./scripts/backup.sh before-v1.0.230
+sudo ./scripts/backup.sh before-v1.0.232
 ```
 
 更新代码或镜像版本后：
@@ -625,7 +625,7 @@ kubectl -n ops-qa rollout status deployment/cmdb-ansible-runner --timeout=300s
 如使用镜像仓库，先在 `ops-qa-platform.yaml` 修改网关和门户版本：
 
 ```text
-harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.230
+harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.232
 harbor.qa.bcavt.com/cmdb/web-portal:1.0.180
 ```
 

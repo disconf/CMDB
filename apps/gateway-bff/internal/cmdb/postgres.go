@@ -222,12 +222,7 @@ func openPostgres(databaseURL string, seed []Asset) (*sql.DB, []Asset, map[strin
 		db.Close()
 		return nil, nil, nil, nil, err
 	}
-	snapshots, err := loadTopologySnapshots(ctx, db)
-	if err != nil {
-		db.Close()
-		return nil, nil, nil, nil, err
-	}
-	return db, assets, history, snapshots, nil
+	return db, assets, history, nil, nil
 }
 
 type execer interface {

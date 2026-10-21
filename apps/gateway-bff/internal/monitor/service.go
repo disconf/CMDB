@@ -156,11 +156,6 @@ func NewService() *Service {
 		s.db = db
 		s.notificationQueue = s.notificationQueue && db != nil
 		s.alerts = alerts
-		events, loadErr := loadAlertEvents(context.Background(), db)
-		if loadErr != nil {
-			panic(fmt.Sprintf("load monitor alert events: %v", loadErr))
-		}
-		s.events = events
 		routes, routeErr := loadRoutingRules(context.Background(), db)
 		if routeErr != nil {
 			panic(fmt.Sprintf("load monitor routing rules: %v", routeErr))
@@ -210,7 +205,6 @@ func (s *Service) Host(assetID string) HostMonitoring {
 }
 func (s *Service) Events(alertID string) ([]AlertEvent, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	found := false
 	for _, alert := range s.alerts {
 		if alert.ID == alertID {
@@ -218,9 +212,17 @@ func (s *Service) Events(alertID string) ([]AlertEvent, error) {
 			break
 		}
 	}
+	s.mu.RUnlock()
 	if !found {
 		return nil, ErrNotFound
 	}
+	if s.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return loadAlertEventsForAlert(ctx, s.db, alertID, 200)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return append([]AlertEvent(nil), s.events[alertID]...), nil
 }
 
@@ -232,6 +234,7 @@ func (s *Service) appendEventLocked(alertID, eventType, operator, message string
 			return err
 		}
 		event.ID, event.CreatedAt = id, createdAt.Local().Format("2006-01-02 15:04:05")
+		return nil
 	} else {
 		event.ID = int64(len(s.events[alertID]) + 1)
 	}

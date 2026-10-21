@@ -134,10 +134,6 @@ func (s *Service) ReloadFromDatabase(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload CMDB history: %w", err)
 	}
-	snapshots, err := loadTopologySnapshots(ctx, s.db)
-	if err != nil {
-		return fmt.Errorf("reload CMDB topology snapshots: %w", err)
-	}
 	groups, err := loadProjectGroups(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("reload CMDB project groups: %w", err)
@@ -147,7 +143,6 @@ func (s *Service) ReloadFromDatabase(ctx context.Context) error {
 	s.assets = assets
 	s.models = withModelCounts(models, assets)
 	s.history = history
-	s.snapshots = snapshots
 	s.projectGroups = groups
 	return nil
 }
