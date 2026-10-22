@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
-  Blocks, Copy, FileClock, KeyRound, Pencil, Plus, RefreshCw, Save,
-  Settings, ShieldCheck, ToggleLeft, Trash2, UserPlus, Users, Waypoints, X,
+  BadgeCheck, Blocks, Copy, Download, FileClock, HardDrive, KeyRound, Pencil, Plus, RefreshCw, Save,
+  Settings, ShieldCheck, ToggleLeft, Trash2, Upload, UserPlus, Users, Waypoints, X,
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { auditTone, userStatusLabel } from '@/features/system/systemModel'
@@ -31,6 +31,13 @@ type ProjectionStatus = { neo4jConfigured:boolean;openSearchConfigured:boolean;n
 type ProjectionResult = { assets:number;neo4j:number;openSearch:number }
 type SyncReport = { users:number;created:number;updated:number;groups:number;errors?:string[] }
 type CreateUserResponse = { user:User;initialPassword:string }
+type LicenseStatus = {
+  edition:string; state:string; licenseId?:string; customer?:string; deploymentId:string;
+  maxAssets:number; freeAssetLimit:number; usedAssets:number; remainingAssets:number;
+  usagePercent:number; issuedAt?:string; expiresAt?:string; graceUntil?:string;
+  activatedAt?:string; activatedBy?:string; features:string[]; canCreateAssets:boolean; message:string;
+}
+type LicenseRequest = { product:string; deploymentId:string; freeAssetLimit:number; generatedAt:string }
 
 const auth = useAuthStore()
 const summary = ref<Summary>()
@@ -42,12 +49,16 @@ const audits = ref<Audit[]>([])
 const settings = ref<Setting[]>([])
 const readiness = ref<ReadinessReport|null>(null)
 const projections = ref<ProjectionStatus|null>(null)
+const licenseStatus = ref<LicenseStatus|null>(null)
+const licenseRequest = ref<LicenseRequest|null>(null)
 const scopeProjectGroups = ref<ProjectGroup[]>([])
-const tab = ref<'users'|'roles'|'modules'|'audits'|'settings'|'ready'|'projection'>('users')
+const tab = ref<'users'|'roles'|'modules'|'audits'|'settings'|'ready'|'license'|'projection'>('users')
 const selectedRole = ref<Role>()
 const busy = ref(false)
 const message = ref('')
 const error = ref('')
+const licenseKey = ref('')
+const licenseBusy = ref(false)
 const search = ref('')
 const statusFilter = ref('')
 const passwordDialog = reactive({ open:false, username:'', password:'' })
@@ -145,7 +156,7 @@ async function load() {
   busy.value = true
   error.value = ''
   try {
-    const [summaryData,userData,roleData,permissionData,moduleData,auditData,settingData,readinessData,projectionData] = await Promise.all([
+    const [summaryData,userData,roleData,permissionData,moduleData,auditData,settingData,readinessData,projectionData,licenseData,licenseRequestData] = await Promise.all([
       request<Summary>('/api/v1/system/summary'),
       request<User[]>('/api/v1/system/users'),
       request<Role[]>('/api/v1/system/roles'),
@@ -155,6 +166,8 @@ async function load() {
       request<Setting[]>('/api/v1/system/settings'),
       request<ReadinessReport>('/api/v1/system/production-readiness'),
       request<ProjectionStatus>('/api/v1/system/projections'),
+      request<LicenseStatus>('/api/v1/license/status'),
+      request<LicenseRequest>('/api/v1/license/request'),
     ])
     summary.value = summaryData
     users.value = userData
@@ -165,6 +178,8 @@ async function load() {
     settings.value = settingData
     readiness.value = readinessData
     projections.value = projectionData
+    licenseStatus.value = licenseData
+    licenseRequest.value = licenseRequestData
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '系统数据加载失败'
   } finally {
@@ -412,6 +427,40 @@ async function syncKeycloak() {
   }
 }
 
+async function activateLicense() {
+  if (!licenseKey.value.trim()) {
+    error.value = '请粘贴许可证内容'
+    return
+  }
+  licenseBusy.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    licenseStatus.value = await request<LicenseStatus>('/api/v1/license/activate', {
+      method:'POST',
+      body:JSON.stringify({ licenseKey:licenseKey.value.trim() }),
+    })
+    licenseKey.value = ''
+    message.value = `授权已激活：${licenseStatus.value.customer}，额度 ${licenseStatus.value.maxAssets} 个资产`
+    await load()
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '许可证激活失败'
+  } finally {
+    licenseBusy.value = false
+  }
+}
+
+function downloadLicenseRequest() {
+  if (!licenseRequest.value) return
+  const payload = JSON.stringify(licenseRequest.value, null, 2)
+  const url = URL.createObjectURL(new Blob([payload], { type:'application/json' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `cmdb-license-request-${licenseRequest.value.deploymentId}.json`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 onMounted(load)
 onMounted(loadScopeProjectGroups)
 </script>
@@ -449,6 +498,7 @@ onMounted(loadScopeProjectGroups)
           {id:'audits',n:'审计日志',i:FileClock},
           {id:'settings',n:'平台参数',i:Settings},
           {id:'ready',n:'生产就绪',i:ShieldCheck},
+          {id:'license',n:'授权与用量',i:BadgeCheck},
           {id:'projection',n:'拓扑投影',i:Waypoints},
         ]" :key="item.id" :class="{active:tab===item.id}" @click="tab=item.id as typeof tab">
           <component :is="item.i"/>{{item.n}}
@@ -564,6 +614,56 @@ onMounted(loadScopeProjectGroups)
             <article v-for="item in readiness?.checks" :key="item.key" :data-status="item.status"><i></i><div><strong>{{item.name}}</strong><span>{{item.category}} · {{item.required?'必需':'可选'}}</span><small>{{item.detail}}</small></div></article>
           </div>
           <p class="readiness-time">检查时间：{{readiness?.generatedAt}} · 通过 {{readiness?.passed}} · 提示 {{readiness?.warning}} · 失败 {{readiness?.failed}}</p>
+        </template>
+
+        <template v-else-if="tab==='license'">
+          <header class="section-heading">
+            <div><h2>授权与用量</h2><span>免费版最多管理 200 个资产，商业授权可扩容到合同约定额度</span></div>
+            <span class="license-edition" :data-state="licenseStatus?.state">{{licenseStatus?.edition==='community'?'COMMUNITY':'ENTERPRISE'}}</span>
+          </header>
+          <div v-if="licenseStatus" class="license-overview">
+            <article class="license-usage-card" :data-state="licenseStatus.state">
+              <div class="license-ring" :style="{'--usage':Math.min(licenseStatus.usagePercent,100)+'%'}">
+                <div><strong>{{licenseStatus.usagePercent}}%</strong><span>授权使用率</span></div>
+              </div>
+              <div>
+                <span class="license-label">ASSET ENTITLEMENT</span>
+                <h3>{{licenseStatus.usedAssets}} <small>/ {{licenseStatus.maxAssets}}</small></h3>
+                <p>{{licenseStatus.message}}</p>
+                <div class="license-meter"><i :style="{width:Math.min(licenseStatus.usagePercent,100)+'%'}"></i></div>
+                <footer><span>已使用 {{licenseStatus.usedAssets}}</span><b>剩余 {{licenseStatus.remainingAssets}}</b></footer>
+              </div>
+            </article>
+            <article class="license-fact"><BadgeCheck/><span>授权客户<strong>{{licenseStatus.customer||'开源社区版'}}</strong><small>{{licenseStatus.licenseId||'COMMUNITY / 200 ASSETS'}}</small></span></article>
+            <article class="license-fact"><HardDrive/><span>商业额度<strong>{{licenseStatus.maxAssets}}</strong><small>免费额度 {{licenseStatus.freeAssetLimit}}</small></span></article>
+            <article class="license-fact"><FileClock/><span>授权有效期<strong>{{licenseStatus.expiresAt?licenseStatus.expiresAt.slice(0,10):'未设置'}}</strong><small>{{licenseStatus.expiresAt||'社区版永久有效'}}</small></span></article>
+          </div>
+          <div class="license-workspace">
+            <section class="license-activate">
+              <header><div><span>ACTIVATION</span><h3>导入商业许可证</h3></div><Upload/></header>
+              <p>粘贴授权中心签发的许可证。许可证通过 Ed25519 签名校验，并绑定当前部署实例。</p>
+              <textarea v-model="licenseKey" rows="7" placeholder="CMDB-LIC-v1.eyJ2..."></textarea>
+              <div class="license-actions">
+                <button class="primary" :disabled="licenseBusy" @click="activateLicense"><Upload/>{{licenseBusy?'正在验证…':'验证并激活'}}</button>
+                <button :disabled="!licenseStatus?.licenseId" @click="licenseKey='';message='请粘贴新的许可证完成续期或扩容'">准备续期</button>
+              </div>
+            </section>
+            <section class="license-request">
+              <header><div><span>DEPLOYMENT IDENTITY</span><h3>授权申请信息</h3></div><Download/></header>
+              <p>将部署实例 ID 提交给授权中心，授权文件只能在这个平台实例使用。</p>
+              <code>{{licenseStatus?.deploymentId}}</code>
+              <dl>
+                <div><dt>产品</dt><dd>{{licenseRequest?.product}}</dd></div>
+                <div><dt>免费额度</dt><dd>{{licenseRequest?.freeAssetLimit}} 个资产</dd></div>
+                <div><dt>当前状态</dt><dd>{{licenseStatus?.state}}</dd></div>
+                <div><dt>激活人</dt><dd>{{licenseStatus?.activatedBy||'-'}}</dd></div>
+              </dl>
+              <button @click="downloadLicenseRequest"><Download/>下载授权申请文件</button>
+            </section>
+          </div>
+          <div v-if="licenseStatus && licenseStatus.usagePercent>=80" class="license-warning">
+            <ShieldCheck/><span><strong>{{licenseStatus.usagePercent>=100?'资产额度已用尽':'资产额度即将用尽'}}</strong><small>已有数据不会被删除；完成扩容授权后可继续新增资产。</small></span>
+          </div>
         </template>
 
         <template v-else>

@@ -29,6 +29,7 @@ import (
 	"cmdb/gateway-bff/internal/idc"
 	"cmdb/gateway-bff/internal/jobs"
 	"cmdb/gateway-bff/internal/k8s"
+	"cmdb/gateway-bff/internal/license"
 	"cmdb/gateway-bff/internal/monitor"
 	"cmdb/gateway-bff/internal/networkautomation"
 	"cmdb/gateway-bff/internal/observability"
@@ -53,6 +54,11 @@ type Server struct {
 func NewServer() *Server {
 	mux := http.NewServeMux()
 	cmdbService := cmdb.NewService()
+	licenseService, err := license.NewService(cmdbService.Database())
+	if err != nil {
+		panic("initialize license service: " + err.Error())
+	}
+	cmdbService.SetAssetQuotaGuard(licenseService)
 	discoveryService := discovery.NewServiceWithCMDB(cmdbService)
 	monitorService := monitor.NewService()
 	topologyService := topology.NewServiceWithCMDB(cmdbService)
@@ -121,6 +127,7 @@ func NewServer() *Server {
 	toolboxService.SetKubernetesDiagnoser(k8sService)
 	toolboxService.SetTopologyGraphProvider(topologyService)
 	auditService := audit.NewService()
+	registerLicenseRoutes(mux, authService, auditService, licenseService, cmdbService)
 	service.SetActivitySources(jobsService, auditService)
 	service.SetOperationsSources(ticketsService, releasesService)
 	cicdService := cicd.NewService()
@@ -663,6 +670,13 @@ func NewServer() *Server {
 			return
 		}
 		created, err := cmdbService.CreateAsset(input, user.Username)
+		if limit, exceeded := license.IsAssetLimit(err); exceeded {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"code": "ASSET_LICENSE_LIMIT_EXCEEDED", "message": limit.Error(),
+				"used": limit.Used, "limit": limit.Limit, "requested": limit.Requested, "edition": limit.Edition,
+			})
+			return
+		}
 		if errors.Is(err, cmdb.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"code": "VALIDATION_ERROR", "message": "必填字段不完整或模型无效"})
 			return
@@ -768,6 +782,35 @@ func NewServer() *Server {
 			}
 		}
 		upsert := r.URL.Query().Get("mode") == "upsert"
+		newAssets := map[string]bool{}
+		for _, row := range rows {
+			if row.ID != "" {
+				if _, err := cmdbService.GetAsset(row.ID); err == nil {
+					continue
+				}
+			}
+			if upsert && row.IP != "" {
+				if existingID := cmdbService.FindHostByIP(row.IP, row.ID); existingID != "" {
+					continue
+				}
+			}
+			key := row.ID
+			if key == "" {
+				key = "ip:" + row.IP
+			}
+			newAssets[key] = true
+		}
+		if err := licenseService.ReserveAssetSlots(r.Context(), nil, cmdbService.AssetCount(), len(newAssets)); err != nil {
+			if limit, exceeded := license.IsAssetLimit(err); exceeded {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"code": "ASSET_LICENSE_LIMIT_EXCEEDED", "message": limit.Error(),
+					"used": limit.Used, "limit": limit.Limit, "requested": limit.Requested, "edition": limit.Edition,
+				})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "LICENSE_CHECK_FAILED", "message": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, cmdbService.ImportAssets(rows, upsert, user.Username))
 	})
 	mux.HandleFunc("GET /api/v1/agent/install/version", func(w http.ResponseWriter, r *http.Request) {

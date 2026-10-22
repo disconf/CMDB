@@ -20,6 +20,7 @@ import './styles/releases.css'
 import './styles/toolbox.css'
 import './styles/aiops.css'
 import './styles/system.css'
+import './styles/license.css'
 import './styles/global-command.css'
 import { clearAuthFragment } from '@/auth/keycloak'
 

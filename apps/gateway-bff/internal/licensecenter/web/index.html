@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#06131f">
+    <title>CMDB 授权签发中心</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="grid-bg"></div>
+    <section id="loginView" class="login-view">
+      <form id="loginForm" class="login-card">
+        <div class="brand-mark">C</div>
+        <span class="eyebrow">LICENSING AUTHORITY</span>
+        <h1>CMDB 授权签发中心</h1>
+        <p>独立签发商业资产授权，私钥仅保存在授权环境。</p>
+        <label>管理员账号<input id="loginUsername" name="username" autocomplete="username" required></label>
+        <label>管理员密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" required></label>
+        <button class="primary" type="submit"><span>进入签发工作台</span><b>→</b></button>
+        <div id="loginError" class="form-error"></div>
+        <small>授权中心与正式运维门户完全隔离</small>
+      </form>
+    </section>
+
+    <main id="appView" class="app-view hidden">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark small">C</div>
+          <div><span>CMDB LICENSING AUTHORITY</span><strong>授权签发中心</strong></div>
+        </div>
+        <div class="top-actions">
+          <span class="live-dot"><i></i> SIGNING SERVICE</span>
+          <span id="adminName" class="admin"></span>
+          <button id="logoutButton" class="ghost">退出</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="hero">
+          <div>
+            <span class="eyebrow">COMMERCIAL LICENSE CONTROL</span>
+            <h1>把资产额度转化为<br><em>可验证的商业授权</em></h1>
+            <p>客户提供部署实例 ID，授权中心生成 Ed25519 签名的离线许可证。平台无需联网即可校验。</p>
+          </div>
+          <div class="hero-orbit">
+            <div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="orbit orbit-c"></div>
+            <span>ED25519</span><b>SIGN</b><small>OFFLINE READY</small>
+          </div>
+        </section>
+
+        <section class="stats">
+          <article><span>累计授权</span><strong id="statTotal">0</strong><small>LICENSE RECORDS</small></article>
+          <article><span>有效授权</span><strong id="statActive">0</strong><small>ACTIVE ENTITLEMENTS</small></article>
+          <article><span>30 天内到期</span><strong id="statExpiring">0</strong><small>RENEWAL WATCH</small></article>
+          <article><span>累计签发容量</span><strong id="statCapacity">0</strong><small>MANAGED ASSETS</small></article>
+        </section>
+
+        <section class="workbench">
+          <form id="issueForm" class="issue-panel">
+            <header><div><span>ISSUE LICENSE</span><h2>签发新授权</h2></div><b>200 ASSETS FREE</b></header>
+            <div class="form-grid">
+              <label>客户名称<input id="customer" required placeholder="例如：某某科技有限公司"></label>
+              <label>部署实例 ID<input id="deploymentId" required placeholder="客户平台“授权与用量”页面获取"></label>
+              <label>产品版本<select id="edition"><option value="enterprise">企业版 Enterprise</option><option value="professional">专业版 Professional</option></select></label>
+              <label>资产额度<input id="maxAssets" type="number" min="201" max="10000000" value="500" required></label>
+              <label>授权天数<input id="validityDays" type="number" min="0" max="3650" value="365" required><small>0 表示永久授权</small></label>
+              <label>功能包<input id="features" value="cmdb,monitoring,automation,knowledge" placeholder="逗号分隔"></label>
+              <label class="wide">签发备注<textarea id="notes" rows="3" placeholder="合同号、销售负责人或续费说明"></textarea></label>
+            </div>
+            <div id="issueError" class="form-error"></div>
+            <footer><span><i></i>许可证将在浏览器确认后生成</span><button class="primary" type="submit">签发许可证 <b>→</b></button></footer>
+          </form>
+
+          <aside class="protocol-panel">
+            <header><span>SIGNING PROTOCOL</span><h2>签发链路</h2></header>
+            <div class="protocol-step"><b>01</b><div><strong>验证部署身份</strong><p>平台生成唯一 Deployment ID，防止许可证跨实例使用。</p></div></div>
+            <div class="protocol-step"><b>02</b><div><strong>写入商业权益</strong><p>授权内容包括资产额度、有效期、版本和功能包。</p></div></div>
+            <div class="protocol-step"><b>03</b><div><strong>离线签名</strong><p>授权站使用 Ed25519 私钥签名，平台只持有公钥。</p></div></div>
+            <div class="protocol-step"><b>04</b><div><strong>导入激活</strong><p>客户在系统管理导入许可证后立即生效，无需外网。</p></div></div>
+          </aside>
+        </section>
+
+        <section class="records-panel">
+          <header>
+            <div><span>ISSUED LICENSES</span><h2>授权签发记录</h2></div>
+            <button id="refreshButton" class="ghost">刷新记录</button>
+          </header>
+          <div class="records-table">
+            <div class="record-head"><span>许可证 / 客户</span><span>部署实例</span><span>额度</span><span>有效期</span><span>签发人</span><span>操作</span></div>
+            <div id="recordsBody"></div>
+          </div>
+          <div id="emptyRecords" class="empty hidden">还没有签发记录</div>
+        </section>
+      </div>
+    </main>
+
+    <div id="resultModal" class="modal hidden">
+      <section class="result-card">
+        <header><div><span>LICENSE READY</span><h2>许可证签发成功</h2></div><button id="closeResult" class="ghost">关闭</button></header>
+        <div class="result-meta"><div><span>许可证编号</span><b id="resultId"></b></div><div><span>客户</span><b id="resultCustomer"></b></div><div><span>资产额度</span><b id="resultAssets"></b></div></div>
+        <textarea id="resultKey" readonly rows="7"></textarea>
+        <footer>
+          <button id="copyResult" class="ghost">复制许可证</button>
+          <a id="downloadResult" class="primary link-button">下载 .license</a>
+        </footer>
+      </section>
+    </div>
+    <div id="toast" class="toast"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

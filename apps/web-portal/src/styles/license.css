@@ -1,0 +1,48 @@
+.license-edition{display:inline-flex;align-items:center;padding:7px 10px;border:1px solid rgba(63,213,153,.28);background:rgba(63,213,153,.06);color:#69e5ae;font:9px Consolas,monospace;letter-spacing:1px}
+.license-edition[data-state=community],.license-edition[data-state=over_limit],.license-edition[data-state=expired]{border-color:rgba(255,188,87,.3);background:rgba(255,188,87,.06);color:#ffc86d}
+.license-overview{display:grid;grid-template-columns:minmax(360px,1.7fr) repeat(3,minmax(130px,.72fr));gap:10px;margin-bottom:12px}
+.license-overview article{border:1px solid #173c56;background:linear-gradient(145deg,#09243a,#061b2d);padding:16px}
+.license-usage-card{display:grid;grid-template-columns:112px minmax(0,1fr);align-items:center;gap:18px}
+.license-ring{display:grid;place-items:center;width:104px;height:104px;border-radius:50%;background:radial-gradient(circle,#081f33 55%,transparent 57%),conic-gradient(#23d6e9 var(--usage),#123a55 0);box-shadow:0 0 26px rgba(35,214,233,.08)}
+.license-ring>div{display:grid;justify-items:center;gap:3px}
+.license-ring strong{font:20px Consolas,monospace;color:#e2fbff}
+.license-ring span{font-size:8px;color:#64899d}
+.license-usage-card>div:last-child{display:grid;gap:7px;min-width:0}
+.license-label{color:#3daec9;font:8px Consolas,monospace;letter-spacing:1.4px}
+.license-usage-card h3{margin:0;font:25px Consolas,monospace;color:#e1f6ff}
+.license-usage-card h3 small{font-size:12px;color:#65889b}
+.license-usage-card p{margin:0;color:#708fa2;font-size:9px;line-height:1.5}
+.license-meter{height:4px;background:#102f46;overflow:hidden}
+.license-meter i{display:block;height:100%;background:linear-gradient(90deg,#2183db,#25e1e9);box-shadow:0 0 8px rgba(37,225,233,.35)}
+.license-usage-card footer{display:flex;justify-content:space-between;color:#587c90;font-size:8px}
+.license-usage-card footer b{font-weight:400;color:#9ec3d4}
+.license-fact{display:flex;align-items:flex-start;gap:11px}
+.license-fact>svg{width:18px;color:#2bcbe0;flex:0 0 auto}
+.license-fact>span{display:grid;gap:6px;color:#63869a;font-size:9px}
+.license-fact strong{font:18px Consolas,monospace;color:#d9f1fa;word-break:break-word}
+.license-fact small{color:#4e7084;font-size:8px;word-break:break-word}
+.license-workspace{display:grid;grid-template-columns:1.4fr 1fr;gap:10px}
+.license-workspace>section{border:1px solid #173c56;background:#071e31;padding:16px}
+.license-activate>header,.license-request>header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.license-activate header span,.license-request header span{color:#32bfd8;font:8px Consolas,monospace;letter-spacing:1.3px}
+.license-activate h3,.license-request h3{margin:4px 0 0;font-size:14px}
+.license-activate header svg,.license-request header svg{width:18px;color:#2bcbe0}
+.license-activate p,.license-request p{margin:0 0 12px;color:#638396;font-size:9px;line-height:1.65}
+.license-activate textarea{width:100%;resize:vertical;border:1px solid #18435e;background:#041624;color:#9edce9;padding:11px;font:9px Consolas,monospace;outline:0}
+.license-activate textarea:focus{border-color:#26cbdf}
+.license-actions{display:flex;gap:8px;margin-top:10px}
+.license-actions button,.license-request>button{display:flex;align-items:center;gap:7px;border:1px solid #24475e;background:#0b293e;color:#9fc2d3;padding:9px 12px;font-size:9px;cursor:pointer}
+.license-actions button.primary{border-color:#1fbfd5;background:#0c4960;color:#e6fdff}
+.license-actions svg,.license-request>button svg{width:13px}
+.license-request code{display:block;padding:10px;border:1px solid #153a53;background:#041624;color:#7fd9e9;font:9px Consolas,monospace;overflow-wrap:anywhere}
+.license-request dl{display:grid;gap:0;margin:10px 0}
+.license-request dl div{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #12354b;font-size:9px}
+.license-request dt{color:#587b8f}
+.license-request dd{margin:0;color:#bad5e2}
+.license-warning{display:flex;align-items:center;gap:11px;margin-top:10px;padding:12px 15px;border:1px solid rgba(255,188,87,.3);background:rgba(255,188,87,.06);color:#ffc767}
+.license-warning svg{width:20px}
+.license-warning span{display:grid;gap:3px}
+.license-warning strong{font-size:11px}
+.license-warning small{color:#987e50;font-size:9px}
+@media(max-width:1280px){.license-overview{grid-template-columns:1fr 1fr}.license-usage-card{grid-column:1/-1}.license-workspace{grid-template-columns:1fr}}
+@media(max-width:760px){.license-overview{grid-template-columns:1fr}.license-usage-card{grid-template-columns:1fr}.license-ring{margin:auto}}

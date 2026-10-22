@@ -33,6 +33,7 @@ deploy/secrets/*.env
 
 # Local build and recovery artifacts
 .codex-build/
+.license-keys/
 apps/gateway-bff/.codex-build/
 backups/
 gateway-linux-amd64.bin

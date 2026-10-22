@@ -42,6 +42,11 @@ type Service struct {
 	anomalyStates map[string]NetworkAnomalyState
 	integrations  map[string]IntegrationConfig
 	db            *sql.DB
+	assetQuota    AssetQuotaGuard
+}
+
+type AssetQuotaGuard interface {
+	ReserveAssetSlots(ctx context.Context, tx *sql.Tx, current, additional int) error
 }
 
 func NewService() *Service {
@@ -114,6 +119,24 @@ func withModelCounts(models []Model, assets []Asset) []Model {
 		}
 	}
 	return models
+}
+
+func (s *Service) SetAssetQuotaGuard(guard AssetQuotaGuard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.assetQuota = guard
+}
+
+func (s *Service) Database() *sql.DB {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.db
+}
+
+func (s *Service) AssetCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.assets)
 }
 
 // ReloadFromDatabase refreshes the in-process read model after a committed CMDB change event.
@@ -1351,7 +1374,27 @@ func (s *Service) UpsertAgentAsset(in AgentAssetInput) (Asset, error) {
 	}
 	asset := Asset{ID: in.ID, Name: in.Hostname, Type: assetType, TypeName: typeName, Status: "online", IP: in.IP, Environment: "待确认", ProjectGroup: "自动发现", Owner: "待分配", Source: "linux-agent", LastSeenAt: now, Tags: []string{"Linux", "Agent"}, Attributes: attrs, Relations: []Relation{}}
 	if s.db != nil {
-		if err := insertAsset(context.Background(), s.db, asset); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return Asset{}, err
+		}
+		if s.assetQuota != nil {
+			if err = s.assetQuota.ReserveAssetSlots(ctx, tx, len(s.assets), 1); err != nil {
+				_ = tx.Rollback()
+				return Asset{}, err
+			}
+		}
+		if err = insertAsset(ctx, tx, asset); err != nil {
+			_ = tx.Rollback()
+			return Asset{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return Asset{}, err
+		}
+	} else if s.assetQuota != nil {
+		if err := s.assetQuota.ReserveAssetSlots(context.Background(), nil, len(s.assets), 1); err != nil {
 			return Asset{}, err
 		}
 	}
@@ -1605,6 +1648,12 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 		if err != nil {
 			return Asset{}, err
 		}
+		if s.assetQuota != nil {
+			if err = s.assetQuota.ReserveAssetSlots(ctx, tx, len(s.assets), 1); err != nil {
+				_ = tx.Rollback()
+				return Asset{}, err
+			}
+		}
 		if err = insertAsset(ctx, tx, created); err == nil {
 			err = insertHistory(ctx, tx, entry)
 		}
@@ -1616,6 +1665,10 @@ func (s *Service) CreateAsset(input CreateAssetInput, operator string) (Asset, e
 			return Asset{}, err
 		}
 		if err = tx.Commit(); err != nil {
+			return Asset{}, err
+		}
+	} else if s.assetQuota != nil {
+		if err := s.assetQuota.ReserveAssetSlots(context.Background(), nil, len(s.assets), 1); err != nil {
 			return Asset{}, err
 		}
 	}

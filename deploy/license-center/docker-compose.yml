@@ -1,0 +1,29 @@
+services:
+  license-center:
+    build:
+      context: ../../apps/gateway-bff
+      dockerfile: Dockerfile.license-center
+    image: cmdb/license-center:${LICENSE_CENTER_VERSION:-1.0.0}
+    restart: unless-stopped
+    environment:
+      HTTP_ADDR: ":8090"
+      LICENSE_CENTER_ADMIN_USERNAME: ${LICENSE_CENTER_ADMIN_USERNAME:?set administrator username}
+      LICENSE_CENTER_ADMIN_PASSWORD: ${LICENSE_CENTER_ADMIN_PASSWORD:?set administrator password}
+      LICENSE_CENTER_DATA_FILE: /data/licenses.json
+      LICENSE_CENTER_ISSUER: ${LICENSE_CENTER_ISSUER:-CMDB Licensing Authority}
+      LICENSE_SIGNING_KEY_FILE: /run/secrets/license-signing-key
+    ports:
+      - "${LICENSE_CENTER_PORT:-8090}:8090"
+    volumes:
+      - license-center-data:/data
+      - ../../.license-keys/license-private.pem:/run/secrets/license-signing-key:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  license-center-data:

@@ -2,7 +2,7 @@
 
 > 版本：V1.5
 > 更新日期：2026-10-19
-> 适用版本：网关 `1.0.235`、门户 `1.0.183`
+> 适用版本：网关 `1.0.236`、门户 `1.0.184`
 > 覆盖范围：单机 Docker Compose、生产 Kubernetes、系统初始化、中间件、业务服务、升级、备份和验收
 
 ## 1. 文档目标与结论
@@ -625,9 +625,27 @@ kubectl -n ops-qa rollout status deployment/cmdb-ansible-runner --timeout=300s
 如使用镜像仓库，先在 `ops-qa-platform.yaml` 修改网关和门户版本：
 
 ```text
-harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.232
-harbor.qa.bcavt.com/cmdb/web-portal:1.0.180
+harbor.qa.bcavt.com/cmdb/gateway-bff:1.0.236
+harbor.qa.bcavt.com/cmdb/web-portal:1.0.184
 ```
+
+商业授权签发站是独立服务，不应和正式门户共用 Ingress。先配置管理员
+Secret 和签发私钥 Secret：
+
+```bash
+kubectl -n ops-qa create secret generic license-center-env \
+  --from-literal=LICENSE_CENTER_ADMIN_USERNAME=license-admin \
+  --from-literal=LICENSE_CENTER_ADMIN_PASSWORD='<strong-password>'
+kubectl -n ops-qa create secret generic license-center-signing \
+  --from-file=license-signing-key=.license-keys/license-private.pem
+kubectl apply -f deploy/k8s/license-center.yaml
+kubectl -n ops-qa rollout status deployment/license-center --timeout=300s
+```
+
+签发站默认通过 NodePort `30081` 对内访问。生产环境应改为内网 Ingress、
+HTTPS、IP 白名单，并仅向授权管理员开放。签发私钥不应挂载到 gateway 或 web。
+
+完整操作参见 `deploy/license-center/README.md`。
 
 ### 6.10 K8s 验收
 

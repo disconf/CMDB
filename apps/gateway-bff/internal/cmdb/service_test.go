@@ -1,6 +1,8 @@
 package cmdb
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -435,6 +437,31 @@ func TestCreateAssetRejectsOverlappingRackRange(t *testing.T) {
 	adjacent.Attributes = []Attribute{{Name: "rack_id", Label: "机柜ID", Value: "rack-range"}, {Name: "u_position", Label: "起始U位", Value: "12"}, {Name: "u_height", Label: "设备高度(U)", Value: "1"}}
 	if _, err := service.CreateAsset(adjacent, "tester"); err != nil {
 		t.Fatalf("adjacent slot should be available: %v", err)
+	}
+}
+
+type rejectQuotaGuard struct{}
+
+func (rejectQuotaGuard) ReserveAssetSlots(context.Context, *sql.Tx, int, int) error {
+	return errors.New("asset quota exceeded")
+}
+
+func TestCreateAssetAndAgentUpsertEnforceQuotaGuard(t *testing.T) {
+	service := NewService()
+	service.SetAssetQuotaGuard(rejectQuotaGuard{})
+	_, err := service.CreateAsset(CreateAssetInput{
+		ID: "quota-create", Name: "quota-create", Type: "physical-server", Status: "online",
+		Environment: "test", ProjectGroup: "test", Owner: "ops",
+	}, "tester")
+	if err == nil {
+		t.Fatal("expected quota guard to reject manual asset creation")
+	}
+	_, err = service.UpsertAgentAsset(AgentAssetInput{ID: "quota-agent", Hostname: "quota-agent"})
+	if err == nil {
+		t.Fatal("expected quota guard to reject new agent asset")
+	}
+	if service.AssetCount() != len(service.assets) {
+		t.Fatalf("asset count changed after rejected writes: %d", service.AssetCount())
 	}
 }
 
